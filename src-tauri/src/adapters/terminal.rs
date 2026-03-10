@@ -144,6 +144,7 @@ impl WindowsTerminalAdapter {
         {
             args.push("--title".to_string());
             args.push(title.to_string());
+            args.push("--suppressApplicationTitle".to_string());
         }
         args.push("-d".to_string());
         args.push(input.project_path.clone());
@@ -164,5 +165,38 @@ impl WindowsTerminalAdapter {
 
     pub fn detect_shell_executable(&self) -> Option<PathBuf> {
         find_first_executable(&["pwsh.exe", "pwsh", "powershell.exe", "powershell"])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WindowsTerminalAdapter, WindowsTerminalTabLaunchInput};
+
+    #[test]
+    fn tab_launch_plan_uses_fixed_title_when_title_is_provided() {
+        let adapter = WindowsTerminalAdapter;
+        let launch_command = adapter
+            .build_tab_launch_plan(
+                r"C:\\Tools\\wt.exe",
+                WindowsTerminalTabLaunchInput {
+                    project_path: r"D:\\workspace\\demo".to_string(),
+                    startup_command: Some(vec![
+                        "pwsh.exe".to_string(),
+                        "-NoExit".to_string(),
+                        "-Command".to_string(),
+                        "echo ready".to_string(),
+                    ]),
+                    envs: Vec::new(),
+                    window_target: Some("new".to_string()),
+                    title: Some("BexoStudio".to_string()),
+                },
+            )
+            .expect("build tab launch plan");
+
+        assert!(launch_command.args.contains(&"--title".to_string()));
+        assert!(launch_command.args.contains(&"BexoStudio".to_string()));
+        assert!(launch_command
+            .args
+            .contains(&"--suppressApplicationTitle".to_string()));
     }
 }

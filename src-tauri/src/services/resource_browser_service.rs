@@ -5,6 +5,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use crate::{
     domain::{
         ensure_absolute_directory, WorkspaceResourceEntry, WorkspaceResourceGitStatusEntry,
@@ -13,6 +16,9 @@ use crate::{
     error::{AppError, AppResult},
     persistence::{get_workspace_primary_project_path, Database},
 };
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Debug, Clone)]
 pub struct ResourceBrowserService {
@@ -252,7 +258,9 @@ fn ensure_path_within_workspace(workspace_root: &Path, target_path: &Path) -> Ap
 }
 
 fn run_git_command(cwd: &Path, args: &[&str], timeout: Duration) -> AppResult<String> {
-    let mut child = Command::new("git")
+    let mut command = Command::new("git");
+    configure_background_command(&mut command);
+    let mut child = command
         .args(args)
         .current_dir(cwd)
         .stdout(Stdio::piped())
@@ -329,6 +337,13 @@ fn run_git_command(cwd: &Path, args: &[&str], timeout: Duration) -> AppResult<St
                 );
             }
         }
+    }
+}
+
+fn configure_background_command(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
     }
 }
 

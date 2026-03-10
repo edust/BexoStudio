@@ -656,10 +656,16 @@ export default function HomePage() {
             <Typography.Text className="text-[12px] font-medium text-[#1f2937]">
               命令名称
             </Typography.Text>
-            <Input
-              {...form.register("name")}
-              placeholder="例如：启动前端开发服务器"
-              status={form.formState.errors.name ? "error" : ""}
+            <Controller
+              control={form.control}
+              name="name"
+              render={({ field }) => (
+                <Input
+                  {...field}
+                  placeholder="例如：启动前端开发服务器"
+                  status={form.formState.errors.name ? "error" : ""}
+                />
+              )}
             />
             {form.formState.errors.name ? (
               <Typography.Text className="block text-[11px] text-[#cf5a4a]">

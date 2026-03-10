@@ -15,6 +15,13 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            log::info!(
+                target: "bexo::app",
+                "blocked second instance launch and redirected focus to the running instance"
+            );
+            focus_main_window(app);
+        }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_window_state::Builder::default().build())
@@ -82,9 +89,8 @@ pub fn run() {
 
             if let Some(window) = app.get_webview_window("main") {
                 if should_show_main_window {
-                    let _ = window.show();
                     window::center_main_window_in_work_area(&window);
-                    let _ = window.set_focus();
+                    focus_main_window(&app.handle());
                 } else {
                     let _ = window.hide();
                     log::info!(
@@ -140,4 +146,39 @@ pub fn run() {
     builder
         .run(tauri::generate_context!())
         .expect("error while running Bexo Studio application");
+}
+
+fn focus_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let Some(window) = app.get_webview_window("main") else {
+        log::warn!(
+            target: "bexo::app",
+            "main window not found while attempting to focus existing instance"
+        );
+        return;
+    };
+
+    match window.is_minimized() {
+        Ok(true) => {
+            if let Err(error) = window.unminimize() {
+                log::warn!(
+                    target: "bexo::app",
+                    "failed to unminimize main window: {error}"
+                );
+            }
+        }
+        Ok(false) => {}
+        Err(error) => {
+            log::warn!(
+                target: "bexo::app",
+                "failed to query main window minimized state: {error}"
+            );
+        }
+    }
+
+    if let Err(error) = window.show() {
+        log::warn!(target: "bexo::app", "failed to show main window: {error}");
+    }
+    if let Err(error) = window.set_focus() {
+        log::warn!(target: "bexo::app", "failed to focus main window: {error}");
+    }
 }
