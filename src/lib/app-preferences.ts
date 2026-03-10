@@ -9,6 +9,7 @@ export const defaultAppPreferences: AppPreferences = {
   ide: {
     vscodePath: null,
     jetbrainsPath: null,
+    customEditors: [],
   },
   workspace: {
     selectedWorkspaceIds: [],

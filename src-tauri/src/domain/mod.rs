@@ -3,6 +3,7 @@ mod codex_profile;
 mod launch_task;
 mod preferences;
 mod project;
+mod resource_browser;
 mod restore_event;
 mod restore_run;
 mod restore_run_task;
@@ -13,9 +14,9 @@ mod workspace;
 use serde::Serialize;
 
 pub use adapter::{
-    AdapterAvailability, OpenLogDirectoryResult, OpenWorkspaceInEditorResult,
-    OpenWorkspaceTerminalResult, RestoreCapabilities, RunWorkspaceTerminalCommandResult,
-    RunWorkspaceTerminalCommandsResult, StartRestoreRunInput,
+    AdapterAvailability, EditorPathDetectionResult, OpenLogDirectoryResult,
+    OpenWorkspaceInEditorResult, OpenWorkspaceTerminalResult, RestoreCapabilities,
+    RunWorkspaceTerminalCommandResult, RunWorkspaceTerminalCommandsResult, StartRestoreRunInput,
 };
 pub use codex_profile::{CodexProfileRecord, UpsertCodexProfileInput};
 pub use launch_task::{
@@ -26,10 +27,14 @@ pub use launch_task::{
 };
 #[allow(unused_imports)]
 pub use preferences::{
-    AppPreferences, CodexHomeDirectoryInfo, DiagnosticsPreferences, IdePreferences,
-    TerminalCommandTemplate, TerminalPreferences, TrayPreferences, WorkspacePreferences,
+    AppPreferences, CodexHomeDirectoryInfo, CustomEditorPreference, DiagnosticsPreferences,
+    IdePreferences, TerminalCommandTemplate, TerminalPreferences, TrayPreferences,
+    WorkspacePreferences,
 };
 pub use project::{ProjectRecord, UpsertProjectInput};
+pub use resource_browser::{
+    WorkspaceResourceEntry, WorkspaceResourceGitStatusEntry, WorkspaceResourceGitStatusResponse,
+};
 pub use restore_event::{RestoreRunEvent, RESTORE_RUN_EVENT_NAME};
 pub use restore_run::{
     CancelRestoreActionResult, CancelRestoreRunResult, RecentRestoreTarget, RestorePreview,

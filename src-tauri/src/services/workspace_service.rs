@@ -1,15 +1,16 @@
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 
 use crate::{
     adapters::{
-        run_launch_command, IdeAdapter, JetBrainsAdapter, TerminalAdapter, TerminalLaunchInput,
-        VSCodeAdapter, WindowsTerminalAdapter, WindowsTerminalTabLaunchInput,
+        find_first_executable, run_launch_command, IdeAdapter, JetBrainsAdapter, LaunchCommand,
+        TerminalAdapter, TerminalLaunchInput, VSCodeAdapter, WindowsTerminalAdapter,
+        WindowsTerminalTabLaunchInput,
     },
     domain::{
-        ensure_absolute_directory, DeleteResult, LaunchTaskRecord, OpenWorkspaceInEditorResult,
-        OpenWorkspaceTerminalResult, ProjectRecord, RunWorkspaceTerminalCommandResult,
-        RunWorkspaceTerminalCommandsResult, UpsertLaunchTaskInput, UpsertProjectInput,
-        UpsertWorkspaceInput, WorkspaceRecord,
+        ensure_absolute_directory, AdapterAvailability, DeleteResult, LaunchTaskRecord,
+        OpenWorkspaceInEditorResult, OpenWorkspaceTerminalResult, ProjectRecord,
+        RunWorkspaceTerminalCommandResult, RunWorkspaceTerminalCommandsResult,
+        UpsertLaunchTaskInput, UpsertProjectInput, UpsertWorkspaceInput, WorkspaceRecord,
     },
     error::{AppError, AppResult},
     persistence::{
@@ -389,13 +390,25 @@ fn require_non_empty_launch_task_id(launch_task_id: String) -> AppResult<String>
 }
 
 fn require_workspace_editor_key(editor_key: String) -> AppResult<String> {
-    let normalized = editor_key.trim().to_lowercase();
-    if normalized == "vscode" || normalized == "jetbrains" {
-        return Ok(normalized);
+    let normalized = editor_key.trim();
+    if normalized.is_empty() {
+        return Err(AppError::validation("editorKey is required"));
     }
 
-    Err(AppError::validation("editorKey must be vscode or jetbrains")
-        .with_detail("editorKey", editor_key))
+    if normalized.eq_ignore_ascii_case("vscode") {
+        return Ok("vscode".to_string());
+    }
+
+    if normalized.eq_ignore_ascii_case("jetbrains") {
+        return Ok("jetbrains".to_string());
+    }
+
+    if normalized.len() > 128 {
+        return Err(AppError::validation("editorKey cannot exceed 128 characters")
+            .with_detail("editorKey", normalized.to_string()));
+    }
+
+    Ok(normalized.to_string())
 }
 
 fn resolve_workspace_primary_project(workspace: &WorkspaceRecord) -> AppResult<ProjectRecord> {
@@ -474,7 +487,7 @@ fn build_workspace_editor_launch_command(
     editor_key: &str,
     workspace_path: &str,
     preferences: &crate::domain::AppPreferences,
-) -> AppResult<(crate::domain::AdapterAvailability, crate::adapters::LaunchCommand)> {
+) -> AppResult<(AdapterAvailability, LaunchCommand)> {
     match editor_key {
         "vscode" => {
             let adapter = VSCodeAdapter;
@@ -520,15 +533,14 @@ fn build_workspace_editor_launch_command(
             let command = adapter.build_launch_plan(&executable_path, workspace_path)?;
             Ok((availability, command))
         }
-        _ => Err(AppError::validation("editorKey must be vscode or jetbrains")
-            .with_detail("editorKey", editor_key.to_string())),
+        _ => build_workspace_custom_editor_launch_command(editor_key, workspace_path, preferences),
     }
 }
 
 fn build_workspace_editor_unavailable_error(
     editor_key: &str,
     workspace_path: &str,
-    availability: &crate::domain::AdapterAvailability,
+    availability: &AdapterAvailability,
 ) -> AppError {
     let error_code = if availability.source == "user_config" && availability.status == "invalid" {
         if editor_key == "vscode" {
@@ -555,6 +567,58 @@ fn build_workspace_editor_unavailable_error(
         .with_detail("editorKey", editor_key.to_string())
         .with_detail("workspacePath", workspace_path.to_string())
         .with_detail("message", availability.message.clone())
+}
+
+fn build_workspace_custom_editor_launch_command(
+    editor_key: &str,
+    workspace_path: &str,
+    preferences: &crate::domain::AppPreferences,
+) -> AppResult<(AdapterAvailability, LaunchCommand)> {
+    let custom_editor = preferences
+        .ide
+        .custom_editors
+        .iter()
+        .find(|editor| editor.id == editor_key)
+        .ok_or_else(|| {
+            AppError::new("WORKSPACE_EDITOR_NOT_FOUND", "workspace editor was not found")
+                .with_detail("editorKey", editor_key.to_string())
+        })?;
+
+    let command_name = custom_editor.command.trim();
+    let resolved_executable = if Path::new(command_name).is_absolute() {
+        Path::new(command_name).to_path_buf()
+    } else {
+        find_first_executable(&[command_name]).ok_or_else(|| {
+            AppError::new(
+                "IDE_ADAPTER_UNAVAILABLE",
+                "custom editor command is not available on this machine",
+            )
+            .with_detail("editorKey", editor_key.to_string())
+            .with_detail("command", command_name.to_string())
+        })?
+    };
+
+    let availability = AdapterAvailability {
+        key: editor_key.to_string(),
+        label: custom_editor.name.clone(),
+        available: true,
+        status: "available".to_string(),
+        executable_path: Some(resolved_executable.display().to_string()),
+        source: "user_config".to_string(),
+        message: "已使用自定义编辑器配置".to_string(),
+    };
+
+    let launch_command = LaunchCommand {
+        executable_path: resolved_executable,
+        args: vec![workspace_path.to_string()],
+        current_dir: None,
+        envs: Vec::new(),
+        timeout: Duration::from_millis(900),
+        tracking: None,
+        retain_after_timeout: false,
+    };
+
+    Ok((availability, launch_command))
 }
 
 fn resolve_terminal_launch_context(
@@ -936,6 +1000,7 @@ mod tests {
             ide: IdePreferences {
                 vscode_path: Some(shim_directory.display().to_string()),
                 jetbrains_path: None,
+                custom_editors: Vec::new(),
             },
             workspace: WorkspacePreferences::default(),
             tray: TrayPreferences::default(),

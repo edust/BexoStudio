@@ -20,6 +20,6 @@ pub use restore_run_repo::{
 pub use snapshot_repo::{create_snapshot, get_snapshot, list_snapshots, update_snapshot};
 pub use sqlite::Database;
 pub use workspace_repo::{
-    delete_workspace, list_workspaces, register_workspace_folder, remove_workspace_registration,
-    upsert_workspace,
+    delete_workspace, get_workspace_primary_project_path, list_workspaces,
+    register_workspace_folder, remove_workspace_registration, upsert_workspace,
 };

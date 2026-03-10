@@ -125,6 +125,58 @@ pub fn list_workspaces(connection: &Connection) -> AppResult<Vec<WorkspaceRecord
     Ok(workspaces)
 }
 
+pub fn get_workspace_primary_project_path(
+    connection: &Connection,
+    workspace_id: String,
+) -> AppResult<String> {
+    let workspace_id = validate_optional_uuid("workspaceId", Some(workspace_id))?
+        .ok_or_else(|| AppError::validation("workspaceId is required"))?;
+
+    let workspace_row = connection
+        .query_row(
+            "SELECT p.path
+             FROM workspaces w
+             LEFT JOIN projects p ON p.workspace_id = w.id
+             WHERE w.id = ?1
+             ORDER BY
+               CASE
+                 WHEN p.path IS NULL OR TRIM(p.path) = '' THEN 1
+                 ELSE 0
+               END ASC,
+               p.sort_order ASC,
+               p.updated_at DESC
+             LIMIT 1",
+            [workspace_id.as_str()],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map_err(|error| {
+            AppError::new("DB_READ_FAILED", "failed to query workspace project path")
+                .with_detail("workspaceId", workspace_id.clone())
+                .with_detail("reason", error.to_string())
+        })?;
+
+    let Some(path) = workspace_row else {
+        return Err(
+            AppError::new("WORKSPACE_NOT_FOUND", "workspace was not found")
+                .with_detail("workspaceId", workspace_id),
+        );
+    };
+
+    let trimmed_path = path
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            AppError::new(
+                "INVALID_WORKSPACE_PATH",
+                "workspace does not contain a registered project path",
+            )
+            .with_detail("workspaceId", workspace_id.clone())
+        })?;
+
+    Ok(trimmed_path)
+}
+
 pub fn upsert_workspace(
     connection: &mut Connection,
     input: UpsertWorkspaceInput,

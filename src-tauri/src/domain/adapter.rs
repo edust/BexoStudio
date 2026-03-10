@@ -22,6 +22,14 @@ pub struct RestoreCapabilities {
     pub codex: AdapterAvailability,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorPathDetectionResult {
+    pub checked_at: String,
+    pub vscode: AdapterAvailability,
+    pub jetbrains: AdapterAvailability,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartRestoreRunInput {

@@ -27,6 +27,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { toast } from "sonner";
 
+import { ResourceBrowserPane } from "@/features/resource-browser/resource-browser-pane";
 import { cn } from "@/lib/cn";
 import {
   deleteLaunchTask,
@@ -485,107 +486,115 @@ export default function HomePage() {
             type="warning"
           />
         ) : (
-          <>
-            <div className="rounded-[0] border border-[#eef2f6] bg-white">
-              <div className="grid grid-cols-[140px_minmax(0,1fr)] items-center gap-3 px-4 py-4">
-                <Typography.Text className="text-[12px] font-medium text-[#1f2937]">
-                  工作区目录
-                </Typography.Text>
-                <div
-                  className="flex h-[32px] items-center overflow-hidden rounded-[8px] border border-[#d8e1eb] bg-[#f8fafc] px-3 font-mono text-[12px] text-[#475467] select-none"
-                  title={workspacePath || "未配置工作区目录"}
-                >
-                  <span className="truncate">{workspacePath || "未配置工作区目录"}</span>
-                </div>
-              </div>
-            </div>
+          <div className="flex min-h-0 flex-1">
+            <ResourceBrowserPane
+              workspaceId={selectedWorkspace.id}
+              workspaceName={workspaceFolderName}
+              workspacePath={workspacePath}
+            />
 
-            <div className="rounded-[0] border border-[#eef2f6] bg-white">
-              <div className="flex items-center justify-between border-b border-[#eef2f6] px-4 py-3">
-                <div>
-                  <Typography.Text className="block text-[12px] font-semibold uppercase tracking-[0.16em] text-[#1f2937]">
-                    终端命令组
+            <div className="flex min-w-0 flex-1 flex-col gap-4 px-0 py-0">
+              <div className="rounded-[0] border border-[#eef2f6] bg-white">
+                <div className="grid grid-cols-[140px_minmax(0,1fr)] items-center gap-3 px-4 py-4">
+                  <Typography.Text className="text-[12px] font-medium text-[#1f2937]">
+                    工作区目录
                   </Typography.Text>
-                  <Typography.Text className="block text-[11px] text-[#667085]">
-                    新增、编辑、删除并拖动排序；打开的命令才会参与执行。
-                  </Typography.Text>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    className="!h-[30px] !px-3 !text-[12px]"
-                    disabled={!orderedTasks.some((task) => task.enabled)}
-                    icon={<CaretRightOutlined />}
-                    loading={runAllTasksMutation.isPending}
-                    onClick={() => void handleRunAllTasks()}
-                    size="small"
-                    type="default"
+                  <div
+                    className="flex h-[32px] items-center overflow-hidden rounded-[8px] border border-[#d8e1eb] bg-[#f8fafc] px-3 font-mono text-[12px] text-[#475467] select-none"
+                    title={workspacePath || "未配置工作区目录"}
                   >
-                    运行全部
-                  </Button>
-                  <Button
-                    className="!h-[30px] !px-3 !text-[12px]"
-                    icon={<PlusOutlined />}
-                    onClick={openCreateEditor}
-                    size="small"
-                    type="default"
-                  >
-                    新增命令
-                  </Button>
-                </div>
-              </div>
-
-              <div className="px-4 py-4">
-                {orderedTasks.length ? (
-                  <Reorder.Group
-                    as="div"
-                    axis="y"
-                    className="flex flex-col gap-2"
-                    onReorder={handlePreviewReorder}
-                    values={orderedTasks}
-                  >
-                    {orderedTasks.map((task, index) => {
-                      return (
-                        <CommandTaskReorderItem
-                          dragging={draggingTaskId === task.id}
-                          index={index}
-                          key={task.id}
-                          onDelete={() => void handleDeleteTask(task.id)}
-                          onDragEnd={() => void handleTaskDragEnd()}
-                          onDragStart={() => handleTaskDragStart(task.id)}
-                          onEdit={() => openEditEditor(task)}
-                          onRun={() => void handleRunSingleTask(task.id)}
-                          onToggleEnabled={(enabled) => void handleToggleTaskEnabled(task, enabled)}
-                          switchLoading={
-                            toggleTaskEnabledMutation.isPending &&
-                            toggleTaskEnabledMutation.variables?.task.id === task.id
-                          }
-                          runButtonLoading={
-                            runSingleTaskMutation.isPending &&
-                            runSingleTaskMutation.variables?.launchTaskId === task.id
-                          }
-                          runDisabled={
-                            !task.enabled ||
-                            runAllTasksMutation.isPending ||
-                            reorderTasksMutation.isPending ||
-                            toggleTaskEnabledMutation.isPending
-                          }
-                          task={task}
-                          workspacePath={workspacePath}
-                        />
-                      );
-                    })}
-                  </Reorder.Group>
-                ) : (
-                  <div className="flex min-h-[180px] items-center justify-center rounded-[12px] border border-dashed border-[#e6edf5] bg-[#fbfcfe]">
-                    <Empty
-                      description="还没有终端命令。点击右上角“新增命令”开始配置。"
-                      image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    />
+                    <span className="truncate">{workspacePath || "未配置工作区目录"}</span>
                   </div>
-                )}
+                </div>
+              </div>
+
+              <div className="flex min-h-0 flex-1 flex-col rounded-[0] border border-[#eef2f6] bg-white">
+                <div className="flex items-center justify-between border-b border-[#eef2f6] px-4 py-3">
+                  <div>
+                    <Typography.Text className="block text-[12px] font-semibold uppercase tracking-[0.16em] text-[#1f2937]">
+                      终端命令组
+                    </Typography.Text>
+                    <Typography.Text className="block text-[11px] text-[#667085]">
+                      新增、编辑、删除并拖动排序；打开的命令才会参与执行。
+                    </Typography.Text>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      className="!h-[30px] !px-3 !text-[12px]"
+                      disabled={!orderedTasks.some((task) => task.enabled)}
+                      icon={<CaretRightOutlined />}
+                      loading={runAllTasksMutation.isPending}
+                      onClick={() => void handleRunAllTasks()}
+                      size="small"
+                      type="default"
+                    >
+                      运行全部
+                    </Button>
+                    <Button
+                      className="!h-[30px] !px-3 !text-[12px]"
+                      icon={<PlusOutlined />}
+                      onClick={openCreateEditor}
+                      size="small"
+                      type="default"
+                    >
+                      新增命令
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
+                  {orderedTasks.length ? (
+                    <Reorder.Group
+                      as="div"
+                      axis="y"
+                      className="flex flex-col gap-2"
+                      onReorder={handlePreviewReorder}
+                      values={orderedTasks}
+                    >
+                      {orderedTasks.map((task, index) => {
+                        return (
+                          <CommandTaskReorderItem
+                            dragging={draggingTaskId === task.id}
+                            index={index}
+                            key={task.id}
+                            onDelete={() => void handleDeleteTask(task.id)}
+                            onDragEnd={() => void handleTaskDragEnd()}
+                            onDragStart={() => handleTaskDragStart(task.id)}
+                            onEdit={() => openEditEditor(task)}
+                            onRun={() => void handleRunSingleTask(task.id)}
+                            onToggleEnabled={(enabled) => void handleToggleTaskEnabled(task, enabled)}
+                            switchLoading={
+                              toggleTaskEnabledMutation.isPending &&
+                              toggleTaskEnabledMutation.variables?.task.id === task.id
+                            }
+                            runButtonLoading={
+                              runSingleTaskMutation.isPending &&
+                              runSingleTaskMutation.variables?.launchTaskId === task.id
+                            }
+                            runDisabled={
+                              !task.enabled ||
+                              runAllTasksMutation.isPending ||
+                              reorderTasksMutation.isPending ||
+                              toggleTaskEnabledMutation.isPending
+                            }
+                            task={task}
+                            workspacePath={workspacePath}
+                          />
+                        );
+                      })}
+                    </Reorder.Group>
+                  ) : (
+                    <div className="flex min-h-[180px] items-center justify-center rounded-[12px] border border-dashed border-[#e6edf5] bg-[#fbfcfe]">
+                      <Empty
+                        description="还没有终端命令。点击右上角“新增命令”开始配置。"
+                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      />
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
-          </>
+          </div>
         )}
       </div>
 

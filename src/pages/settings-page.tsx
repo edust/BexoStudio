@@ -4,6 +4,7 @@ import {
   FolderOpenOutlined,
   HolderOutlined,
   PlusOutlined,
+  SearchOutlined,
   SettingOutlined,
 } from "@ant-design/icons";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -26,6 +27,7 @@ import { toast } from "sonner";
 
 import {
   CommandClientError,
+  detectEditorsFromPath,
   getErrorSummary,
   hasDesktopRuntime,
 } from "@/lib/command-client";
@@ -48,16 +50,33 @@ import {
   getCodexHomeDirectory,
   updateAppPreferences,
 } from "@/queries/preferences";
-import type { AppPreferences, TerminalCommandTemplateRecord } from "@/types/backend";
+import type {
+  AdapterAvailability,
+  AppPreferences,
+  CustomEditorRecord,
+  EditorPathDetectionResult,
+  TerminalCommandTemplateRecord,
+} from "@/types/backend";
+
+type EditorKey = "vscode" | "jetbrains";
 
 export default function SettingsPage() {
   const [pathInlineError, setPathInlineError] = useState<string | null>(null);
   const [codexHomeInlineError, setCodexHomeInlineError] = useState<string | null>(null);
   const [templateInlineError, setTemplateInlineError] = useState<string | null>(null);
+  const [editorInlineError, setEditorInlineError] = useState<string | null>(null);
   const [isTemplateManagerOpen, setIsTemplateManagerOpen] = useState(false);
+  const [isEditorManagerOpen, setIsEditorManagerOpen] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [orderedTemplates, setOrderedTemplates] = useState<TerminalCommandTemplateRecord[]>([]);
   const [draggingTemplateId, setDraggingTemplateId] = useState<string | null>(null);
+  const [editorDetectionResult, setEditorDetectionResult] =
+    useState<EditorPathDetectionResult | null>(null);
+  const [editorDraftPaths, setEditorDraftPaths] = useState<Record<EditorKey, string>>({
+    vscode: "",
+    jetbrains: "",
+  });
+  const [customEditorsDraft, setCustomEditorsDraft] = useState<CustomEditorRecord[]>([]);
 
   const desktopRuntimeAvailable = hasDesktopRuntime();
   const queryClient = useQueryClient();
@@ -81,9 +100,15 @@ export default function SettingsPage() {
       queryClient.setQueryData(appPreferencesQueryKey, preferences);
     },
   });
+  const detectEditorsMutation = useMutation({
+    mutationFn: detectEditorsFromPath,
+  });
 
   const resolvedPreferences = preferencesQuery.data ?? defaultAppPreferences;
   const windowsTerminalPath = resolvedPreferences.terminal.windowsTerminalPath?.trim() ?? "";
+  const vscodePath = resolvedPreferences.ide.vscodePath?.trim() ?? "";
+  const jetbrainsPath = resolvedPreferences.ide.jetbrainsPath?.trim() ?? "";
+  const configuredEditorCount = Number(Boolean(vscodePath)) + Number(Boolean(jetbrainsPath));
   const codexHomePath = codexHomeQuery.data?.path?.trim() ?? "";
   const codexHomeExists = codexHomeQuery.data?.exists ?? false;
   const codexHomeDisplayValue = codexHomePath || "未能解析 Codex 配置目录";
@@ -115,6 +140,23 @@ export default function SettingsPage() {
     setOrderedTemplates(terminalTemplates);
     latestOrderedTemplatesRef.current = terminalTemplates;
   }, [terminalTemplates]);
+
+  useEffect(() => {
+    if (!isEditorManagerOpen) {
+      return;
+    }
+
+    setEditorDraftPaths({
+      vscode: vscodePath,
+      jetbrains: jetbrainsPath,
+    });
+    setCustomEditorsDraft(resolvedPreferences.ide.customEditors ?? []);
+  }, [
+    isEditorManagerOpen,
+    jetbrainsPath,
+    resolvedPreferences.ide.customEditors,
+    vscodePath,
+  ]);
 
   const templateForm = useForm<
     TerminalCommandTemplateFormInputValues,
@@ -161,6 +203,21 @@ export default function SettingsPage() {
     setTemplateInlineError(null);
   }
 
+  function openEditorManager() {
+    setIsEditorManagerOpen(true);
+    setEditorInlineError(null);
+    setEditorDraftPaths({
+      vscode: vscodePath,
+      jetbrains: jetbrainsPath,
+    });
+    setCustomEditorsDraft(resolvedPreferences.ide.customEditors ?? []);
+  }
+
+  function closeEditorManager() {
+    setIsEditorManagerOpen(false);
+    setEditorInlineError(null);
+  }
+
   async function persistPreferences(nextPreferences: AppPreferences) {
     return updatePreferencesMutation.mutateAsync(nextPreferences);
   }
@@ -175,6 +232,312 @@ export default function SettingsPage() {
         commandTemplates: assignTerminalCommandTemplateSortOrder(nextTemplates),
       },
     });
+  }
+
+  function setEditorDraftPath(editorKey: EditorKey, nextPath: string) {
+    setEditorDraftPaths((current) => ({
+      ...current,
+      [editorKey]: nextPath,
+    }));
+  }
+
+  async function handlePickEditorExecutable(editorKey: EditorKey) {
+    if (
+      !desktopRuntimeAvailable ||
+      updatePreferencesMutation.isPending ||
+      preferencesQuery.isError
+    ) {
+      return;
+    }
+
+    setEditorInlineError(null);
+
+    try {
+      const selectedExecutable = await open({
+        directory: false,
+        multiple: false,
+        recursive: true,
+        title: editorKey === "vscode" ? "选择 VS Code 可执行文件" : "选择 JetBrains 可执行文件",
+        defaultPath: editorDraftPaths[editorKey] || undefined,
+        filters: [{ name: "可执行文件", extensions: ["exe", "cmd", "bat"] }],
+      });
+
+      if (!selectedExecutable || Array.isArray(selectedExecutable)) {
+        return;
+      }
+
+      setEditorDraftPath(editorKey, selectedExecutable.trim());
+    } catch (error) {
+      if (error instanceof CommandClientError) {
+        return;
+      }
+
+      const summary = getErrorSummary(error);
+      setEditorInlineError(summary.message);
+      toast.error(summary.message);
+    }
+  }
+
+  async function handleSaveEditorPath(editorKey: EditorKey) {
+    if (
+      !desktopRuntimeAvailable ||
+      updatePreferencesMutation.isPending ||
+      preferencesQuery.isError
+    ) {
+      return;
+    }
+
+    setEditorInlineError(null);
+
+    try {
+      const currentPreferences =
+        queryClient.getQueryData<AppPreferences>(appPreferencesQueryKey) ??
+        resolvedPreferences;
+      const nextPath = editorDraftPaths[editorKey].trim();
+      const nextPreferences: AppPreferences = {
+        ...currentPreferences,
+        ide: {
+          ...currentPreferences.ide,
+          vscodePath:
+            editorKey === "vscode"
+              ? nextPath || null
+              : currentPreferences.ide.vscodePath ?? null,
+          jetbrainsPath:
+            editorKey === "jetbrains"
+              ? nextPath || null
+              : currentPreferences.ide.jetbrainsPath ?? null,
+        },
+      };
+
+      await persistPreferences(nextPreferences);
+      toast.success(
+        editorKey === "vscode" ? "VS Code 路径已保存" : "JetBrains IDE 路径已保存",
+      );
+    } catch (error) {
+      const summary = getErrorSummary(error);
+      setEditorInlineError(summary.message);
+      toast.error(summary.message);
+    }
+  }
+
+  async function handleClearEditorPath(editorKey: EditorKey) {
+    if (
+      !desktopRuntimeAvailable ||
+      updatePreferencesMutation.isPending ||
+      preferencesQuery.isError
+    ) {
+      return;
+    }
+
+    setEditorInlineError(null);
+
+    try {
+      const currentPreferences =
+        queryClient.getQueryData<AppPreferences>(appPreferencesQueryKey) ??
+        resolvedPreferences;
+      const nextPreferences: AppPreferences = {
+        ...currentPreferences,
+        ide: {
+          ...currentPreferences.ide,
+          vscodePath:
+            editorKey === "vscode" ? null : currentPreferences.ide.vscodePath ?? null,
+          jetbrainsPath:
+            editorKey === "jetbrains"
+              ? null
+              : currentPreferences.ide.jetbrainsPath ?? null,
+        },
+      };
+
+      await persistPreferences(nextPreferences);
+      setEditorDraftPath(editorKey, "");
+      toast.success(
+        editorKey === "vscode"
+          ? "VS Code 路径配置已删除"
+          : "JetBrains IDE 路径配置已删除",
+      );
+    } catch (error) {
+      const summary = getErrorSummary(error);
+      setEditorInlineError(summary.message);
+      toast.error(summary.message);
+    }
+  }
+
+  function handleAddCustomEditor() {
+    setEditorInlineError(null);
+    setCustomEditorsDraft((current) => [
+      ...current,
+      {
+        id: createCustomEditorId(),
+        name: "",
+        command: "",
+      },
+    ]);
+  }
+
+  function handleUpdateCustomEditor(
+    editorId: string,
+    field: "name" | "command",
+    value: string,
+  ) {
+    setCustomEditorsDraft((current) =>
+      current.map((editor) =>
+        editor.id === editorId ? { ...editor, [field]: value } : editor,
+      ),
+    );
+  }
+
+  function handleRemoveCustomEditor(editorId: string) {
+    setEditorInlineError(null);
+    setCustomEditorsDraft((current) =>
+      current.filter((editor) => editor.id !== editorId),
+    );
+  }
+
+  async function handlePickCustomEditorCommand(editorId: string) {
+    if (
+      !desktopRuntimeAvailable ||
+      updatePreferencesMutation.isPending ||
+      preferencesQuery.isError
+    ) {
+      return;
+    }
+
+    setEditorInlineError(null);
+
+    try {
+      const selectedExecutable = await open({
+        directory: false,
+        multiple: false,
+        recursive: true,
+        title: "选择自定义编辑器可执行文件",
+        filters: [{ name: "可执行文件", extensions: ["exe", "cmd", "bat"] }],
+      });
+
+      if (!selectedExecutable || Array.isArray(selectedExecutable)) {
+        return;
+      }
+
+      handleUpdateCustomEditor(editorId, "command", selectedExecutable.trim());
+    } catch (error) {
+      if (error instanceof CommandClientError) {
+        return;
+      }
+
+      const summary = getErrorSummary(error);
+      setEditorInlineError(summary.message);
+      toast.error(summary.message);
+    }
+  }
+
+  async function handleSaveCustomEditors() {
+    if (
+      !desktopRuntimeAvailable ||
+      updatePreferencesMutation.isPending ||
+      preferencesQuery.isError
+    ) {
+      return;
+    }
+
+    setEditorInlineError(null);
+
+    const normalizedEditors = customEditorsDraft.map((editor) => ({
+      ...editor,
+      id: editor.id.trim(),
+      name: editor.name.trim(),
+      command: editor.command.trim(),
+    }));
+
+    for (const editor of normalizedEditors) {
+      if (!editor.name) {
+        const message = "自定义编辑器名称不能为空";
+        setEditorInlineError(message);
+        toast.error(message);
+        return;
+      }
+
+      if (!editor.command) {
+        const message = `编辑器「${editor.name}」命令不能为空`;
+        setEditorInlineError(message);
+        toast.error(message);
+        return;
+      }
+    }
+
+    try {
+      const currentPreferences =
+        queryClient.getQueryData<AppPreferences>(appPreferencesQueryKey) ??
+        resolvedPreferences;
+      await persistPreferences({
+        ...currentPreferences,
+        ide: {
+          ...currentPreferences.ide,
+          customEditors: normalizedEditors,
+        },
+      });
+      toast.success("自定义编辑器列表已保存");
+    } catch (error) {
+      const summary = getErrorSummary(error);
+      setEditorInlineError(summary.message);
+      toast.error(summary.message);
+    }
+  }
+
+  async function handleDetectEditorsFromPath() {
+    if (
+      !desktopRuntimeAvailable ||
+      preferencesQuery.isError ||
+      updatePreferencesMutation.isPending ||
+      detectEditorsMutation.isPending
+    ) {
+      return;
+    }
+
+    setEditorInlineError(null);
+
+    try {
+      const detection = await detectEditorsMutation.mutateAsync();
+      setEditorDetectionResult(detection);
+
+      const currentPreferences =
+        queryClient.getQueryData<AppPreferences>(appPreferencesQueryKey) ??
+        resolvedPreferences;
+      const detectedVscodePath = resolveDetectedEditorPath(detection.vscode);
+      const detectedJetbrainsPath = resolveDetectedEditorPath(detection.jetbrains);
+      const nextVscodePath = detectedVscodePath ?? currentPreferences.ide.vscodePath ?? null;
+      const nextJetbrainsPath =
+        detectedJetbrainsPath ?? currentPreferences.ide.jetbrainsPath ?? null;
+      const shouldPersist =
+        nextVscodePath !== (currentPreferences.ide.vscodePath ?? null) ||
+        nextJetbrainsPath !== (currentPreferences.ide.jetbrainsPath ?? null);
+
+      if (shouldPersist) {
+        await persistPreferences({
+          ...currentPreferences,
+          ide: {
+            ...currentPreferences.ide,
+            vscodePath: nextVscodePath,
+            jetbrainsPath: nextJetbrainsPath,
+          },
+        });
+      }
+      setEditorDraftPaths({
+        vscode: nextVscodePath ?? "",
+        jetbrains: nextJetbrainsPath ?? "",
+      });
+
+      const detectedEditorCount =
+        Number(Boolean(detectedVscodePath)) + Number(Boolean(detectedJetbrainsPath));
+      if (detectedEditorCount > 0) {
+        toast.success(`已从系统变量检测并更新 ${detectedEditorCount} 个编辑器路径`);
+        return;
+      }
+
+      toast.warning("未在系统变量中检测到可用编辑器，已保留当前配置");
+    } catch (error) {
+      const summary = getErrorSummary(error);
+      setEditorInlineError(summary.message);
+      toast.error(summary.message);
+    }
   }
 
   async function handlePickWindowsTerminalDirectory() {
@@ -361,7 +724,7 @@ export default function SettingsPage() {
         {!desktopRuntimeAvailable ? (
           <Alert
             className="mb-4"
-            message="当前页面需要在 Tauri 桌面 runtime 内设置终端偏好。"
+            message="当前页面需要在 Tauri 桌面 runtime 内设置运行偏好。"
             showIcon
             type="info"
           />
@@ -510,6 +873,29 @@ export default function SettingsPage() {
                   size="small"
                 >
                   管理模板
+                </Button>
+              </div>
+            </div>
+
+            <div className="rounded-[0] border border-[#eef2f6] bg-white">
+              <div className="flex items-center justify-between gap-4 px-4 py-4">
+                <div className="min-w-0">
+                  <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
+                    编辑器管理
+                  </Typography.Text>
+                  <Typography.Text className="mt-1 block text-[11px] text-[#667085]">
+                    管理 VS Code / JetBrains 路径。支持从系统变量 PATH 自动检测。当前已配置{" "}
+                    {configuredEditorCount} 个编辑器。
+                  </Typography.Text>
+                </div>
+                <Button
+                  className="!h-[32px] !px-3 !text-[12px]"
+                  disabled={!desktopRuntimeAvailable || preferencesQuery.isError}
+                  icon={<SettingOutlined />}
+                  onClick={openEditorManager}
+                  size="small"
+                >
+                  管理编辑器
                 </Button>
               </div>
             </div>
@@ -678,6 +1064,206 @@ export default function SettingsPage() {
           </div>
         </div>
       </Modal>
+
+      <Modal
+        cancelText="关闭"
+        footer={null}
+        onCancel={closeEditorManager}
+        open={isEditorManagerOpen}
+        title="编辑器管理"
+        width={760}
+      >
+        <div className="space-y-4 pt-1">
+          {editorInlineError ? (
+            <Alert
+              closable
+              message="自动检测失败"
+              onClose={() => setEditorInlineError(null)}
+              showIcon
+              type="error"
+              description={editorInlineError}
+            />
+          ) : null}
+
+          <div className="rounded-[12px] border border-[#eef2f6] bg-[#fbfcfe] p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
+                  PATH 自动检测
+                </Typography.Text>
+                <Typography.Text className="mt-1 block text-[11px] text-[#667085]">
+                  点击后会从系统变量 PATH 探测 VS Code / JetBrains 并自动写回当前设置。
+                </Typography.Text>
+                {editorDetectionResult ? (
+                  <Typography.Text className="mt-1 block text-[11px] text-[#98a2b3]">
+                    最近检测时间：{editorDetectionResult.checkedAt}
+                  </Typography.Text>
+                ) : null}
+              </div>
+
+              <Button
+                className="!h-[32px] !px-3 !text-[12px]"
+                disabled={
+                  !desktopRuntimeAvailable ||
+                  preferencesQuery.isError ||
+                  detectEditorsMutation.isPending ||
+                  updatePreferencesMutation.isPending
+                }
+                icon={<SearchOutlined />}
+                loading={detectEditorsMutation.isPending || updatePreferencesMutation.isPending}
+                onClick={() => void handleDetectEditorsFromPath()}
+                size="small"
+                type="primary"
+              >
+                从系统变量自动检测
+              </Button>
+            </div>
+          </div>
+
+          <EditorDetectionCard
+            configuredPath={vscodePath}
+            detection={editorDetectionResult?.vscode}
+            disabled={!desktopRuntimeAvailable || preferencesQuery.isError}
+            draftPath={editorDraftPaths.vscode}
+            loading={updatePreferencesMutation.isPending}
+            label="VS Code"
+            onDeletePath={() => void handleClearEditorPath("vscode")}
+            onDraftPathChange={(value) => setEditorDraftPath("vscode", value)}
+            onPickPath={() => void handlePickEditorExecutable("vscode")}
+            onSavePath={() => void handleSaveEditorPath("vscode")}
+          />
+          <EditorDetectionCard
+            configuredPath={jetbrainsPath}
+            detection={editorDetectionResult?.jetbrains}
+            disabled={!desktopRuntimeAvailable || preferencesQuery.isError}
+            draftPath={editorDraftPaths.jetbrains}
+            loading={updatePreferencesMutation.isPending}
+            label="JetBrains IDE"
+            onDeletePath={() => void handleClearEditorPath("jetbrains")}
+            onDraftPathChange={(value) => setEditorDraftPath("jetbrains", value)}
+            onPickPath={() => void handlePickEditorExecutable("jetbrains")}
+            onSavePath={() => void handleSaveEditorPath("jetbrains")}
+          />
+
+          <div className="rounded-[12px] border border-[#eef2f6] bg-[#fbfcfe] p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
+                  自定义编辑器列表
+                </Typography.Text>
+                <Typography.Text className="mt-1 block text-[11px] text-[#667085]">
+                  支持手动新增任意编辑器命令（例如：asstudio64），并可增删改后统一保存。
+                </Typography.Text>
+              </div>
+              <Button
+                className="!h-[30px] !px-3 !text-[12px]"
+                disabled={!desktopRuntimeAvailable || preferencesQuery.isError}
+                icon={<PlusOutlined />}
+                onClick={handleAddCustomEditor}
+                size="small"
+                type="default"
+              >
+                新增编辑器
+              </Button>
+            </div>
+
+            <div className="mt-3 space-y-2">
+              {customEditorsDraft.length ? (
+                customEditorsDraft.map((editor) => (
+                  <div
+                    className="rounded-[10px] border border-[#e6edf5] bg-white p-3"
+                    key={editor.id}
+                  >
+                    <div className="grid grid-cols-[minmax(0,220px)_minmax(0,1fr)_auto] items-center gap-2">
+                      <Input
+                        disabled={
+                          !desktopRuntimeAvailable ||
+                          preferencesQuery.isError ||
+                          updatePreferencesMutation.isPending
+                        }
+                        onChange={(event) =>
+                          handleUpdateCustomEditor(editor.id, "name", event.target.value)
+                        }
+                        placeholder="编辑器名称，例如 Android Studio"
+                        value={editor.name}
+                      />
+                      <Input
+                        disabled={
+                          !desktopRuntimeAvailable ||
+                          preferencesQuery.isError ||
+                          updatePreferencesMutation.isPending
+                        }
+                        onChange={(event) =>
+                          handleUpdateCustomEditor(editor.id, "command", event.target.value)
+                        }
+                        placeholder="命令或绝对路径，例如 asstudio64 或 C:\\IDE\\asstudio64.exe"
+                        value={editor.command}
+                      />
+                      <div className="flex items-center gap-2">
+                        <Button
+                          className="!h-[30px] !px-3 !text-[12px]"
+                          disabled={
+                            !desktopRuntimeAvailable ||
+                            preferencesQuery.isError ||
+                            updatePreferencesMutation.isPending
+                          }
+                          icon={<FolderOpenOutlined />}
+                          onClick={() => void handlePickCustomEditorCommand(editor.id)}
+                          size="small"
+                          type="default"
+                        >
+                          选文件
+                        </Button>
+                        <Popconfirm
+                          description="删除后仅在保存列表后生效。"
+                          okButtonProps={{ danger: true }}
+                          okText="删除"
+                          onConfirm={() => handleRemoveCustomEditor(editor.id)}
+                          title="确认删除这条自定义编辑器吗？"
+                        >
+                          <Button
+                            danger
+                            icon={<DeleteOutlined />}
+                            size="small"
+                            type="default"
+                          >
+                            删除
+                          </Button>
+                        </Popconfirm>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-[10px] border border-dashed border-[#d8e1eb] bg-white px-3 py-5 text-center">
+                  <Typography.Text className="text-[12px] text-[#98a2b3]">
+                    暂无自定义编辑器，点击右上角“新增编辑器”开始添加。
+                  </Typography.Text>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-3 flex justify-end border-t border-[#e6edf5] pt-3">
+              <Button
+                className="!h-[30px] !px-3 !text-[12px]"
+                disabled={!desktopRuntimeAvailable || preferencesQuery.isError}
+                loading={updatePreferencesMutation.isPending}
+                onClick={() => void handleSaveCustomEditors()}
+                size="small"
+                type="primary"
+              >
+                保存自定义列表
+              </Button>
+            </div>
+          </div>
+
+          <div className="flex justify-end border-t border-[#e6edf5] pt-3">
+            <Button onClick={closeEditorManager} size="small" type="default">
+              关闭
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
@@ -756,6 +1342,164 @@ function TemplateReorderItem({
       </div>
     </Reorder.Item>
   );
+}
+
+type EditorDetectionCardProps = {
+  configuredPath: string;
+  detection?: AdapterAvailability;
+  disabled: boolean;
+  draftPath: string;
+  label: string;
+  loading: boolean;
+  onDeletePath: () => void;
+  onDraftPathChange: (value: string) => void;
+  onPickPath: () => void;
+  onSavePath: () => void;
+};
+
+function EditorDetectionCard({
+  configuredPath,
+  detection,
+  disabled,
+  draftPath,
+  label,
+  loading,
+  onDeletePath,
+  onDraftPathChange,
+  onPickPath,
+  onSavePath,
+}: EditorDetectionCardProps) {
+  const statusText = detection
+    ? detection.available
+      ? "已检测到"
+      : detection.status === "invalid"
+        ? "路径无效"
+        : "未检测到"
+    : "未检测";
+  const statusClassName = detection
+    ? detection.available
+      ? "border-[#b7ebc0] bg-[#effcf2] text-[#1f7a34]"
+      : "border-[#f2d9d5] bg-[#fff6f5] text-[#b5473b]"
+    : "border-[#d8e1eb] bg-[#f8fafc] text-[#667085]";
+  const detectedPath = detection?.executablePath?.trim() ?? "";
+
+  return (
+    <div className="rounded-[12px] border border-[#eef2f6] bg-[#fbfcfe] p-4">
+      <div className="flex items-center justify-between gap-3">
+        <Typography.Text className="text-[12px] font-medium text-[#1f2937]">
+          {label}
+        </Typography.Text>
+        <span
+          className={cn(
+            "inline-flex rounded-[999px] border px-2 py-0.5 text-[10px] font-medium",
+            statusClassName,
+          )}
+        >
+          {statusText}
+        </span>
+      </div>
+
+      <div className="mt-3 space-y-2">
+        <div>
+          <Typography.Text className="mb-1 block text-[11px] text-[#667085]">
+            当前配置路径
+          </Typography.Text>
+          <div
+            className="flex h-[32px] items-center overflow-hidden rounded-[8px] border border-[#d8e1eb] bg-white px-3 font-mono text-[12px] text-[#475467]"
+            title={configuredPath || "未配置"}
+          >
+            <span className="truncate">{configuredPath || "未配置"}</span>
+          </div>
+        </div>
+
+        <div>
+          <Typography.Text className="mb-1 block text-[11px] text-[#667085]">
+            最近检测路径
+          </Typography.Text>
+          <div
+            className="flex h-[32px] items-center overflow-hidden rounded-[8px] border border-[#d8e1eb] bg-white px-3 font-mono text-[12px] text-[#475467]"
+            title={detectedPath || "未检测到可执行路径"}
+          >
+            <span className="truncate">{detectedPath || "未检测到可执行路径"}</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-3 space-y-2 border-t border-[#e6edf5] pt-3">
+        <Typography.Text className="block text-[11px] text-[#667085]">
+          手动配置路径
+        </Typography.Text>
+        <Input
+          disabled={disabled || loading}
+          onChange={(event) => onDraftPathChange(event.target.value)}
+          placeholder="输入可执行文件绝对路径，例如 C:\\Tools\\code.cmd"
+          value={draftPath}
+        />
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button
+            className="!h-[30px] !px-3 !text-[12px]"
+            disabled={disabled || loading}
+            icon={<FolderOpenOutlined />}
+            onClick={onPickPath}
+            size="small"
+            type="default"
+          >
+            选择文件
+          </Button>
+          <Button
+            className="!h-[30px] !px-3 !text-[12px]"
+            disabled={disabled || loading}
+            loading={loading}
+            onClick={onSavePath}
+            size="small"
+            type="primary"
+          >
+            保存路径
+          </Button>
+          <Popconfirm
+            description="删除后会清空该编辑器的手动路径配置。"
+            okButtonProps={{ danger: true, loading }}
+            okText="删除"
+            onConfirm={onDeletePath}
+            title="确认删除这条路径配置吗？"
+          >
+            <Button
+              danger
+              disabled={disabled || loading}
+              icon={<DeleteOutlined />}
+              size="small"
+              type="default"
+            >
+              删除配置
+            </Button>
+          </Popconfirm>
+        </div>
+      </div>
+
+      {detection ? (
+        <Typography.Text className="mt-2 block text-[11px] text-[#667085]">
+          {`来源：${detection.source} · ${detection.message}`}
+        </Typography.Text>
+      ) : null}
+    </div>
+  );
+}
+
+function resolveDetectedEditorPath(availability: AdapterAvailability): string | null {
+  if (!availability.available) {
+    return null;
+  }
+
+  const executablePath = availability.executablePath?.trim();
+  return executablePath ? executablePath : null;
+}
+
+function createCustomEditorId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  return `editor-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function isSameTemplateOrder(

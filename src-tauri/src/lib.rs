@@ -16,7 +16,8 @@ pub mod automation_support {
     pub use crate::logging::RestoreLogStore;
     pub use crate::persistence::Database;
     pub use crate::services::{
-        PlannerService, PreferencesService, ProfileService, RestoreService, WorkspaceService,
+        PlannerService, PreferencesService, ProfileService, ResourceBrowserService,
+        RestoreService, WorkspaceService,
     };
 }
 

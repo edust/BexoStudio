@@ -1,7 +1,7 @@
 {
   "name": "bexo-studio",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "web:dev": "vite",
@@ -9,10 +9,13 @@
     "web:preview": "vite preview",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",
-    "desktop:build:debug": "tauri build --debug"
+    "desktop:build:nsis": "tauri build --bundles nsis",
+    "desktop:build:debug": "tauri build --debug",
+    "release:build": "node ./scripts/release/build-release-installer.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "^6.1.0",
+    "@crabnebula/tauri-plugin-drag": "^2.1.0",
     "@hookform/resolvers": "^5.2.2",
     "@radix-ui/react-scroll-area": "^1.2.10",
     "@radix-ui/react-separator": "^1.1.7",
@@ -20,6 +23,7 @@
     "@tanstack/react-query": "^5.90.3",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-dialog": "^2.6.0",
+    "@tauri-apps/plugin-fs": "^2.4.5",
     "@tauri-apps/plugin-log": "^2.8.0",
     "@tauri-apps/plugin-notification": "^2.3.3",
     "@tauri-apps/plugin-opener": "^2.5.3",

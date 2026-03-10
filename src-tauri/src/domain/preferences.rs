@@ -40,6 +40,15 @@ pub struct TerminalCommandTemplate {
 pub struct IdePreferences {
     pub vscode_path: Option<String>,
     pub jetbrains_path: Option<String>,
+    pub custom_editors: Vec<CustomEditorPreference>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CustomEditorPreference {
+    pub id: String,
+    pub name: String,
+    pub command: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

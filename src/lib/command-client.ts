@@ -11,6 +11,7 @@ import type {
   CodexProfileRecord,
   CommandResponse,
   DeleteResult,
+  EditorPathDetectionResult,
   LaunchTaskRecord,
   OpenLogDirectoryResult,
   OpenWorkspaceInEditorResult,
@@ -33,6 +34,8 @@ import type {
   UpsertProjectPayload,
   UpsertWorkspacePayload,
   WorkspaceRecord,
+  WorkspaceResourceEntry,
+  WorkspaceResourceGitStatusResponse,
 } from "@/types/backend";
 
 export class CommandClientError extends Error {
@@ -117,6 +120,10 @@ export function getCodexHomeDirectory() {
   return invokeCommand<CodexHomeDirectoryInfo>("get_codex_home_directory");
 }
 
+export function detectEditorsFromPath() {
+  return invokeCommand<EditorPathDetectionResult>("detect_editors_from_path");
+}
+
 export function upsertWorkspace(input: UpsertWorkspacePayload) {
   return invokeCommand<WorkspaceRecord>("upsert_workspace", { input });
 }
@@ -153,6 +160,23 @@ export function runWorkspaceTerminalCommand(workspaceId: string, launchTaskId: s
 
 export function runWorkspaceTerminalCommands(workspaceId: string) {
   return invokeCommand<RunWorkspaceTerminalCommandsResult>("run_workspace_terminal_commands", {
+    workspaceId,
+  });
+}
+
+export function listWorkspaceResourceChildren(workspaceId: string, targetPath?: string | null) {
+  return invokeCommand<WorkspaceResourceEntry[]>("list_workspace_resource_children", {
+    workspaceId,
+    targetPath: targetPath?.trim() ? targetPath.trim() : null,
+  });
+}
+
+export function allowWorkspaceResourceScope(workspaceId: string) {
+  return invokeCommand<string>("allow_workspace_resource_scope", { workspaceId });
+}
+
+export function getWorkspaceResourceGitStatuses(workspaceId: string) {
+  return invokeCommand<WorkspaceResourceGitStatusResponse>("get_workspace_resource_git_statuses", {
     workspaceId,
   });
 }

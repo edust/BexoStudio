@@ -2939,6 +2939,7 @@ mod tests {
             ide: IdePreferences {
                 vscode_path: Some(code_dir.display().to_string()),
                 jetbrains_path: Some(idea_dir.display().to_string()),
+                custom_editors: Vec::new(),
             },
             workspace: WorkspacePreferences::default(),
             tray: TrayPreferences::default(),

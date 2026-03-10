@@ -11,16 +11,16 @@ import {
   PlusOutlined,
   SearchOutlined,
 } from "@ant-design/icons";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow, type DragDropEvent } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Button, Checkbox, Dropdown, Empty, Input, Modal, Popconfirm, Tag, Tooltip, Typography } from "antd";
 import { Reorder, useDragControls } from "motion/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { toast } from "sonner";
 
+import { copyTextToClipboard, getClipboardErrorMessage } from "@/lib/clipboard";
 import { defaultAppPreferences } from "@/lib/app-preferences";
 import { cn } from "@/lib/cn";
 import {
@@ -51,6 +51,7 @@ import { useShellStore } from "@/stores/shell-store";
 import type { SectionSidebarContent, SidebarItem } from "@/types/navigation";
 import type {
   AppPreferences,
+  CustomEditorRecord,
   ProjectRecord,
   RecentRestoreTarget,
   RestoreCapabilities,
@@ -62,22 +63,25 @@ type SectionSidebarProps = {
   content: SectionSidebarContent;
 };
 
+const WORKSPACE_REORDER_MAX_ITEMS = 18;
+
 export function SectionSidebar({ content }: SectionSidebarProps) {
   const [query, setQuery] = useState("");
   const [selectedWorkspaceIds, setSelectedWorkspaceIds] = useState<string[]>([]);
   const [orderedWorkspaceItems, setOrderedWorkspaceItems] = useState<WorkspaceSidebarItem[]>([]);
   const [draggingWorkspaceId, setDraggingWorkspaceId] = useState<string | null>(null);
-  const [workspaceDropActive, setWorkspaceDropActive] = useState(false);
   const [workspaceDropPending, setWorkspaceDropPending] = useState(false);
   const location = useLocation();
   const selectedHomeWorkspaceId = useShellStore((state) => state.selectedHomeWorkspaceId);
   const setSelectedHomeWorkspaceId = useShellStore((state) => state.setSelectedHomeWorkspaceId);
+  const themeMode = useShellStore((state) => state.themeMode);
   const queryClient = useQueryClient();
   const desktopRuntimeAvailable = hasDesktopRuntime();
-  const workspaceDropHeaderRef = useRef<HTMLDivElement | null>(null);
-  const workspaceDropZoneRef = useRef<HTMLDivElement | null>(null);
+  const workspaceDropContainerRef = useRef<HTMLDivElement | null>(null);
   const persistSelectedWorkspaceIdsQueueRef = useRef<Promise<void>>(Promise.resolve());
   const workspaceDropPendingRef = useRef(false);
+  const workspaceDropActiveRef = useRef(false);
+  const workspaceDropLastInsideAtRef = useRef(0);
   const workspaceDropDeactivateTimeoutRef = useRef<number | null>(null);
   const recentWorkspaceDropRef = useRef<{
     signature: string;
@@ -511,11 +515,19 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
   );
 
   const workspaceEditorOptions = useMemo(
-    () => buildWorkspaceEditorOptions(restoreCapabilitiesQuery.data),
-    [restoreCapabilitiesQuery.data],
+    () =>
+      buildWorkspaceEditorOptions(
+        restoreCapabilitiesQuery.data,
+        preferencesQuery.data ?? defaultAppPreferences,
+      ),
+    [preferencesQuery.data, restoreCapabilitiesQuery.data],
   );
   const workspaceDropEnabled =
     content.dataSource === "workspaces" && desktopRuntimeAvailable;
+
+  const setWorkspaceDropActiveStable = useCallback((nextActive: boolean) => {
+    workspaceDropActiveRef.current = nextActive;
+  }, []);
 
   async function handleCreateWorkspace() {
     if (!desktopRuntimeAvailable || registerWorkspaceMutation.isPending) {
@@ -617,12 +629,12 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
 
   useEffect(() => {
     if (!workspaceDropEnabled) {
-      setWorkspaceDropActive(false);
+      workspaceDropLastInsideAtRef.current = 0;
+      setWorkspaceDropActiveStable(false);
       return;
     }
 
     let cancelled = false;
-    let webviewUnlisten: (() => void) | undefined;
     let windowUnlisten: (() => void) | undefined;
     let scaleFactor = 1;
 
@@ -637,8 +649,10 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
       clearWorkspaceDropDeactivateTimeout();
       workspaceDropDeactivateTimeoutRef.current = window.setTimeout(() => {
         workspaceDropDeactivateTimeoutRef.current = null;
-        setWorkspaceDropActive(false);
-      }, 80);
+        if (Date.now() - workspaceDropLastInsideAtRef.current >= 140) {
+          setWorkspaceDropActiveStable(false);
+        }
+      }, 140);
     };
 
     const handleDragDropEvent = async (event: { payload: DragDropEvent }) => {
@@ -653,22 +667,28 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
       }
 
       const insideDropZone =
-        isPositionInsideElement(workspaceDropHeaderRef.current, payload, scaleFactor) ||
-        isPositionInsideElement(workspaceDropZoneRef.current, payload, scaleFactor);
+        isPositionInsideElement(workspaceDropContainerRef.current, payload, scaleFactor);
 
       if (payload.type === "enter" || payload.type === "over") {
         if (insideDropZone) {
+          workspaceDropLastInsideAtRef.current = Date.now();
           clearWorkspaceDropDeactivateTimeout();
-          setWorkspaceDropActive(true);
+          if (!workspaceDropActiveRef.current) {
+            setWorkspaceDropActiveStable(true);
+          }
         } else {
           scheduleWorkspaceDropDeactivate();
         }
         return;
       }
 
+      const dropAccepted =
+        insideDropZone ||
+        workspaceDropActiveRef.current ||
+        Date.now() - workspaceDropLastInsideAtRef.current <= 220;
       clearWorkspaceDropDeactivateTimeout();
-      setWorkspaceDropActive(false);
-      if (!insideDropZone) {
+      setWorkspaceDropActiveStable(false);
+      if (!dropAccepted) {
         return;
       }
 
@@ -679,9 +699,9 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
       try {
         scaleFactor = await getCurrentWindow().scaleFactor();
         windowUnlisten = await getCurrentWindow().onDragDropEvent(handleDragDropEvent);
-        webviewUnlisten = await getCurrentWebview().onDragDropEvent(handleDragDropEvent);
       } catch {
-        setWorkspaceDropActive(false);
+        workspaceDropLastInsideAtRef.current = 0;
+        setWorkspaceDropActiveStable(false);
       }
     };
 
@@ -690,11 +710,11 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
     return () => {
       cancelled = true;
       clearWorkspaceDropDeactivateTimeout();
-      setWorkspaceDropActive(false);
-      webviewUnlisten?.();
+      workspaceDropLastInsideAtRef.current = 0;
+      setWorkspaceDropActiveStable(false);
       windowUnlisten?.();
     };
-  }, [handleDroppedWorkspacePaths, workspaceDropEnabled]);
+  }, [handleDroppedWorkspacePaths, setWorkspaceDropActiveStable, workspaceDropEnabled]);
 
   async function handleCopyWorkspacePath(workspace: WorkspaceRecord) {
     const workspacePath = resolveWorkspacePath(workspace);
@@ -704,12 +724,12 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
     }
 
     try {
-      await copyTextToClipboard(workspacePath);
+      await copyTextToClipboard(workspacePath, "工作区路径为空");
       toast.success("工作区路径已复制", {
         description: workspacePath,
       });
     } catch (error) {
-      toast.error(getClipboardErrorMessage(error));
+      toast.error(getClipboardErrorMessage(error, "复制工作区路径失败"));
     }
   }
 
@@ -745,7 +765,7 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
 
   async function handleOpenWorkspaceInEditor(
     workspace: WorkspaceRecord,
-    editorKey = resolveWorkspaceEditorKey(workspace),
+    editorKey = resolveWorkspaceEditorKey(workspace, workspaceEditorOptions),
   ) {
     const workspacePath = resolveWorkspacePath(workspace);
     if (!workspacePath) {
@@ -779,7 +799,7 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
       return;
     }
 
-    if (editorKey === resolveWorkspaceEditorKey(workspace)) {
+    if (editorKey === resolveWorkspaceEditorKey(workspace, workspaceEditorOptions)) {
       return;
     }
 
@@ -976,7 +996,15 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
     }
   }
 
-  const workspaceReorderEnabled = content.dataSource === "workspaces" && !query.trim();
+  const workspaceReorderEnabled =
+    content.dataSource === "workspaces" &&
+    !query.trim() &&
+    orderedWorkspaceItems.length <= WORKSPACE_REORDER_MAX_ITEMS;
+  const workspaceReorderTooltip = query.trim()
+    ? "搜索过滤时暂不支持拖拽排序"
+    : orderedWorkspaceItems.length > WORKSPACE_REORDER_MAX_ITEMS
+      ? `工作区过多时先关闭拖拽排序，避免滚动卡顿（最多 ${WORKSPACE_REORDER_MAX_ITEMS} 个）`
+      : "拖动调整工作区顺序";
   const workspaceActionsBusy =
     registerWorkspaceMutation.isPending ||
     runSelectedWorkspacesMutation.isPending ||
@@ -984,18 +1012,15 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
 
     return (
       <aside
-        className={cn(
-          "bexo-shell-surface relative flex h-full min-h-0 flex-col overflow-y-auto rounded-[16px] transition-[box-shadow,border-color,background-color] duration-150",
-          workspaceDropActive && "shadow-[inset_0_0_0_1px_rgba(22,151,197,0.6)] bg-[#f7fdff]",
-        )}
+        className="bexo-shell-surface relative flex h-full min-h-0 flex-col overflow-hidden rounded-[16px] transition-[box-shadow,border-color,background-color] duration-150"
+        ref={content.dataSource === "workspaces" ? workspaceDropContainerRef : undefined}
       >
       <div
         className="border-b border-[#e6edf5] px-4 py-4 pb-1"
-        ref={content.dataSource === "workspaces" ? workspaceDropHeaderRef : undefined}
       >
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <Typography.Text className="block text-[11px] font-semibold uppercase tracking-[0.24em] text-[#1697c5]">
+            <Typography.Text className="block text-[11px] font-semibold uppercase tracking-[0.24em] text-[#667085]">
               {content.eyebrow}
             </Typography.Text>
             {content.title ? (
@@ -1044,26 +1069,18 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
           />
         ) : null}
         {content.dataSource === "workspaces" && desktopRuntimeAvailable ? (
-          <Typography.Text
-            className={cn(
-              "mt-2 block min-h-[40px] text-[11px] leading-5",
-              workspaceDropActive ? "text-[#1697c5]" : "text-[#98a2b3]",
-            )}
-          >
-            {workspaceDropPending
-              ? "正在创建工作区..."
-              : workspaceDropActive
-                ? "松开鼠标，直接创建工作区"
-                : "可将文件夹拖入此侧栏，直接创建工作区"}
+          <Typography.Text className="mt-2 block min-h-[40px] text-[11px] leading-5 text-[#98a2b3]">
+            可将文件夹拖入此侧栏，直接创建工作区
           </Typography.Text>
         ) : null}
       </div>
 
-      <div
+        <div
         className={cn(
-          "min-h-0 flex-1",
+          "min-h-0 flex-1 overflow-y-auto",
           content.dataSource === "workspaces" && "flex flex-col",
         )}
+        style={{ contain: "strict" }}
       >
       {content.dataSource === "workspaces" && filteredWorkspaceItems.length ? (
         <>
@@ -1081,7 +1098,7 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
                     desktopRuntimeAvailable={desktopRuntimeAvailable}
                     dragging={draggingWorkspaceId === item.workspace.id}
                     key={item.key}
-                    editorKey={resolveWorkspaceEditorKey(item.workspace)}
+                    editorKey={resolveWorkspaceEditorKey(item.workspace, workspaceEditorOptions)}
                     editorOptions={workspaceEditorOptions}
                     onCopyPath={() => void handleCopyWorkspacePath(item.workspace)}
                     onChangeEditor={(editorKey) =>
@@ -1095,7 +1112,9 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
                     }
                     onOpenTerminal={() => void handleOpenWorkspaceTerminal(item.workspace)}
                     onRemove={() => void handleRemoveWorkspace(item.workspace)}
-                    onSelect={() => setSelectedHomeWorkspaceId(item.workspace.id)}
+                    onSelect={() =>
+                      startTransition(() => setSelectedHomeWorkspaceId(item.workspace.id))
+                    }
                     onSelectionChange={(checked) =>
                       handleWorkspaceSelectionChange(item.workspace.id, checked)
                     }
@@ -1114,8 +1133,9 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
                     }
                     removePending={removeWorkspaceMutation.isPending}
                     reorderEnabled
+                    themeMode={themeMode}
                     selected={selectedHomeWorkspaceId === item.workspace.id}
-                    selectedWorkspaceIds={selectedWorkspaceIds}
+                    selectionChecked={selectedWorkspaceIds.includes(item.workspace.id)}
                     workspaceItem={item}
                   />
                 ))}
@@ -1127,7 +1147,7 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
                     desktopRuntimeAvailable={desktopRuntimeAvailable}
                     dragging={false}
                     key={item.key}
-                    editorKey={resolveWorkspaceEditorKey(item.workspace)}
+                    editorKey={resolveWorkspaceEditorKey(item.workspace, workspaceEditorOptions)}
                     editorOptions={workspaceEditorOptions}
                     onCopyPath={() => void handleCopyWorkspacePath(item.workspace)}
                     onChangeEditor={(editorKey) =>
@@ -1139,7 +1159,9 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
                     }
                     onOpenTerminal={() => void handleOpenWorkspaceTerminal(item.workspace)}
                     onRemove={() => void handleRemoveWorkspace(item.workspace)}
-                    onSelect={() => setSelectedHomeWorkspaceId(item.workspace.id)}
+                    onSelect={() =>
+                      startTransition(() => setSelectedHomeWorkspaceId(item.workspace.id))
+                    }
                     onSelectionChange={(checked) =>
                       handleWorkspaceSelectionChange(item.workspace.id, checked)
                     }
@@ -1158,9 +1180,10 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
                     }
                     removePending={removeWorkspaceMutation.isPending}
                     reorderEnabled={false}
-                    reorderTooltip="搜索过滤时暂不支持拖拽排序"
+                    reorderTooltip={workspaceReorderTooltip}
+                    themeMode={themeMode}
                     selected={selectedHomeWorkspaceId === item.workspace.id}
-                    selectedWorkspaceIds={selectedWorkspaceIds}
+                    selectionChecked={selectedWorkspaceIds.includes(item.workspace.id)}
                     workspaceItem={item}
                   />
                 ))}
@@ -1281,12 +1304,13 @@ type WorkspaceSidebarCardProps = {
   removePending: boolean;
   reorderEnabled: boolean;
   reorderTooltip?: string;
+  themeMode: "light" | "dark";
   selected: boolean;
-  selectedWorkspaceIds: string[];
+  selectionChecked: boolean;
   workspaceItem: WorkspaceSidebarItem;
 };
 
-function WorkspaceSidebarCard({
+const WorkspaceSidebarCard = memo(function WorkspaceSidebarCard({
   desktopRuntimeAvailable,
   dragging,
   editorKey,
@@ -1308,8 +1332,9 @@ function WorkspaceSidebarCard({
   removePending,
   reorderEnabled,
   reorderTooltip = "拖动调整工作区顺序",
+  themeMode,
   selected,
-  selectedWorkspaceIds,
+  selectionChecked,
   workspaceItem,
 }: WorkspaceSidebarCardProps) {
   const dragControls = useDragControls();
@@ -1331,7 +1356,7 @@ function WorkspaceSidebarCard({
     disabled: !option.available || editorSaving,
     label: (
       <div className="flex min-w-[168px] items-center gap-2 py-0.5">
-        <WorkspaceEditorGlyph editorKey={option.key} />
+        <WorkspaceEditorGlyph editorKey={option.key} label={option.label} />
         <div className="min-w-0 text-[12px] font-medium text-[#1f2937]">{option.label}</div>
       </div>
     ),
@@ -1361,7 +1386,7 @@ function WorkspaceSidebarCard({
           </span>
         </Tooltip>
         <Checkbox
-          checked={selectedWorkspaceIds.includes(workspaceItem.workspace.id)}
+          checked={selectionChecked}
           className="mt-0.5"
           onClick={(event) => event.stopPropagation()}
           onChange={(event) => onSelectionChange(event.target.checked)}
@@ -1452,11 +1477,17 @@ function WorkspaceSidebarCard({
                   <Button
                     className="!h-6 !min-w-0 !rounded-none !border-0 !px-1.5"
                     disabled={openEditorDisabled}
-                    icon={<WorkspaceEditorGlyph editorKey={editorKey} compact />}
+                    icon={
+                      <WorkspaceEditorGlyph
+                        compact
+                        editorKey={preferredEditorOption?.key ?? editorKey}
+                        label={preferredEditorOption?.label}
+                      />
+                    }
                     loading={openInEditorLoading}
                     onClick={(event) => {
                       event.stopPropagation();
-                      onOpenInEditor(editorKey);
+                      onOpenInEditor(preferredEditorOption?.key ?? editorKey);
                     }}
                     size="small"
                     type="text"
@@ -1514,7 +1545,9 @@ function WorkspaceSidebarCard({
           "cursor-pointer rounded-[12px] border px-3 py-2.5 transition-colors",
           selected
             ? "border-[#8fd4ec] bg-[#f4fbfe]"
-            : "border-transparent hover:border-[#d9e2ec] hover:bg-[#f8fafc]",
+            : themeMode === "dark"
+              ? "border-transparent hover:border-[#3c3c3c] hover:bg-[#2a2d2e]"
+              : "border-transparent hover:border-[#d9e2ec] hover:bg-[#f8fafc]",
         )}
         onClick={onSelect}
       >
@@ -1530,7 +1563,9 @@ function WorkspaceSidebarCard({
         "cursor-pointer rounded-[12px] border px-3 py-2.5 transition-[border-color,background-color,opacity] duration-150",
         selected
           ? "border-[#8fd4ec] bg-[#f4fbfe]"
-          : "border-transparent hover:border-[#d9e2ec] hover:bg-[#f8fafc]",
+          : themeMode === "dark"
+            ? "border-transparent hover:border-[#3c3c3c] hover:bg-[#2a2d2e]"
+            : "border-transparent hover:border-[#d9e2ec] hover:bg-[#f8fafc]",
         dragging && "border-[#1697c5] bg-[#f0fbff] opacity-95",
       )}
       dragControls={dragControls}
@@ -1550,60 +1585,28 @@ function WorkspaceSidebarCard({
       {content}
     </Reorder.Item>
   );
-}
-
-async function copyTextToClipboard(text: string) {
-  const normalizedText = text.trim();
-  if (!normalizedText) {
-    throw new Error("工作区路径为空");
-  }
-
-  let clipboardError: unknown;
-  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(normalizedText);
-      return;
-    } catch (error) {
-      clipboardError = error;
-    }
-  }
-
-  if (typeof document === "undefined") {
-    if (clipboardError instanceof Error && clipboardError.message.trim()) {
-      throw clipboardError;
-    }
-    throw new Error("当前环境不支持剪贴板复制");
-  }
-
-  const textarea = document.createElement("textarea");
-  textarea.value = normalizedText;
-  textarea.readOnly = true;
-  textarea.className = "allow-text-selection allow-context-menu";
-  textarea.style.position = "fixed";
-  textarea.style.left = "-9999px";
-  textarea.style.top = "0";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  textarea.focus();
-  textarea.select();
-
-  try {
-    const copied = document.execCommand("copy");
-    if (!copied) {
-      throw new Error("剪贴板写入失败");
-    }
-  } finally {
-    document.body.removeChild(textarea);
-  }
-}
-
-function getClipboardErrorMessage(error: unknown) {
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
-  }
-
-  return "复制工作区路径失败";
-}
+}, (previous, next) =>
+  previous.desktopRuntimeAvailable === next.desktopRuntimeAvailable &&
+  previous.dragging === next.dragging &&
+  previous.editorKey === next.editorKey &&
+  previous.openInEditorLoading === next.openInEditorLoading &&
+  previous.openTerminalDisabled === next.openTerminalDisabled &&
+  previous.openTerminalLoading === next.openTerminalLoading &&
+  previous.editorSaving === next.editorSaving &&
+  previous.removePending === next.removePending &&
+  previous.reorderEnabled === next.reorderEnabled &&
+  previous.reorderTooltip === next.reorderTooltip &&
+  previous.themeMode === next.themeMode &&
+  previous.selected === next.selected &&
+  previous.selectionChecked === next.selectionChecked &&
+  previous.workspaceItem.key === next.workspaceItem.key &&
+  previous.workspaceItem.label === next.workspaceItem.label &&
+  previous.workspaceItem.description === next.workspaceItem.description &&
+  previous.workspaceItem.badge === next.workspaceItem.badge &&
+  previous.workspaceItem.workspace.id === next.workspaceItem.workspace.id &&
+  previous.workspaceItem.recentRestoreTarget?.lastRestoreAt ===
+    next.workspaceItem.recentRestoreTarget?.lastRestoreAt
+);
 
 function resolveWorkspacePath(workspace: WorkspaceRecord) {
   return resolveWorkspacePrimaryProject(workspace)?.path?.trim() || "";
@@ -1613,8 +1616,14 @@ function resolveWorkspacePrimaryProject(workspace: WorkspaceRecord) {
   return workspace.projects[0];
 }
 
-function resolveWorkspaceEditorKey(workspace: WorkspaceRecord): WorkspaceEditorKey {
-  return normalizeWorkspaceEditorKey(resolveWorkspacePrimaryProject(workspace)?.ideType);
+function resolveWorkspaceEditorKey(
+  workspace: WorkspaceRecord,
+  editorOptions: WorkspaceEditorOption[],
+): WorkspaceEditorKey {
+  return normalizeWorkspaceEditorKey(
+    resolveWorkspacePrimaryProject(workspace)?.ideType,
+    editorOptions,
+  );
 }
 
 function buildProjectEditorUpdatePayload(
@@ -1791,8 +1800,16 @@ function isPositionInsideElement(
   return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
 }
 
-function normalizeWorkspaceEditorKey(editorKey: string | null | undefined): WorkspaceEditorKey {
-  return editorKey === "jetbrains" ? "jetbrains" : "vscode";
+function normalizeWorkspaceEditorKey(
+  editorKey: string | null | undefined,
+  editorOptions: WorkspaceEditorOption[],
+): WorkspaceEditorKey {
+  const normalized = editorKey?.trim();
+  if (normalized && editorOptions.some((option) => option.key === normalized)) {
+    return normalized;
+  }
+
+  return editorOptions[0]?.key ?? "vscode";
 }
 
 function withWorkspaceSelectedIds(
@@ -1810,8 +1827,9 @@ function withWorkspaceSelectedIds(
 
 function buildWorkspaceEditorOptions(
   capabilities?: RestoreCapabilities,
+  preferences: AppPreferences = defaultAppPreferences,
 ): WorkspaceEditorOption[] {
-  return [
+  const builtInOptions: WorkspaceEditorOption[] = [
     {
       key: "vscode",
       label: "Visual Studio Code",
@@ -1825,27 +1843,102 @@ function buildWorkspaceEditorOptions(
       message: capabilities?.jetbrains.message ?? "JetBrains 当前不可用",
     },
   ];
+  const customOptions = buildCustomWorkspaceEditorOptions(preferences.ide.customEditors);
+
+  return [...builtInOptions, ...customOptions];
 }
 
 function WorkspaceEditorGlyph({
   editorKey,
+  label,
   compact = false,
 }: {
   editorKey: WorkspaceEditorKey;
+  label?: string;
   compact?: boolean;
 }) {
-  const isVSCode = editorKey === "vscode";
+  const normalizedKey = editorKey.trim().toLowerCase();
+  const isVSCode = normalizedKey === "vscode";
+  const isJetBrains = normalizedKey === "jetbrains";
+  const glyphText = resolveWorkspaceEditorGlyphText(editorKey, label);
+  const toneClassName = isVSCode
+    ? "bg-[#e8f1ff] text-[#2563eb]"
+    : isJetBrains
+      ? "bg-[#fff2e8] text-[#d46b08]"
+      : "bg-[#edf2f7] text-[#475467]";
+
   return (
     <span
       className={cn(
         "inline-flex items-center justify-center rounded-[4px] font-semibold leading-none",
         compact ? "h-4 w-4 text-[8px]" : "h-4 w-4 text-[8px]",
-        isVSCode ? "bg-[#e8f1ff] text-[#2563eb]" : "bg-[#fff2e8] text-[#d46b08]",
+        toneClassName,
       )}
     >
-      {isVSCode ? "VS" : "JB"}
+      {glyphText}
     </span>
   );
+}
+
+function buildCustomWorkspaceEditorOptions(
+  customEditors: CustomEditorRecord[] | undefined,
+): WorkspaceEditorOption[] {
+  const editors = customEditors ?? [];
+  if (!editors.length) {
+    return [];
+  }
+
+  const seenKeys = new Set<string>();
+  const options: WorkspaceEditorOption[] = [];
+
+  for (const editor of editors) {
+    const key = editor.id.trim();
+    if (
+      !key ||
+      key === "vscode" ||
+      key === "jetbrains" ||
+      seenKeys.has(key)
+    ) {
+      continue;
+    }
+
+    const name = editor.name.trim();
+    const command = editor.command.trim();
+    if (!name || !command) {
+      continue;
+    }
+
+    seenKeys.add(key);
+    options.push({
+      key,
+      label: name,
+      available: true,
+      message: `使用自定义编辑器命令：${command}`,
+    });
+  }
+
+  return options;
+}
+
+function resolveWorkspaceEditorGlyphText(editorKey: string, label?: string) {
+  const normalizedKey = editorKey.trim().toLowerCase();
+  if (normalizedKey === "vscode") {
+    return "VS";
+  }
+  if (normalizedKey === "jetbrains") {
+    return "JB";
+  }
+
+  const seed = label?.trim() || editorKey.trim();
+  const firstAlphaNumeric = seed
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .slice(0, 2)
+    .toUpperCase();
+  if (firstAlphaNumeric.length >= 2) {
+    return firstAlphaNumeric;
+  }
+
+  return "ED";
 }
 
 function areStringArraysEqual(left: string[], right: string[]) {

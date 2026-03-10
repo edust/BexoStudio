@@ -1,7 +1,7 @@
 use tauri::State;
 
 use crate::{
-    domain::{AppPreferences, CodexHomeDirectoryInfo},
+    domain::{AppPreferences, CodexHomeDirectoryInfo, EditorPathDetectionResult},
     error::{AppError, CommandResponse},
     services::PreferencesService,
 };
@@ -62,6 +62,23 @@ pub async fn get_codex_home_directory(
             log::error!(
                 target: "bexo::command::preferences",
                 "get_codex_home_directory failed: {}",
+                error
+            );
+            Ok(CommandResponse::failure(error))
+        }
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn detect_editors_from_path(
+    preferences_service: State<'_, PreferencesService>,
+) -> Result<CommandResponse<EditorPathDetectionResult>, AppError> {
+    match preferences_service.detect_editors_from_path() {
+        Ok(data) => Ok(CommandResponse::success(data)),
+        Err(error) => {
+            log::error!(
+                target: "bexo::command::preferences",
+                "detect_editors_from_path failed: {}",
                 error
             );
             Ok(CommandResponse::failure(error))

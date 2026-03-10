@@ -11,6 +11,8 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(logging::build_plugin())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_drag::init())
+        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
@@ -35,6 +37,7 @@ pub fn run() {
 
             app.manage(preferences_service);
             app.manage(crate::services::WorkspaceService::new(database.clone()));
+            app.manage(crate::services::ResourceBrowserService::new(database.clone()));
             app.manage(crate::services::ProfileService::new(database.clone()));
             app.manage(crate::services::PlannerService::new(
                 database.clone(),
@@ -77,6 +80,7 @@ pub fn run() {
             commands::preferences::get_app_preferences,
             commands::preferences::update_app_preferences,
             commands::preferences::get_codex_home_directory,
+            commands::preferences::detect_editors_from_path,
             commands::workspace::list_workspaces,
             commands::workspace::upsert_workspace,
             commands::workspace::delete_workspace,
@@ -87,6 +91,9 @@ pub fn run() {
             commands::workspace::run_workspace_terminal_command,
             commands::workspace::run_workspace_terminal_commands,
             commands::workspace::upsert_project,
+            commands::resource_browser::list_workspace_resource_children,
+            commands::resource_browser::allow_workspace_resource_scope,
+            commands::resource_browser::get_workspace_resource_git_statuses,
             commands::launch_task::list_launch_tasks,
             commands::launch_task::upsert_launch_task,
             commands::launch_task::delete_launch_task,

@@ -121,7 +121,19 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
       - 默认编辑器选择会持久化保存
 - Home Content Workspace Detail：
   - 首页右侧 `Content View` 已移除示例块
-  - 点击左侧工作区后，右侧显示该工作区的只读文件夹路径
+  - 点击左侧工作区后，右侧显示资源浏览器、只读文件夹路径与终端命令组
+  - 资源浏览器支持：
+    - 左右折叠 / 展开
+    - 宽度拖拽调整并持久化
+    - 目录按需异步展开
+    - 多选
+    - Git 状态高亮：`modified / renamed / untracked / ignored`
+    - `仅看变更` 快速筛选
+    - `Ctrl+Shift+C` 复制选中资源绝对路径
+    - `Ctrl+Shift+R` 在系统资源管理器中显示当前资源
+    - 右键快捷菜单：显示到资源管理器、复制绝对路径
+    - 原生文件监听启动前会先为当前工作区动态授权 `fs_scope`，失败时回退轮询刷新
+    - 已接入原生拖出资源能力，已在宝塔上传窗口实测通过文件与文件夹拖入
   - 右侧已新增当前工作区默认项目的“终端命令组”
   - 支持：
     - 新增命令
@@ -207,6 +219,22 @@ npm run web:build
 npm run desktop:build:debug
 ```
 
+发行打包命令：
+
+```bash
+npm run release:build
+```
+
+说明：
+
+- `release:build` 会先把发行版本号按 `patch` 自动 `+1`
+- 会同步更新：
+  - `package.json`
+  - `src-tauri/Cargo.toml`
+  - `src-tauri/tauri.conf.json`
+- 然后执行 `tauri build --bundles nsis`
+- 最终产出 Windows 安装包 `.exe`
+
 补充说明：
 
 - 当前 `desktop:dev` 依赖 `1420` 端口；若出现 `Port 1420 is already in use`，先清理遗留的 `vite` 进程再重跑
@@ -242,8 +270,8 @@ npm run desktop:build:debug
 已验证可生成：
 
 - `src-tauri/target/debug/bexo-studio.exe`
-- `src-tauri/target/debug/bundle/msi/Bexo Studio_0.1.0_x64_en-US.msi`
-- `src-tauri/target/debug/bundle/nsis/Bexo Studio_0.1.0_x64-setup.exe`
+- `src-tauri/target/release/bundle/msi/Bexo Studio_<version>_x64_en-US.msi`
+- `src-tauri/target/release/bundle/nsis/Bexo Studio_<version>_x64-setup.exe`
 
 ## Repository Planning Files
 - [task_plan.md](D:\Desktop\rust\BexoStudio\task_plan.md)

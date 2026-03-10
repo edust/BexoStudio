@@ -13,7 +13,7 @@ export function AppShell() {
   const sidebarContent = sidebarContentByRoute[routeKey];
 
   return (
-    <div className="h-screen overflow-hidden bg-[#f3f6fb] p-2">
+    <div className="h-screen overflow-hidden bg-background p-2">
       <div className="grid h-full min-h-0 grid-cols-[52px_280px_minmax(0,1fr)] gap-2">
         <PrimaryRail />
         <SectionSidebar content={sidebarContent} />

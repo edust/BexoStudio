@@ -68,6 +68,32 @@ export type WorkspaceRecord = {
   projects: ProjectRecord[];
 };
 
+export type WorkspaceResourceEntry = {
+  path: string;
+  name: string;
+  kind: "file" | "directory";
+  isHidden: boolean;
+};
+
+export type WorkspaceResourceGitStatus =
+  | "modified"
+  | "renamed"
+  | "untracked"
+  | "ignored";
+
+export type WorkspaceResourceGitStatusEntry = {
+  path: string;
+  status: WorkspaceResourceGitStatus;
+  originalPath?: string | null;
+};
+
+export type WorkspaceResourceGitStatusResponse = {
+  workspaceRootPath: string;
+  gitAvailable: boolean;
+  repositoryRootPath?: string | null;
+  statuses: WorkspaceResourceGitStatusEntry[];
+};
+
 export type CodexProfileRecord = {
   id: string;
   name: string;
@@ -277,6 +303,12 @@ export type RestoreCapabilities = {
   codex: AdapterAvailability;
 };
 
+export type EditorPathDetectionResult = {
+  checkedAt: string;
+  vscode: AdapterAvailability;
+  jetbrains: AdapterAvailability;
+};
+
 export type RecentRestoreTarget = {
   id: string;
   workspaceId: string;
@@ -302,12 +334,19 @@ export type TerminalPreferences = {
   commandTemplates: TerminalCommandTemplateRecord[];
 };
 
+export type CustomEditorRecord = {
+  id: string;
+  name: string;
+  command: string;
+};
+
 export type IdePreferences = {
   vscodePath?: string | null;
   jetbrainsPath?: string | null;
+  customEditors: CustomEditorRecord[];
 };
 
-export type WorkspaceEditorKey = "vscode" | "jetbrains";
+export type WorkspaceEditorKey = string;
 
 export type WorkspacePreferences = {
   selectedWorkspaceIds: string[];

@@ -1,16 +1,18 @@
 use std::{
     collections::HashSet,
     env,
+    fs,
     path::PathBuf,
     sync::{Arc, RwLock},
 };
 
+use chrono::Utc;
 use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_store::{Store, StoreExt};
 
 use crate::{
-    adapters::resolve_configured_executable,
-    domain::AppPreferences,
+    adapters::{resolve_configured_executable, IdeAdapter, JetBrainsAdapter, VSCodeAdapter},
+    domain::{AppPreferences, EditorPathDetectionResult},
     error::{AppError, AppResult},
 };
 
@@ -86,6 +88,16 @@ impl PreferencesService {
         };
 
         Ok(resolved)
+    }
+
+    pub fn detect_editors_from_path(&self) -> AppResult<EditorPathDetectionResult> {
+        let vscode = VSCodeAdapter.detect(None);
+        let jetbrains = JetBrainsAdapter.detect(None);
+        Ok(EditorPathDetectionResult {
+            checked_at: Utc::now().to_rfc3339(),
+            vscode,
+            jetbrains,
+        })
     }
 
     #[cfg(test)]
@@ -176,24 +188,76 @@ fn validate_preferences(input: AppPreferences) -> AppResult<AppPreferences> {
             )?,
             command_templates: validate_command_templates(input.terminal.command_templates)?,
         },
-        ide: crate::domain::IdePreferences {
-            vscode_path: validate_tool_path(
-                "ide.vscodePath",
-                input.ide.vscode_path,
-                &["code.cmd", "code.exe", "code.bat"],
-                "VSCODE_PATH_INVALID",
-                "VS Code",
-            )?,
-            jetbrains_path: validate_tool_path(
-                "ide.jetbrainsPath",
-                input.ide.jetbrains_path,
-                &["idea64.exe", "idea.exe", "idea.cmd", "idea.bat"],
-                "JETBRAINS_PATH_INVALID",
-                "JetBrains IDE",
-            )?,
-        },
-        workspace: validate_workspace_preferences(input.workspace)?,
-        tray: input.tray,
+            ide: crate::domain::IdePreferences {
+                vscode_path: validate_tool_path(
+                    "ide.vscodePath",
+                    input.ide.vscode_path,
+                    &[
+                        "code.cmd",
+                        "code.exe",
+                        "code.bat",
+                        "code-insiders.cmd",
+                        "code-insiders.exe",
+                        "code-insiders.bat",
+                        "codium.cmd",
+                        "codium.exe",
+                        "codium.bat",
+                    ],
+                    "VSCODE_PATH_INVALID",
+                    "VS Code",
+                )?,
+                jetbrains_path: validate_tool_path(
+                    "ide.jetbrainsPath",
+                    input.ide.jetbrains_path,
+                    &[
+                        "idea64.exe",
+                        "idea.exe",
+                        "idea.cmd",
+                        "idea.bat",
+                        "goland64.exe",
+                        "goland.exe",
+                        "goland.cmd",
+                        "goland.bat",
+                        "pycharm64.exe",
+                        "pycharm.exe",
+                        "pycharm.cmd",
+                        "pycharm.bat",
+                        "webstorm64.exe",
+                        "webstorm.exe",
+                        "webstorm.cmd",
+                        "webstorm.bat",
+                        "phpstorm64.exe",
+                        "phpstorm.exe",
+                        "phpstorm.cmd",
+                        "phpstorm.bat",
+                        "clion64.exe",
+                        "clion.exe",
+                        "clion.cmd",
+                        "clion.bat",
+                        "rider64.exe",
+                        "rider.exe",
+                        "rider.cmd",
+                        "rider.bat",
+                        "datagrip64.exe",
+                        "datagrip.exe",
+                        "datagrip.cmd",
+                        "datagrip.bat",
+                        "rustrover64.exe",
+                        "rustrover.exe",
+                        "rustrover.cmd",
+                        "rustrover.bat",
+                        "studio64.exe",
+                        "studio.exe",
+                        "studio.cmd",
+                        "studio.bat",
+                    ],
+                    "JETBRAINS_PATH_INVALID",
+                    "JetBrains IDE",
+                )?,
+                custom_editors: validate_custom_editors(input.ide.custom_editors)?,
+            },
+            workspace: validate_workspace_preferences(input.workspace)?,
+            tray: input.tray,
         diagnostics: input.diagnostics,
     })
 }
@@ -291,6 +355,81 @@ fn validate_command_templates(
     }
 
     Ok(validated)
+}
+
+fn validate_custom_editors(
+    editors: Vec<crate::domain::CustomEditorPreference>,
+) -> AppResult<Vec<crate::domain::CustomEditorPreference>> {
+    if editors.len() > 100 {
+        return Err(AppError::validation("ide.customEditors cannot exceed 100 entries"));
+    }
+
+    let mut seen_ids = HashSet::with_capacity(editors.len());
+    let mut validated = Vec::with_capacity(editors.len());
+
+    for (index, editor) in editors.into_iter().enumerate() {
+        let field_prefix = format!("ide.customEditors[{index}]");
+        let id =
+            validate_template_text_field(&format!("{field_prefix}.id"), editor.id, 64, "编辑器 ID")?;
+
+        if !seen_ids.insert(id.clone()) {
+            return Err(AppError::validation("custom editor ids must be unique")
+                .with_detail("field", format!("{field_prefix}.id"))
+                .with_detail("id", id));
+        }
+
+        let name =
+            validate_template_text_field(&format!("{field_prefix}.name"), editor.name, 80, "编辑器名称")?;
+        let command =
+            validate_custom_editor_command(&format!("{field_prefix}.command"), editor.command)?;
+
+        validated.push(crate::domain::CustomEditorPreference { id, name, command });
+    }
+
+    Ok(validated)
+}
+
+fn validate_custom_editor_command(field: &str, value: String) -> AppResult<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::validation("编辑器命令不能为空")
+            .with_detail("field", field.to_string()));
+    }
+
+    if trimmed.len() > 320 {
+        return Err(AppError::validation("编辑器命令不能超过 320 个字符")
+            .with_detail("field", field.to_string()));
+    }
+
+    if trimmed.contains('\n') || trimmed.contains('\r') {
+        return Err(AppError::validation("编辑器命令必须是单行")
+            .with_detail("field", field.to_string()));
+    }
+
+    let command_path = PathBuf::from(trimmed);
+    if command_path.is_absolute() {
+        let metadata = fs::metadata(&command_path).map_err(|error| {
+            AppError::validation("编辑器命令路径不存在")
+                .with_detail("field", field.to_string())
+                .with_detail("command", trimmed.to_string())
+                .with_detail("reason", error.to_string())
+        })?;
+
+        if !metadata.is_file() {
+            return Err(AppError::validation("编辑器命令必须指向可执行文件")
+                .with_detail("field", field.to_string())
+                .with_detail("command", trimmed.to_string()));
+        }
+
+        return Ok(trimmed.to_string());
+    }
+
+    if trimmed.split_whitespace().count() > 1 {
+        return Err(AppError::validation("编辑器命令不能包含参数，请只填写命令名")
+            .with_detail("field", field.to_string()));
+    }
+
+    Ok(trimmed.to_string())
 }
 
 fn validate_tool_path(
