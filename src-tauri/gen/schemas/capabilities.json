@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Capability for the main Bexo Studio window","local":true,"windows":["main"],"permissions":["core:default","autostart:default","dialog:default","global-shortcut:default","log:default","notification:default","opener:default","opener:allow-open-path","store:default","window-state:default"]}}

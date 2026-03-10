@@ -1,0 +1,129 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: "MiSans", "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", "SFMono-Regular", monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-shell: var(--shell);
+  --color-panel: var(--panel);
+  --color-panel-elevated: var(--panel-elevated);
+  --color-border: var(--border);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-ring: var(--ring);
+
+  --radius-lg: 0.875rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.25rem;
+  --radius-3xl: 1.5rem;
+}
+
+:root {
+  color-scheme: light;
+  --background: oklch(0.973 0.005 236);
+  --foreground: oklch(0.284 0.028 246);
+  --shell: oklch(0.964 0.006 230 / 0.98);
+  --panel: oklch(0.993 0.002 228 / 0.96);
+  --panel-elevated: oklch(0.999 0.001 228 / 0.99);
+  --border: oklch(0.9 0.01 234 / 0.92);
+  --muted-foreground: oklch(0.532 0.02 240);
+  --accent: oklch(0.638 0.124 225);
+  --accent-foreground: oklch(0.985 0.004 230);
+  --success: oklch(0.63 0.126 160);
+  --warning: oklch(0.72 0.14 82);
+  --danger: oklch(0.63 0.19 27);
+  --ring: oklch(0.71 0.11 224);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    @apply h-full scroll-smooth;
+  }
+
+  body {
+    @apply min-h-full bg-background font-sans text-foreground antialiased;
+    margin: 0;
+    background: #f3f6fb;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  #root {
+    @apply min-h-screen;
+  }
+
+  #root,
+  .ant-app {
+    min-height: 100vh;
+  }
+
+  #root,
+  #root *,
+  .ant-app,
+  .ant-app * {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  input,
+  textarea,
+  [contenteditable="true"],
+  [contenteditable="plaintext-only"],
+  .allow-text-selection,
+  .allow-text-selection * {
+    user-select: text !important;
+    -webkit-user-select: text !important;
+  }
+
+  ::selection {
+    background: color-mix(in oklch, var(--accent) 26%, transparent);
+    color: white;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+@layer components {
+  .bexo-shell-surface {
+    background: rgba(255, 255, 255, 0.92);
+    border: 1px solid rgba(217, 226, 236, 0.9);
+    box-shadow: 0 18px 42px -28px rgba(15, 23, 42, 0.14);
+  }
+
+  .bexo-panel-muted {
+    background: rgba(248, 250, 252, 0.92);
+    border: 1px solid rgba(230, 237, 245, 0.94);
+  }
+}
+
+.ant-tooltip .ant-tooltip-inner {
+  font-size: 12px;
+}
+
+.ant-input-affix-wrapper,
+.ant-input,
+.ant-select-selector,
+.ant-btn,
+.ant-card,
+.ant-segmented {
+  transition: none !important;
+}
+
+.ant-layout {
+  background: transparent;
+}
