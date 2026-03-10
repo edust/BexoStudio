@@ -404,8 +404,10 @@ fn require_workspace_editor_key(editor_key: String) -> AppResult<String> {
     }
 
     if normalized.len() > 128 {
-        return Err(AppError::validation("editorKey cannot exceed 128 characters")
-            .with_detail("editorKey", normalized.to_string()));
+        return Err(
+            AppError::validation("editorKey cannot exceed 128 characters")
+                .with_detail("editorKey", normalized.to_string()),
+        );
     }
 
     Ok(normalized.to_string())
@@ -580,8 +582,11 @@ fn build_workspace_custom_editor_launch_command(
         .iter()
         .find(|editor| editor.id == editor_key)
         .ok_or_else(|| {
-            AppError::new("WORKSPACE_EDITOR_NOT_FOUND", "workspace editor was not found")
-                .with_detail("editorKey", editor_key.to_string())
+            AppError::new(
+                "WORKSPACE_EDITOR_NOT_FOUND",
+                "workspace editor was not found",
+            )
+            .with_detail("editorKey", editor_key.to_string())
         })?;
 
     let command_name = custom_editor.command.trim();
@@ -943,6 +948,7 @@ mod tests {
             },
             ide: IdePreferences::default(),
             workspace: WorkspacePreferences::default(),
+            startup: crate::domain::StartupPreferences::default(),
             tray: TrayPreferences::default(),
             diagnostics: DiagnosticsPreferences::default(),
         });
@@ -1003,6 +1009,7 @@ mod tests {
                 custom_editors: Vec::new(),
             },
             workspace: WorkspacePreferences::default(),
+            startup: crate::domain::StartupPreferences::default(),
             tray: TrayPreferences::default(),
             diagnostics: DiagnosticsPreferences::default(),
         });

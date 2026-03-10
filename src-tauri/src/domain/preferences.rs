@@ -6,6 +6,7 @@ pub struct AppPreferences {
     pub terminal: TerminalPreferences,
     pub ide: IdePreferences,
     pub workspace: WorkspacePreferences,
+    pub startup: StartupPreferences,
     pub tray: TrayPreferences,
     pub diagnostics: DiagnosticsPreferences,
 }
@@ -55,6 +56,13 @@ pub struct CustomEditorPreference {
 #[serde(default, rename_all = "camelCase")]
 pub struct WorkspacePreferences {
     pub selected_workspace_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct StartupPreferences {
+    pub launch_at_login: bool,
+    pub start_silently: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

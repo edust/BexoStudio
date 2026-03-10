@@ -28,8 +28,8 @@ pub use launch_task::{
 #[allow(unused_imports)]
 pub use preferences::{
     AppPreferences, CodexHomeDirectoryInfo, CustomEditorPreference, DiagnosticsPreferences,
-    IdePreferences, TerminalCommandTemplate, TerminalPreferences, TrayPreferences,
-    WorkspacePreferences,
+    IdePreferences, StartupPreferences, TerminalCommandTemplate, TerminalPreferences,
+    TrayPreferences, WorkspacePreferences,
 };
 pub use project::{ProjectRecord, UpsertProjectInput};
 pub use resource_browser::{

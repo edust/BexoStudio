@@ -1,13 +1,13 @@
 use std::{
     collections::HashSet,
-    env,
-    fs,
+    env, fs,
     path::PathBuf,
     sync::{Arc, RwLock},
 };
 
 use chrono::Utc;
 use tauri::{AppHandle, Manager, Runtime};
+use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_store::{Store, StoreExt};
 
 use crate::{
@@ -53,6 +53,7 @@ impl PreferencesService {
         input: AppPreferences,
     ) -> AppResult<AppPreferences> {
         let validated = validate_preferences(input)?;
+        sync_autostart_launch_at_login(app, validated.startup.launch_at_login)?;
         let store = self.open_store(app)?;
         self.write_store(&store, &validated)?;
         self.replace_cache(validated.clone())?;
@@ -169,6 +170,35 @@ impl PreferencesService {
     }
 }
 
+fn sync_autostart_launch_at_login<R: Runtime>(
+    app: &AppHandle<R>,
+    should_enable: bool,
+) -> AppResult<()> {
+    let autolaunch = app.autolaunch();
+    let current_enabled = autolaunch.is_enabled().map_err(|error| {
+        AppError::new("AUTOSTART_STATUS_READ_FAILED", "读取开机启动状态失败")
+            .with_detail("reason", error.to_string())
+    })?;
+
+    if current_enabled == should_enable {
+        return Ok(());
+    }
+
+    if should_enable {
+        autolaunch.enable().map_err(|error| {
+            AppError::new("AUTOSTART_ENABLE_FAILED", "开启开机启动失败")
+                .with_detail("reason", error.to_string())
+        })?;
+    } else {
+        autolaunch.disable().map_err(|error| {
+            AppError::new("AUTOSTART_DISABLE_FAILED", "关闭开机启动失败")
+                .with_detail("reason", error.to_string())
+        })?;
+    }
+
+    Ok(())
+}
+
 fn validate_preferences(input: AppPreferences) -> AppResult<AppPreferences> {
     Ok(AppPreferences {
         terminal: crate::domain::TerminalPreferences {
@@ -188,78 +218,85 @@ fn validate_preferences(input: AppPreferences) -> AppResult<AppPreferences> {
             )?,
             command_templates: validate_command_templates(input.terminal.command_templates)?,
         },
-            ide: crate::domain::IdePreferences {
-                vscode_path: validate_tool_path(
-                    "ide.vscodePath",
-                    input.ide.vscode_path,
-                    &[
-                        "code.cmd",
-                        "code.exe",
-                        "code.bat",
-                        "code-insiders.cmd",
-                        "code-insiders.exe",
-                        "code-insiders.bat",
-                        "codium.cmd",
-                        "codium.exe",
-                        "codium.bat",
-                    ],
-                    "VSCODE_PATH_INVALID",
-                    "VS Code",
-                )?,
-                jetbrains_path: validate_tool_path(
-                    "ide.jetbrainsPath",
-                    input.ide.jetbrains_path,
-                    &[
-                        "idea64.exe",
-                        "idea.exe",
-                        "idea.cmd",
-                        "idea.bat",
-                        "goland64.exe",
-                        "goland.exe",
-                        "goland.cmd",
-                        "goland.bat",
-                        "pycharm64.exe",
-                        "pycharm.exe",
-                        "pycharm.cmd",
-                        "pycharm.bat",
-                        "webstorm64.exe",
-                        "webstorm.exe",
-                        "webstorm.cmd",
-                        "webstorm.bat",
-                        "phpstorm64.exe",
-                        "phpstorm.exe",
-                        "phpstorm.cmd",
-                        "phpstorm.bat",
-                        "clion64.exe",
-                        "clion.exe",
-                        "clion.cmd",
-                        "clion.bat",
-                        "rider64.exe",
-                        "rider.exe",
-                        "rider.cmd",
-                        "rider.bat",
-                        "datagrip64.exe",
-                        "datagrip.exe",
-                        "datagrip.cmd",
-                        "datagrip.bat",
-                        "rustrover64.exe",
-                        "rustrover.exe",
-                        "rustrover.cmd",
-                        "rustrover.bat",
-                        "studio64.exe",
-                        "studio.exe",
-                        "studio.cmd",
-                        "studio.bat",
-                    ],
-                    "JETBRAINS_PATH_INVALID",
-                    "JetBrains IDE",
-                )?,
-                custom_editors: validate_custom_editors(input.ide.custom_editors)?,
-            },
-            workspace: validate_workspace_preferences(input.workspace)?,
-            tray: input.tray,
+        ide: crate::domain::IdePreferences {
+            vscode_path: validate_tool_path(
+                "ide.vscodePath",
+                input.ide.vscode_path,
+                &[
+                    "code.cmd",
+                    "code.exe",
+                    "code.bat",
+                    "code-insiders.cmd",
+                    "code-insiders.exe",
+                    "code-insiders.bat",
+                    "codium.cmd",
+                    "codium.exe",
+                    "codium.bat",
+                ],
+                "VSCODE_PATH_INVALID",
+                "VS Code",
+            )?,
+            jetbrains_path: validate_tool_path(
+                "ide.jetbrainsPath",
+                input.ide.jetbrains_path,
+                &[
+                    "idea64.exe",
+                    "idea.exe",
+                    "idea.cmd",
+                    "idea.bat",
+                    "goland64.exe",
+                    "goland.exe",
+                    "goland.cmd",
+                    "goland.bat",
+                    "pycharm64.exe",
+                    "pycharm.exe",
+                    "pycharm.cmd",
+                    "pycharm.bat",
+                    "webstorm64.exe",
+                    "webstorm.exe",
+                    "webstorm.cmd",
+                    "webstorm.bat",
+                    "phpstorm64.exe",
+                    "phpstorm.exe",
+                    "phpstorm.cmd",
+                    "phpstorm.bat",
+                    "clion64.exe",
+                    "clion.exe",
+                    "clion.cmd",
+                    "clion.bat",
+                    "rider64.exe",
+                    "rider.exe",
+                    "rider.cmd",
+                    "rider.bat",
+                    "datagrip64.exe",
+                    "datagrip.exe",
+                    "datagrip.cmd",
+                    "datagrip.bat",
+                    "rustrover64.exe",
+                    "rustrover.exe",
+                    "rustrover.cmd",
+                    "rustrover.bat",
+                    "studio64.exe",
+                    "studio.exe",
+                    "studio.cmd",
+                    "studio.bat",
+                ],
+                "JETBRAINS_PATH_INVALID",
+                "JetBrains IDE",
+            )?,
+            custom_editors: validate_custom_editors(input.ide.custom_editors)?,
+        },
+        workspace: validate_workspace_preferences(input.workspace)?,
+        startup: validate_startup_preferences(input.startup)?,
+        tray: input.tray,
         diagnostics: input.diagnostics,
     })
+}
+
+fn validate_startup_preferences(
+    input: crate::domain::StartupPreferences,
+) -> AppResult<crate::domain::StartupPreferences> {
+    Ok(input)
 }
 
 fn validate_workspace_preferences(
@@ -283,8 +320,9 @@ fn validate_workspace_preferences(
         }
 
         if trimmed.len() > 64 {
-            return Err(AppError::validation("工作区 ID 不能超过 64 个字符")
-                .with_detail("field", field));
+            return Err(
+                AppError::validation("工作区 ID 不能超过 64 个字符").with_detail("field", field)
+            );
         }
 
         if seen_ids.insert(trimmed.to_string()) {
@@ -361,7 +399,9 @@ fn validate_custom_editors(
     editors: Vec<crate::domain::CustomEditorPreference>,
 ) -> AppResult<Vec<crate::domain::CustomEditorPreference>> {
     if editors.len() > 100 {
-        return Err(AppError::validation("ide.customEditors cannot exceed 100 entries"));
+        return Err(AppError::validation(
+            "ide.customEditors cannot exceed 100 entries",
+        ));
     }
 
     let mut seen_ids = HashSet::with_capacity(editors.len());
@@ -369,8 +409,12 @@ fn validate_custom_editors(
 
     for (index, editor) in editors.into_iter().enumerate() {
         let field_prefix = format!("ide.customEditors[{index}]");
-        let id =
-            validate_template_text_field(&format!("{field_prefix}.id"), editor.id, 64, "编辑器 ID")?;
+        let id = validate_template_text_field(
+            &format!("{field_prefix}.id"),
+            editor.id,
+            64,
+            "编辑器 ID",
+        )?;
 
         if !seen_ids.insert(id.clone()) {
             return Err(AppError::validation("custom editor ids must be unique")
@@ -378,8 +422,12 @@ fn validate_custom_editors(
                 .with_detail("id", id));
         }
 
-        let name =
-            validate_template_text_field(&format!("{field_prefix}.name"), editor.name, 80, "编辑器名称")?;
+        let name = validate_template_text_field(
+            &format!("{field_prefix}.name"),
+            editor.name,
+            80,
+            "编辑器名称",
+        )?;
         let command =
             validate_custom_editor_command(&format!("{field_prefix}.command"), editor.command)?;
 
@@ -392,8 +440,9 @@ fn validate_custom_editors(
 fn validate_custom_editor_command(field: &str, value: String) -> AppResult<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(AppError::validation("编辑器命令不能为空")
-            .with_detail("field", field.to_string()));
+        return Err(
+            AppError::validation("编辑器命令不能为空").with_detail("field", field.to_string())
+        );
     }
 
     if trimmed.len() > 320 {
@@ -402,8 +451,9 @@ fn validate_custom_editor_command(field: &str, value: String) -> AppResult<Strin
     }
 
     if trimmed.contains('\n') || trimmed.contains('\r') {
-        return Err(AppError::validation("编辑器命令必须是单行")
-            .with_detail("field", field.to_string()));
+        return Err(
+            AppError::validation("编辑器命令必须是单行").with_detail("field", field.to_string())
+        );
     }
 
     let command_path = PathBuf::from(trimmed);
@@ -425,8 +475,10 @@ fn validate_custom_editor_command(field: &str, value: String) -> AppResult<Strin
     }
 
     if trimmed.split_whitespace().count() > 1 {
-        return Err(AppError::validation("编辑器命令不能包含参数，请只填写命令名")
-            .with_detail("field", field.to_string()));
+        return Err(
+            AppError::validation("编辑器命令不能包含参数，请只填写命令名")
+                .with_detail("field", field.to_string()),
+        );
     }
 
     Ok(trimmed.to_string())
@@ -581,10 +633,8 @@ mod tests {
 
     #[test]
     fn codex_home_directory_info_marks_missing_directory() {
-        let directory = env::temp_dir().join(format!(
-            "bexo-codex-home-missing-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let directory =
+            env::temp_dir().join(format!("bexo-codex-home-missing-{}", uuid::Uuid::new_v4()));
         let directory_path = directory.display().to_string();
 
         let resolved = build_codex_home_directory_info(directory.clone(), "default");

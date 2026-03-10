@@ -14,6 +14,10 @@ export const defaultAppPreferences: AppPreferences = {
   workspace: {
     selectedWorkspaceIds: [],
   },
+  startup: {
+    launchAtLogin: false,
+    startSilently: false,
+  },
   tray: {
     closeToTray: true,
     showRecentWorkspaces: true,

@@ -1,4 +1,8 @@
-use std::{env, fs, path::{Path, PathBuf}, time::Duration};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use chrono::Utc;
 
@@ -364,7 +368,12 @@ fn find_vscode_in_known_locations() -> Option<PathBuf> {
                 .join("bin")
                 .join("code-insiders.cmd"),
         );
-        candidates.push(program_files.join("VSCodium").join("bin").join("codium.cmd"));
+        candidates.push(
+            program_files
+                .join("VSCodium")
+                .join("bin")
+                .join("codium.cmd"),
+        );
     }
 
     if let Some(program_files_x86) = env_dir("ProgramFiles(x86)") {
@@ -381,9 +390,12 @@ fn find_vscode_in_known_locations() -> Option<PathBuf> {
 
 fn find_jetbrains_in_known_locations() -> Option<PathBuf> {
     if let Some(local_app_data) = env_dir("LOCALAPPDATA") {
-        if let Some(path) =
-            find_jetbrains_in_toolbox_apps(&local_app_data.join("JetBrains").join("Toolbox").join("apps"))
-        {
+        if let Some(path) = find_jetbrains_in_toolbox_apps(
+            &local_app_data
+                .join("JetBrains")
+                .join("Toolbox")
+                .join("apps"),
+        ) {
             return Some(path);
         }
 
@@ -458,8 +470,7 @@ fn find_jetbrains_in_prefixed_children(root: &Path) -> Option<PathBuf> {
             continue;
         }
 
-        if let Some(path) = find_executable_in_bin_directory(&child, JETBRAINS_BINARY_CANDIDATES)
-        {
+        if let Some(path) = find_executable_in_bin_directory(&child, JETBRAINS_BINARY_CANDIDATES) {
             return Some(path);
         }
 

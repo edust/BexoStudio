@@ -7,8 +7,8 @@ use std::{
 
 use crate::{
     domain::{
-        ensure_absolute_directory, WorkspaceResourceEntry,
-        WorkspaceResourceGitStatusEntry, WorkspaceResourceGitStatusResponse,
+        ensure_absolute_directory, WorkspaceResourceEntry, WorkspaceResourceGitStatusEntry,
+        WorkspaceResourceGitStatusResponse,
     },
     error::{AppError, AppResult},
     persistence::{get_workspace_primary_project_path, Database},
@@ -34,18 +34,21 @@ impl ResourceBrowserService {
     ) -> AppResult<Vec<WorkspaceResourceEntry>> {
         let workspace_root = self.resolve_workspace_root_path_value(workspace_id).await?;
 
-        run_blocking("list_workspace_resource_children", Self::RESOURCE_IO_TIMEOUT, move || {
-            let root_path = canonicalize_existing_directory(&workspace_root, "INVALID_WORKSPACE_PATH")?;
-            let requested_path = match target_path {
-                Some(path) if !path.trim().is_empty() => path.trim().to_string(),
-                _ => workspace_root,
-            };
-            let requested_canonical =
-                canonicalize_existing_directory(&requested_path, "INVALID_RESOURCE_PATH")?;
-            ensure_path_within_workspace(&root_path, &requested_canonical)?;
+        run_blocking(
+            "list_workspace_resource_children",
+            Self::RESOURCE_IO_TIMEOUT,
+            move || {
+                let root_path =
+                    canonicalize_existing_directory(&workspace_root, "INVALID_WORKSPACE_PATH")?;
+                let requested_path = match target_path {
+                    Some(path) if !path.trim().is_empty() => path.trim().to_string(),
+                    _ => workspace_root,
+                };
+                let requested_canonical =
+                    canonicalize_existing_directory(&requested_path, "INVALID_RESOURCE_PATH")?;
+                ensure_path_within_workspace(&root_path, &requested_canonical)?;
 
-            let read_dir = std::fs::read_dir(&requested_canonical)
-                .map_err(|error| {
+                let read_dir = std::fs::read_dir(&requested_canonical).map_err(|error| {
                     AppError::new(
                         "RESOURCE_READ_FAILED",
                         "failed to read workspace resource directory",
@@ -53,36 +56,34 @@ impl ResourceBrowserService {
                     .with_detail("path", requested_canonical.display().to_string())
                     .with_detail("reason", error.to_string())
                 })?;
-            let mut entries = Vec::new();
-            for entry in read_dir {
-                let entry = entry.map_err(|error| {
-                    AppError::new(
-                        "RESOURCE_READ_FAILED",
-                        "failed to iterate workspace resource directory",
-                    )
-                    .with_detail("path", requested_canonical.display().to_string())
-                    .with_detail("reason", error.to_string())
-                })?;
-                entries.push(build_resource_entry(entry)?);
-            }
-
-            entries.sort_by(|left, right| {
-                match (left.kind.as_str(), right.kind.as_str()) {
-                    ("directory", "file") => std::cmp::Ordering::Less,
-                    ("file", "directory") => std::cmp::Ordering::Greater,
-                    _ => left.name.to_lowercase().cmp(&right.name.to_lowercase()),
+                let mut entries = Vec::new();
+                for entry in read_dir {
+                    let entry = entry.map_err(|error| {
+                        AppError::new(
+                            "RESOURCE_READ_FAILED",
+                            "failed to iterate workspace resource directory",
+                        )
+                        .with_detail("path", requested_canonical.display().to_string())
+                        .with_detail("reason", error.to_string())
+                    })?;
+                    entries.push(build_resource_entry(entry)?);
                 }
-            });
 
-            Ok(entries)
-        })
+                entries.sort_by(
+                    |left, right| match (left.kind.as_str(), right.kind.as_str()) {
+                        ("directory", "file") => std::cmp::Ordering::Less,
+                        ("file", "directory") => std::cmp::Ordering::Greater,
+                        _ => left.name.to_lowercase().cmp(&right.name.to_lowercase()),
+                    },
+                );
+
+                Ok(entries)
+            },
+        )
         .await
     }
 
-    pub async fn resolve_workspace_root_path(
-        &self,
-        workspace_id: String,
-    ) -> AppResult<String> {
+    pub async fn resolve_workspace_root_path(&self, workspace_id: String) -> AppResult<String> {
         let workspace_root = self.resolve_workspace_root_path_value(workspace_id).await?;
 
         run_blocking(
@@ -103,67 +104,72 @@ impl ResourceBrowserService {
     ) -> AppResult<WorkspaceResourceGitStatusResponse> {
         let workspace_root = self.resolve_workspace_root_path_value(workspace_id).await?;
 
-        run_blocking("get_workspace_resource_git_statuses", Self::RESOURCE_IO_TIMEOUT, move || {
-            let workspace_root_path =
-                canonicalize_existing_directory(&workspace_root, "INVALID_WORKSPACE_PATH")?;
+        run_blocking(
+            "get_workspace_resource_git_statuses",
+            Self::RESOURCE_IO_TIMEOUT,
+            move || {
+                let workspace_root_path =
+                    canonicalize_existing_directory(&workspace_root, "INVALID_WORKSPACE_PATH")?;
 
-            let repository_root = match run_git_command(
-                &workspace_root_path,
-                &["rev-parse", "--show-toplevel"],
-                Self::GIT_COMMAND_TIMEOUT,
-            ) {
-                Ok(output) => {
-                    let trimmed = output.trim();
-                    if trimmed.is_empty() {
-                        None
-                    } else {
-                        Some(canonicalize_existing_directory(
-                            trimmed,
-                            "GIT_REPOSITORY_UNAVAILABLE",
-                        )?)
+                let repository_root = match run_git_command(
+                    &workspace_root_path,
+                    &["rev-parse", "--show-toplevel"],
+                    Self::GIT_COMMAND_TIMEOUT,
+                ) {
+                    Ok(output) => {
+                        let trimmed = output.trim();
+                        if trimmed.is_empty() {
+                            None
+                        } else {
+                            Some(canonicalize_existing_directory(
+                                trimmed,
+                                "GIT_REPOSITORY_UNAVAILABLE",
+                            )?)
+                        }
                     }
-                }
-                Err(error)
-                    if error.code == "GIT_UNAVAILABLE" || error.code == "NOT_GIT_REPOSITORY" =>
-                {
-                    None
-                }
-                Err(error) => return Err(error),
-            };
+                    Err(error)
+                        if error.code == "GIT_UNAVAILABLE"
+                            || error.code == "NOT_GIT_REPOSITORY" =>
+                    {
+                        None
+                    }
+                    Err(error) => return Err(error),
+                };
 
-            let Some(repository_root_path) = repository_root else {
-                return Ok(WorkspaceResourceGitStatusResponse {
+                let Some(repository_root_path) = repository_root else {
+                    return Ok(WorkspaceResourceGitStatusResponse {
+                        workspace_root_path: workspace_root_path.display().to_string(),
+                        git_available: false,
+                        repository_root_path: None,
+                        statuses: Vec::new(),
+                    });
+                };
+
+                let raw_status_output = run_git_command(
+                    &workspace_root_path,
+                    &[
+                        "status",
+                        "--porcelain=v1",
+                        "-z",
+                        "--ignored=matching",
+                        "--untracked-files=normal",
+                    ],
+                    Self::GIT_COMMAND_TIMEOUT,
+                )?;
+                let statuses = parse_git_status_entries(
+                    raw_status_output.as_bytes(),
+                    &workspace_root_path,
+                    &repository_root_path,
+                )?;
+
+                Ok(WorkspaceResourceGitStatusResponse {
                     workspace_root_path: workspace_root_path.display().to_string(),
-                    git_available: false,
-                    repository_root_path: None,
-                    statuses: Vec::new(),
-                });
-            };
-
-            let raw_status_output = run_git_command(
-                &workspace_root_path,
-                &[
-                    "status",
-                    "--porcelain=v1",
-                    "-z",
-                    "--ignored=matching",
-                    "--untracked-files=normal",
-                ],
-                Self::GIT_COMMAND_TIMEOUT,
-            )?;
-            let statuses = parse_git_status_entries(
-                raw_status_output.as_bytes(),
-                &workspace_root_path,
-                &repository_root_path,
-            )?;
-
-            Ok(WorkspaceResourceGitStatusResponse {
-                workspace_root_path: workspace_root_path.display().to_string(),
-                git_available: true,
-                repository_root_path: Some(repository_root_path.display().to_string()),
-                statuses,
-            })
-        })
+                    git_available: true,
+                    repository_root_path: Some(repository_root_path.display().to_string()),
+                    statuses,
+                })
+            },
+        )
         .await
     }
 
@@ -188,13 +194,20 @@ impl ResourceBrowserService {
 
 fn build_resource_entry(entry: std::fs::DirEntry) -> AppResult<WorkspaceResourceEntry> {
     let file_type = entry.file_type().map_err(|error| {
-        AppError::new("RESOURCE_READ_FAILED", "failed to inspect workspace resource")
-            .with_detail("path", entry.path().display().to_string())
-            .with_detail("reason", error.to_string())
+        AppError::new(
+            "RESOURCE_READ_FAILED",
+            "failed to inspect workspace resource",
+        )
+        .with_detail("path", entry.path().display().to_string())
+        .with_detail("reason", error.to_string())
     })?;
 
     let name = entry.file_name().to_string_lossy().to_string();
-    let kind = if file_type.is_dir() { "directory" } else { "file" };
+    let kind = if file_type.is_dir() {
+        "directory"
+    } else {
+        "file"
+    };
 
     Ok(WorkspaceResourceEntry {
         path: entry.path().display().to_string(),
@@ -295,10 +308,12 @@ fn run_git_command(cwd: &Path, args: &[&str], timeout: Duration) -> AppResult<St
                 if started_at.elapsed() >= timeout {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(AppError::new("GIT_COMMAND_TIMEOUT", "git command timed out")
-                        .with_detail("cwd", cwd.display().to_string())
-                        .with_detail("args", args.join(" "))
-                        .retryable(true));
+                    return Err(
+                        AppError::new("GIT_COMMAND_TIMEOUT", "git command timed out")
+                            .with_detail("cwd", cwd.display().to_string())
+                            .with_detail("args", args.join(" "))
+                            .retryable(true),
+                    );
                 }
 
                 thread::sleep(Duration::from_millis(25));
@@ -306,10 +321,12 @@ fn run_git_command(cwd: &Path, args: &[&str], timeout: Duration) -> AppResult<St
             Err(error) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(AppError::new("GIT_COMMAND_FAILED", "failed to poll git command")
-                    .with_detail("cwd", cwd.display().to_string())
-                    .with_detail("args", args.join(" "))
-                    .with_detail("reason", error.to_string()));
+                return Err(
+                    AppError::new("GIT_COMMAND_FAILED", "failed to poll git command")
+                        .with_detail("cwd", cwd.display().to_string())
+                        .with_detail("args", args.join(" "))
+                        .with_detail("reason", error.to_string()),
+                );
             }
         }
     }
@@ -375,8 +392,7 @@ fn parse_git_status_entries(
         entries.push(WorkspaceResourceGitStatusEntry {
             path: absolute_path.display().to_string(),
             status: status.to_string(),
-            original_path: absolute_original_path
-                .map(|value| value.display().to_string()),
+            original_path: absolute_original_path.map(|value| value.display().to_string()),
         });
     }
 
@@ -442,11 +458,12 @@ where
     match tokio::time::timeout(timeout, handle).await {
         Ok(joined) => match joined {
             Ok(result) => result,
-            Err(error) => Err(
-                AppError::new("RESOURCE_TASK_FAILED", "resource browser task join failed")
-                    .with_detail("operation", operation_name)
-                    .with_detail("reason", error.to_string()),
-            ),
+            Err(error) => Err(AppError::new(
+                "RESOURCE_TASK_FAILED",
+                "resource browser task join failed",
+            )
+            .with_detail("operation", operation_name)
+            .with_detail("reason", error.to_string())),
         },
         Err(_) => Err(AppError::new(
             "RESOURCE_TASK_TIMEOUT",
@@ -484,10 +501,7 @@ mod tests {
 
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].status, "renamed");
-        assert!(entries[0]
-            .path
-            .replace('\\', "/")
-            .ends_with("/src/new.ts"));
+        assert!(entries[0].path.replace('\\', "/").ends_with("/src/new.ts"));
         assert!(entries[0]
             .original_path
             .as_deref()

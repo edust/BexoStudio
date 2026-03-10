@@ -2704,8 +2704,7 @@ mod tests {
         domain::{
             AppPreferences, CreateSnapshotInput, DiagnosticsPreferences, IdePreferences,
             StartRestoreRunInput, TerminalPreferences, TrayPreferences, UpsertCodexProfileInput,
-            UpsertLaunchTaskInput, UpsertProjectInput, UpsertWorkspaceInput,
-            WorkspacePreferences,
+            UpsertLaunchTaskInput, UpsertProjectInput, UpsertWorkspaceInput, WorkspacePreferences,
         },
         services::{
             PlannerService, PreferencesService, ProfileService, RestoreService, WorkspaceService,
@@ -2942,6 +2941,7 @@ mod tests {
                 custom_editors: Vec::new(),
             },
             workspace: WorkspacePreferences::default(),
+            startup: crate::domain::StartupPreferences::default(),
             tray: TrayPreferences::default(),
             diagnostics: DiagnosticsPreferences::default(),
         });

@@ -57,8 +57,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ide: IdePreferences {
             vscode_path: None,
             jetbrains_path: None,
+            custom_editors: Vec::new(),
         },
         workspace: WorkspacePreferences::default(),
+        startup: Default::default(),
         tray: TrayPreferences {
             close_to_tray: true,
             show_recent_workspaces: true,

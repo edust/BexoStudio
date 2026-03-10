@@ -96,6 +96,9 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
   - `Home` 已改成只保留工作台画布和 panel 占位的紧凑框架页
   - `Settings` 已改成只保留 `General` 单项的紧凑设置页
   - `General` 当前已接入真实设置：
+    - 启动项管理
+      - `随系统启动`（Switch）
+      - `静默启动`（Switch，仅在 `--autostart` 场景生效）
     - `Windows Terminal` 路径
     - 通过目录选择器手动选择并即时保存
     - 终端模板管理

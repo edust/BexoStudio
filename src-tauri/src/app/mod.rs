@@ -37,7 +37,9 @@ pub fn run() {
 
             app.manage(preferences_service);
             app.manage(crate::services::WorkspaceService::new(database.clone()));
-            app.manage(crate::services::ResourceBrowserService::new(database.clone()));
+            app.manage(crate::services::ResourceBrowserService::new(
+                database.clone(),
+            ));
             app.manage(crate::services::ProfileService::new(database.clone()));
             app.manage(crate::services::PlannerService::new(
                 database.clone(),
@@ -66,10 +68,30 @@ pub fn run() {
 
             tray::create_tray(app)?;
 
+            let launched_from_autostart = app
+                .env()
+                .args_os
+                .iter()
+                .any(|arg| arg.to_string_lossy() == "--autostart");
+            let start_silently = app
+                .state::<crate::services::PreferencesService>()
+                .get_preferences()
+                .map(|preferences| preferences.startup.start_silently)
+                .unwrap_or(false);
+            let should_show_main_window = !(launched_from_autostart && start_silently);
+
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                window::center_main_window_in_work_area(&window);
-                let _ = window.set_focus();
+                if should_show_main_window {
+                    let _ = window.show();
+                    window::center_main_window_in_work_area(&window);
+                    let _ = window.set_focus();
+                } else {
+                    let _ = window.hide();
+                    log::info!(
+                        target: "bexo::app",
+                        "main window hidden on autostart due to startup.startSilently=true"
+                    );
+                }
             }
 
             log::info!(target: "bexo::app", "Bexo Studio bootstrap finished");

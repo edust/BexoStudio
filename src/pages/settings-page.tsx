@@ -18,6 +18,7 @@ import {
   Modal,
   Popconfirm,
   Spin,
+  Switch,
   Typography,
 } from "antd";
 import { Reorder, useDragControls } from "motion/react";
@@ -62,6 +63,7 @@ type EditorKey = "vscode" | "jetbrains";
 
 export default function SettingsPage() {
   const [pathInlineError, setPathInlineError] = useState<string | null>(null);
+  const [startupInlineError, setStartupInlineError] = useState<string | null>(null);
   const [codexHomeInlineError, setCodexHomeInlineError] = useState<string | null>(null);
   const [templateInlineError, setTemplateInlineError] = useState<string | null>(null);
   const [editorInlineError, setEditorInlineError] = useState<string | null>(null);
@@ -105,6 +107,8 @@ export default function SettingsPage() {
   });
 
   const resolvedPreferences = preferencesQuery.data ?? defaultAppPreferences;
+  const launchAtLoginEnabled = resolvedPreferences.startup.launchAtLogin;
+  const startSilentlyEnabled = resolvedPreferences.startup.startSilently;
   const windowsTerminalPath = resolvedPreferences.terminal.windowsTerminalPath?.trim() ?? "";
   const vscodePath = resolvedPreferences.ide.vscodePath?.trim() ?? "";
   const jetbrainsPath = resolvedPreferences.ide.jetbrainsPath?.trim() ?? "";
@@ -220,6 +224,42 @@ export default function SettingsPage() {
 
   async function persistPreferences(nextPreferences: AppPreferences) {
     return updatePreferencesMutation.mutateAsync(nextPreferences);
+  }
+
+  async function handleToggleStartupSetting(
+    settingKey: keyof AppPreferences["startup"],
+    checked: boolean,
+    successMessage: string,
+  ) {
+    if (
+      !desktopRuntimeAvailable ||
+      updatePreferencesMutation.isPending ||
+      preferencesQuery.isError
+    ) {
+      return;
+    }
+
+    setStartupInlineError(null);
+
+    try {
+      const currentPreferences =
+        queryClient.getQueryData<AppPreferences>(appPreferencesQueryKey) ??
+        resolvedPreferences;
+      const nextPreferences: AppPreferences = {
+        ...currentPreferences,
+        startup: {
+          ...currentPreferences.startup,
+          [settingKey]: checked,
+        },
+      };
+
+      await persistPreferences(nextPreferences);
+      toast.success(successMessage);
+    } catch (error) {
+      const summary = getErrorSummary(error);
+      setStartupInlineError(summary.message);
+      toast.error(summary.message);
+    }
   }
 
   async function persistTerminalTemplates(
@@ -752,6 +792,18 @@ export default function SettingsPage() {
           />
         ) : null}
 
+        {startupInlineError ? (
+          <Alert
+            className="mb-4"
+            closable
+            message="更新启动设置失败"
+            onClose={() => setStartupInlineError(null)}
+            showIcon
+            type="error"
+            description={startupInlineError}
+          />
+        ) : null}
+
         {codexHomeInlineError ? (
           <Alert
             className="mb-4"
@@ -769,7 +821,75 @@ export default function SettingsPage() {
             <Spin size="small" />
           </div>
         ) : (
-          <div className="flex min-h-0 flex-1 flex-col gap-4">
+          <div className="flex min-h-0 flex-1 flex-col gap-0">
+            <div className="rounded-[0] border border-[#eef2f6] bg-white">
+              <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
+                <div className="min-w-0">
+                  <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
+                    随系统启动
+                  </Typography.Text>
+                </div>
+
+                <div className="min-w-0">
+                  <Typography.Text className="block text-[11px] text-[#667085]">
+                    应用会在系统登录后自动启动。
+                  </Typography.Text>
+                </div>
+
+                <Switch
+                  checked={launchAtLoginEnabled}
+                  disabled={
+                    !desktopRuntimeAvailable ||
+                    preferencesQuery.isFetching ||
+                    preferencesQuery.isError
+                  }
+                  loading={updatePreferencesMutation.isPending}
+                  onChange={(checked) =>
+                    void handleToggleStartupSetting(
+                      "launchAtLogin",
+                      checked,
+                      checked ? "已开启随系统启动" : "已关闭随系统启动",
+                    )
+                  }
+                  size="small"
+                />
+              </div>
+            </div>
+
+            <div className="rounded-[0] border border-[#eef2f6] bg-white">
+              <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
+                <div className="min-w-0">
+                  <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
+                    静默启动
+                  </Typography.Text>
+                </div>
+
+                <div className="min-w-0">
+                  <Typography.Text className="block text-[11px] text-[#667085]">
+                    仅在自启动场景生效：应用启动后保持托盘常驻，不主动弹出主窗口。
+                  </Typography.Text>
+                </div>
+
+                <Switch
+                  checked={startSilentlyEnabled}
+                  disabled={
+                    !desktopRuntimeAvailable ||
+                    preferencesQuery.isFetching ||
+                    preferencesQuery.isError
+                  }
+                  loading={updatePreferencesMutation.isPending}
+                  onChange={(checked) =>
+                    void handleToggleStartupSetting(
+                      "startSilently",
+                      checked,
+                      checked ? "已开启静默启动" : "已关闭静默启动",
+                    )
+                  }
+                  size="small"
+                />
+              </div>
+            </div>
+
             <div className="rounded-[0] border border-[#eef2f6] bg-white">
               <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
                 <div className="min-w-0">

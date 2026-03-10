@@ -368,10 +368,16 @@ export type DiagnosticsPreferences = {
   showExecutablePaths: boolean;
 };
 
+export type StartupPreferences = {
+  launchAtLogin: boolean;
+  startSilently: boolean;
+};
+
 export type AppPreferences = {
   terminal: TerminalPreferences;
   ide: IdePreferences;
   workspace: WorkspacePreferences;
+  startup: StartupPreferences;
   tray: TrayPreferences;
   diagnostics: DiagnosticsPreferences;
 };
