@@ -22,6 +22,7 @@ export const sidebarContentByRoute: Record<AppRouteKey, SectionSidebarContent> =
     description: "",
     items: [
       { key: "general", label: "General", description: "通用设置", badge: "ui", href: "/settings/general" },
+      { key: "hotkeys", label: "Hotkeys", description: "截图与输入热键", badge: "new", href: "/settings/hotkeys" },
     ],
   },
   frozen: {

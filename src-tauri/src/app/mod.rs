@@ -40,9 +40,20 @@ pub fn run() {
             let restore_log_store =
                 crate::logging::RestoreLogStore::new(app_data_dir.join("restore-runs"));
             let preferences_service = crate::services::PreferencesService::new();
-            preferences_service.initialize(&app.handle())?;
+            let initial_preferences = preferences_service.initialize(&app.handle())?;
+            let screenshot_service = crate::services::ScreenshotService::new();
+            let hotkey_service = crate::services::HotkeyService::new();
+            app.manage(screenshot_service);
+            if let Err(error) = hotkey_service.initialize(&app.handle(), &initial_preferences) {
+                log::error!(
+                    target: "bexo::app",
+                    "initialize hotkey service failed: {}",
+                    error
+                );
+            }
 
             app.manage(preferences_service);
+            app.manage(hotkey_service);
             app.manage(crate::services::WorkspaceService::new(database.clone()));
             app.manage(crate::services::ResourceBrowserService::new(
                 database.clone(),
@@ -115,6 +126,7 @@ pub fn run() {
             commands::workspace::register_workspace_folder,
             commands::workspace::remove_workspace_registration,
             commands::workspace::open_workspace_terminal,
+            commands::workspace::open_workspace_terminal_at_path,
             commands::workspace::open_workspace_in_editor,
             commands::workspace::run_workspace_terminal_command,
             commands::workspace::run_workspace_terminal_commands,
@@ -130,6 +142,11 @@ pub fn run() {
             commands::snapshot::list_snapshots,
             commands::snapshot::create_snapshot,
             commands::snapshot::update_snapshot,
+            commands::screenshot::start_screenshot_session,
+            commands::screenshot::get_screenshot_session,
+            commands::screenshot::copy_screenshot_selection,
+            commands::screenshot::save_screenshot_selection,
+            commands::screenshot::cancel_screenshot_session,
             commands::restore::preview_restore,
             commands::restore::start_restore_dry_run,
             commands::restore::get_restore_capabilities,

@@ -373,11 +373,18 @@ export type StartupPreferences = {
   startSilently: boolean;
 };
 
+export type HotkeyPreferences = {
+  screenshotCapture: string;
+  voiceInputToggle?: string | null;
+  voiceInputHold?: string | null;
+};
+
 export type AppPreferences = {
   terminal: TerminalPreferences;
   ide: IdePreferences;
   workspace: WorkspacePreferences;
   startup: StartupPreferences;
+  hotkey: HotkeyPreferences;
   tray: TrayPreferences;
   diagnostics: DiagnosticsPreferences;
 };
@@ -429,6 +436,70 @@ export type RestoreRunEvent = {
   project?: RestoreRunProjectRecord | null;
   action?: RestoreActionPlan | null;
   stats?: RestorePreviewStats | null;
+};
+
+export type HotkeyTriggerAction =
+  | "screenshot_capture"
+  | "voice_input_toggle"
+  | "voice_input_hold";
+
+export type HotkeyTriggerEvent = {
+  action: HotkeyTriggerAction;
+  shortcut: string;
+  triggeredAt: string;
+  source: string;
+};
+
+export type ScreenshotSelectionInput = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type ScreenshotRenderedImageInput = {
+  dataUrl: string;
+};
+
+export type ScreenshotSessionView = {
+  sessionId: string;
+  createdAt: string;
+  displayX: number;
+  displayY: number;
+  displayWidth: number;
+  displayHeight: number;
+  scaleFactor: number;
+  captureWidth: number;
+  captureHeight: number;
+  imageDataUrl: string;
+};
+
+export type StartScreenshotSessionResult = {
+  sessionId: string;
+  windowLabel: string;
+};
+
+export type CopyScreenshotSelectionResult = {
+  sessionId: string;
+  width: number;
+  height: number;
+};
+
+export type SaveScreenshotSelectionResult = {
+  sessionId: string;
+  filePath: string;
+  width: number;
+  height: number;
+};
+
+export type CancelScreenshotSessionResult = {
+  sessionId: string;
+  cancelled: boolean;
+};
+
+export type ScreenshotSessionUpdatedEvent = {
+  sessionId: string;
+  createdAt: string;
 };
 
 export type DeleteResult = {

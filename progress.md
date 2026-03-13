@@ -1,0 +1,361 @@
+# progress
+
+## 2026-03-11
+- 初始化 `scripts/work/2026-03-11-resource-browser-open-terminal/`：`task_plan.md`、`notes.md`、`deliverable.md`。
+- 已完成 `open_workspace_terminal_at_path` 命令链路（Rust service/command + 前端 command-client）。
+- 资源浏览器右键菜单已新增 `在这里打开终端`，支持目录直开与文件父目录回退。
+- 编译验证通过：`cargo check --manifest-path src-tauri/Cargo.toml`、`npm run web:build`。
+- 单测执行受宿主问题影响：`cargo test ... open_workspace_terminal_at_path_uses_parent_directory_for_file_target` 返回 `STATUS_ENTRYPOINT_NOT_FOUND`。
+- 修复发布版“打开工作区编辑器（VS Code）时 cmd 窗口闪烁”：在进程适配层对 `cmd.exe` 包装启动启用 `CREATE_NO_WINDOW`。
+- 已统一取消链路：`taskkill` 启动也启用 `CREATE_NO_WINDOW`，避免取消动作触发控制台闪窗。
+
+- 已输出热键截图与标注功能方案：scripts/work/2026-03-11-hotkey-screenshot-annotate/{task_plan,notes,deliverable}.md。
+- Phase A 已开始实施：已完成设置页/偏好模型/Tauri 热键链路现状盘点，并确认复用 `tauri-plugin-global-shortcut`。
+- Phase A 当前进行中：准备落地 `HotkeyService`、`AppPreferences.hotkey`、`Settings > Hotkeys` 录制交互、`hotkey://trigger` 前端监听反馈。
+- Phase A 已完成后端链路：
+  - `AppPreferences` 新增 `hotkey`（截图热键默认 `Ctrl+Alt+A` + 语音热键预留字段）
+  - 新增 `HotkeyService`（注册/更新/回滚 + `hotkey://trigger` 统一事件）
+  - `app::setup` 启动时加载并应用热键
+  - `update_app_preferences` 已接入热键应用流程，失败可回滚
+- Phase A 已完成前端链路：
+  - `Settings` 侧栏新增 `Hotkeys`
+  - `SettingsPage` 新增 Hotkeys 分页与截图热键录制/恢复默认
+  - `AppProviders` 已监听 `hotkey://trigger` 并显示 toast
+- 编译验证通过：
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `npm run web:build`
+- Phase B 已启动：完成窗口/路由/capability 现状梳理，准备新增截图会话命令链路与 overlay 页面。
+- Phase B 已完成（热键触发截图会话 + overlay 选区 + 复制/保存）：
+  - Rust 新增 `ScreenshotService` 与截图命令：`start/get/copy/save/cancel_screenshot_session`。
+  - 热键动作 `screenshot_capture` 触发后已直达截图会话，并打开/聚焦 `screenshot_overlay` 窗口。
+  - 前端新增 `screenshot-overlay-page`（选区拖拽、复制、保存、取消，支持 Esc/Enter/Ctrl+S）。
+  - Tauri 新增隐藏 overlay 窗口配置并放开 capability 窗口权限。
+- Phase B 编译验证通过：
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `npm run web:build`
+- 已启动 Phase C（标注工具 + 撤销重做），当前进入 overlay 画布重构与带标注导出实现。
+- Phase C 已完成（标注工具 + 撤销重做 + 带标注导出）：
+  - overlay 工具栏已支持线/框/圆/箭头/画笔/文字/填色。
+  - 已支持撤销/重做（Ctrl+Z / Ctrl+Y）。
+  - 复制/保存已导出带标注 PNG 并走 Rust 侧复制/保存命令。
+- Phase C 编译验证通过：
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `npm run web:build`
+- Phase D 已完成（多屏无缝 + DPI/性能/快捷键细节）：
+  - Rust 改为虚拟桌面多屏拼接截图，会话窗口覆盖所有显示器区域。
+  - 选区映射改为双轴比例（`captureWidth/displayWidth`、`captureHeight/displayHeight`）。
+  - overlay 支持 `1~8` 工具切换、`[`/`]` 线宽调整、Esc 分级处理。
+  - 画笔采样阈值优化以降低高频绘制负担。
+- Phase D 编译验证通过：
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `npm run web:build`
+- 已启动 Phase D.2（文本工具原位输入框），当前进入 overlay 文本编辑态改造与 IME 处理。
+- Phase D.2 已完成（文本工具原位输入框）：
+  - 文字工具已从 `window.prompt` 改为 overlay 内原位输入框。
+  - 已支持中文 IME 组合输入、`Enter` 提交、`Shift+Enter` 换行、`Esc` 取消、失焦自动提交。
+  - 复制/保存链路已兼容当前编辑中的文本，避免 blur 后导出漏字。
+- Phase D.2 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.3（文本工具对象编辑打磨），当前进入文字标注命中/拖动/双击编辑与历史栈改造。
+- Phase D.3 已完成（文字拖动/双击编辑/即时预览）：
+  - 文字标注已支持命中选中、拖动重定位和可视化选中框。
+  - 双击已有文字可进入原位编辑，提交时替换原 annotation，取消时恢复。
+  - 标注历史已升级为快照栈，撤销/重做可覆盖新增、移动、样式更新。
+  - 编辑态与选中态下的颜色/字号都支持即时预览。
+- Phase D.3 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.4（文本样式与键盘微调），当前进入文字样式模型、键盘微调与删除动作增强。
+- Phase D.4 已完成（文字样式/方向键微调/Delete 删除）：
+  - 文字已支持 `纯色 / 描边 / 背景 / 高亮` 四种样式，并在编辑态与选中态即时预览。
+  - 选中文字后已支持方向键微调，`Shift+方向键` 快速移动。
+  - 选中文字后按 `Delete / Backspace` 可删除，并可通过撤销恢复。
+  - SVG 预览、命中框、拖动边界和 Canvas 导出已统一走同一套文本布局逻辑。
+- Phase D.4 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.5（文字旋转、透明度、层级前后移和多对象选择），当前进入文字对象模型、命中测试和分组拖拽改造。
+- Phase D.5 已完成（文字旋转/透明度/层级/多选）：
+  - 文字对象已支持 `rotation / opacity`，工具栏可即时调整并参与导出。
+  - 文字已支持 `Ctrl/Cmd+点击` 多选、`Ctrl/Cmd+A` 全选、分组拖拽与批量方向键微调。
+  - 已支持 `前移 / 后移` 层级调整，以及多选后的 `Delete / Backspace` 批量删除。
+  - 文本命中测试、选中框、SVG 预览和 Canvas 导出已统一支持旋转与透明度。
+- Phase D.5 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.6（文字复制/粘贴/重复对象/对齐吸附），当前进入对象剪贴板与拖拽吸附逻辑改造。
+- Phase D.6 已完成（文字复制/粘贴/重复对象/对齐吸附）：
+  - overlay 已新增文字对象内部 clipboard，支持 `Ctrl/Cmd+C`、`Ctrl/Cmd+V`。
+  - 已支持 `Ctrl/Cmd+D` 与工具栏“重复对象”，新对象保持原相对排布并自动偏移。
+  - 文字分组拖拽时已支持与选区边缘/中心以及其他文字对象边缘/中心的对齐吸附。
+  - 拖拽吸附时已显示辅助线，并与撤销/重做、复制/保存链路兼容。
+- Phase D.6 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.7（马赛克/模糊），当前进入效果标注模型与预览/导出像素处理改造。
+- Phase D.7 已完成（马赛克/模糊）：
+  - overlay 已新增 `马赛克`、`模糊` 两个工具和强度输入。
+  - 预览层已接入 Canvas 像素效果处理，拖拽创建时可实时看到遮挡结果。
+  - 导出 PNG 时已写入马赛克/模糊效果，并与现有矢量标注兼容。
+- Phase D.7 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.8（编号标注），当前进入编号 annotation 模型与 SVG/Canvas 统一布局改造。
+- Phase D.8 已完成（编号标注）：
+  - overlay 已新增 `编号` 工具，点击选区内位置即可落点。
+  - 编号值按当前会话内现存编号最大值递增，颜色跟随当前颜色，尺寸复用当前字号。
+  - SVG 预览与 Canvas 导出已共用同一套编号徽标布局，保证多位数编号一致。
+- Phase D.8 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.9（马赛克/模糊对象二次编辑），当前进入 effect annotation 命中选中、删除与强度回写链路改造。
+- Phase D.9 已完成（马赛克/模糊对象二次编辑）：
+  - effect annotation 已支持命中测试、单对象选中和边框反馈。
+  - 已支持 `Delete / Backspace` 与工具栏按钮删除当前选中的 effect 对象。
+  - 马赛克/模糊强度输入已兼容“新建默认值”和“选中对象二次编辑”两种语义。
+- Phase D.9 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.10（马赛克/模糊对象拖动与缩放），当前进入 effect transform 预览态、句柄命中和边界约束改造。
+- Phase D.10 已完成（马赛克/模糊对象拖动与缩放）：
+  - effect annotation 已支持拖动重定位与四边/四角句柄缩放。
+  - 移动与缩放都走预览态，mouseup 后一次性提交历史，保持撤销/重做清晰。
+  - 选中框已补缩放句柄与拖动/缩放提示，边界始终约束在当前截图选区内。
+- Phase D.10 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.11（编号对象命中/删除/拖动），当前进入 number annotation 命中测试、拖动预览态与删除链路改造。
+- Phase D.11 已完成（编号对象命中/删除/拖动）：
+  - number annotation 已支持命中测试、单对象选中和可视化选中圈。
+  - 已支持 `Delete / Backspace` 与工具栏按钮删除当前选中的编号对象。
+  - 拖动编号对象时已走预览态，mouseup 后一次性提交历史，并保持在截图选区内。
+- Phase D.11 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.12（编号对象颜色/字号二次编辑），当前进入 number annotation 控件同步与颜色/字号回写改造。
+- Phase D.12 已完成（编号对象颜色/字号二次编辑）：
+  - 选中编号后，颜色按钮已可直接修改当前编号颜色。
+  - 选中编号后，字号输入已可直接修改当前编号大小，并在需要时自动做选区边界回退。
+  - 工具栏颜色/字号在选中编号时会同步显示当前对象值。
+- Phase D.12 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.13（编号对象复制/重复），当前进入 number annotation 内部 clipboard、快捷键分发与工具栏入口改造。
+- Phase D.13 已完成（编号对象复制/重复）：
+  - overlay 已新增编号对象内部 clipboard，支持 `Ctrl/Cmd+C`、`Ctrl/Cmd+V`、`Ctrl/Cmd+D`。
+  - 已补齐编号对象的工具栏复制/粘贴/重复入口，并沿用偏移 + 边界回退策略。
+  - 粘贴/重复后的编号会自动选中新对象，并保持撤销/重做、预览和导出一致。
+- Phase D.13 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.14（编号对象层级前后移），当前进入 number annotation 排序交换与快捷键入口改造。
+- Phase D.14 已完成（编号对象层级前后移）：
+  - 编号对象已支持 `前移 / 后移`，排序继续基于 annotation 数组顺序做相邻交换。
+  - `Ctrl/Cmd+[`、`Ctrl/Cmd+]` 已改为按当前选中对象类型分发，编号和文字共用同一组层级热键。
+  - 层级调整后当前编号会保持选中，撤销/重做、命中、预览和导出顺序保持一致。
+- Phase D.14 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.15（effect 对象复制/重复），当前进入 effect annotation 内部 clipboard、快捷键分发与工具栏入口改造。
+- Phase D.15 已完成（effect 对象复制/重复）：
+  - overlay 已新增 effect 对象内部 clipboard，支持 `Ctrl/Cmd+C`、`Ctrl/Cmd+V`、`Ctrl/Cmd+D`。
+  - 已补齐 effect 对象的工具栏复制/粘贴/重复入口，并沿用偏移 + 选区边界回退策略。
+  - 粘贴/重复后的 effect 会自动选中新对象，并保持撤销/重做、预览和导出一致。
+- Phase D.15 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.16（effect 对象层级前后移），当前进入 effect annotation 排序交换与统一层级入口改造。
+- Phase D.16 已完成（effect 对象层级前后移）：
+  - effect 对象已支持 `前移 / 后移`，排序继续基于 annotation 数组顺序做相邻交换。
+  - `Ctrl/Cmd+[`、`Ctrl/Cmd+]` 已改为按当前选中对象类型分发，effect 与文字/编号共用同一组层级热键。
+  - 层级调整后当前 effect 会保持选中，撤销/重做、命中、预览和导出顺序保持一致。
+- Phase D.16 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.17（effect 对象方向键微调），当前进入键盘事件分发与 effect 边界约束改造。
+- Phase D.17 已完成（effect 对象方向键微调）：
+  - effect 对象已支持方向键微调，`Shift+方向键` 支持更大步长移动。
+  - 位移继续基于 effect bounds 和截图选区做边界回退，不会越界。
+  - 每次按键都会提交一次历史，撤销/重做、命中、预览和导出保持一致。
+- Phase D.17 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.18（编号对象方向键微调），当前进入键盘事件分发与编号边界约束改造。
+- Phase D.18 已完成（编号对象方向键微调）：
+  - 编号对象已支持方向键微调，`Shift+方向键` 支持更大步长移动。
+  - 位移继续基于编号布局和截图选区做边界回退，不会越界。
+  - 每次按键都会提交一次历史，撤销/重做、命中、预览和导出保持一致。
+- Phase D.18 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.19（编号选中态快捷提示可视强化），当前进入 NumberSelectionOverlay 提示布局与文案增强。
+- Phase D.19 已完成（编号选中态快捷提示可视强化）：
+  - 编号选中态 overlay 已新增就地提示气泡，直接显示方向键微调和 `Ctrl/Cmd+[ / ]` 层级快捷提示。
+  - 提示层继续停留在选中装饰层，不会进入导出结果，也不改变命中和拖动逻辑。
+- Phase D.19 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.20（effect 选中态快捷提示可视强化），当前进入 EffectSelectionOverlay 提示布局与文案增强。
+- Phase D.20 已完成（effect 选中态快捷提示可视强化）：
+  - effect 选中态 overlay 已新增就地提示气泡，直接显示方向键微调和 `Ctrl/Cmd+[ / ]` 层级快捷提示。
+  - 提示层继续停留在选中装饰层，不会进入导出结果，也不改变命中、拖动和缩放逻辑。
+- Phase D.20 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.21（编号/effect 多选基础能力），当前进入编号/effect 选择状态模型、键盘批处理和 overlay 选中态增强。
+- Phase D.21 已完成（编号/effect 多选基础能力）：
+  - overlay 已支持 `Ctrl/Cmd+点击` 多选编号和 effect，并保留主选中对象用于颜色/字号/强度同步。
+  - 多选编号/effect 已支持批量删除、批量层级前后移和批量方向键微调，继续沿用现有撤销/重做与边界约束。
+  - 编号/effect 的多选选中框已改为逐对象渲染，主选中对象保留就地快捷提示；复制/重复仍限定单对象并给出明确提示。
+- Phase D.21 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.22（编号/effect 分组拖拽），当前进入编号/effect 组拖拽状态、指针事件和 overlay 预览链路改造。
+- Phase D.22 已完成（编号/effect 分组拖拽）：
+  - 多选编号和多选 effect 现在都支持整组拖拽，拖拽过程保留组内相对位置，并继续受截图选区边界约束。
+  - 组拖拽已接入 display preview，`pointerup` 一次性提交历史；撤销/重做语义与文字对象拖拽保持一致。
+  - 多选 effect 仍不支持分组缩放，句柄缩放继续限定单对象，避免和组拖拽命中冲突。
+- Phase D.22 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.23（编号/effect 分组复制与重复），当前进入编号/effect clipboard 结构升级、粘贴偏移与工具栏状态改造。
+- Phase D.23 已完成（编号/effect 分组复制与重复）：
+  - 编号和 effect clipboard 已从单对象升级为分组对象，支持多选复制、粘贴和重复。
+  - 分组粘贴/重复继续复用统一的 `resolvePasteOffset`，保持组内相对位置，并按整组约束在截图选区内回退。
+  - 工具栏、快捷键和选中提示已同步到分组复制能力，不再限制“仅单对象复制/重复”。
+- Phase D.23 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.24（编号/effect 框选多选），当前进入对象框选状态、家族决策和拖拽手势分流改造。
+- Phase D.24 已完成（编号/effect 框选多选）：
+  - 截图选区内空白处拖框现在会进入对象框选，多选编号/effect 时可直接框选替换或 `Ctrl/Cmd+拖框` 增量追加。
+  - 框内同时命中编号和 effect 时，优先沿当前已选家族；没有当前家族时按最上层命中对象决定家族。
+  - 截图选区外拖框仍保持原有截图区域重绘路径，不会被对象框选逻辑截走。
+- Phase D.24 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.25（effect/number 置顶与置底入口），当前进入层级重排 helper、快捷键分发和工具栏入口改造。
+- Phase D.25 已完成（effect/number 置顶与置底入口）：
+  - 现有层级 helper 已扩展为支持“置顶 / 置底”，并保持多选对象组内相对顺序稳定。
+  - 工具栏已新增“置底 / 置顶”，`Ctrl/Cmd+Shift+[ / ]` 已接入为置底/置顶快捷键；`Ctrl/Cmd+[ / ]` 继续保留为一步前移/后移。
+  - 顶部提示、状态文案和编号/effect 的就地提示都已同步到置顶/置底语义。
+- Phase D.25 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.26（文字对象置顶/置底快捷入口对齐），当前进入文字选中 overlay 与对象级提示补齐。
+- Phase D.26 已完成（文字对象置顶/置底快捷入口对齐）：
+  - `TextSelectionOverlay` 已新增就地快捷提示，文字对象现在会直接显示层级快捷说明。
+  - 单选文字会显示 `双击编辑 / 拖动`，多选文字会切换为整组拖动/复制语义，并统一补齐 `Ctrl/Cmd+[ / ]` 与 `Ctrl/Cmd+Shift+[ / ]`。
+  - 新增提示仍停留在非导出装饰层，不会进入复制或保存结果。
+- Phase D.26 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.27（图形对象选中与二次编辑），当前进入图形命中、变换状态和样式回写链路改造。
+- Phase D.27 已完成（图形对象选中与二次编辑）：
+  - 线条 / 箭头 / 矩形 / 圆形已支持对象命中、选中 overlay 和就地快捷提示。
+  - 已支持拖动本体、端点/句柄缩放，交互采用 preview + pointerup 一次提交历史。
+  - 选中图形后已支持颜色、线宽、Delete、方向键微调和层级调整。
+- Phase D.27 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.28（画笔对象选中与二次编辑），当前进入画笔命中、拖动预览和样式回写链路改造。
+- Phase D.28 已完成（画笔对象选中与二次编辑）：
+  - 画笔路径已支持对象命中、选中 overlay 和就地快捷提示。
+  - 已支持整条路径拖动重定位，交互采用 preview + pointerup 一次提交历史。
+  - 选中画笔后已支持颜色、线宽、Delete、方向键微调和层级调整。
+- Phase D.28 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.29（画笔对象复制与重复），当前进入画笔 clipboard、快捷键分发和工具栏入口改造。
+- Phase D.29 已完成（画笔对象复制与重复）：
+  - 已为画笔新增对象级 clipboard，并接入 `Ctrl/Cmd+C`、`Ctrl/Cmd+V`、`Ctrl/Cmd+D`。
+  - 工具栏已补 `复制画笔 / 粘贴画笔 / 重复画笔`，状态文案和画笔就地提示同步加入复制语义。
+  - 画笔复制/重复继续复用统一粘贴偏移与选区边界约束，不引入单独规则。
+- Phase D.29 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.30（画笔对象多选基础能力），当前进入画笔选择模型、多选命中和批量 mutation 改造。
+- Phase D.30 已完成（画笔对象多选基础能力）：
+  - 已为画笔补齐“主选中 id + 选中列表”模型，并接入 `Ctrl/Cmd+点击` 增量多选/取消多选。
+  - 多选画笔已支持批量删除、层级前后移/置顶置底、方向键微调；工具栏和就地提示同步到多选语义。
+  - 画笔多选下暂不放开分组复制/重复，快捷键会明确提示，工具栏按钮也已限制为单条画笔。
+- Phase D.30 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.31（画笔对象分组拖拽），当前进入画笔组拖拽预览、边界约束和 pointerup 提交链路改造。
+- Phase D.31 已完成（画笔对象分组拖拽）：
+  - 多选画笔时，普通点击组内任一画笔已进入整组拖拽，交互采用 preview + pointerup 一次提交历史。
+  - 画笔组拖拽已复用统一选区边界约束，移动过程中不会让任一路径越出截图选区。
+  - 状态文案、顶部帮助和画笔 overlay 已同步到“整组拖动”语义，多选复制/重复仍继续限制为单条画笔。
+- Phase D.31 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.32（画笔多选组复制与重复），当前进入画笔 clipboard 放开、多选粘贴选中和文案对齐改造。
+- Phase D.32 已完成（画笔多选组复制与重复）：
+  - 画笔多选下已放开整组复制、粘贴和重复，继续复用同一套 `PenClipboardState` 与统一粘贴偏移。
+  - 粘贴/重复后的新组画笔会自动整体选中，主选中对象保持为新组最后一条路径。
+  - 工具栏、状态文案和画笔就地提示已同步到“整组复制/重复”语义。
+- Phase D.32 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.33（画笔对象框选多选），当前进入对象框选家族决策和 pen 命中接入改造。
+- Phase D.33 已完成（画笔对象框选多选）：
+  - 已将画笔并入 `objectSelectionMarquee` 家族决策，截图选区内空白拖框现在可直接框选画笔。
+  - `Ctrl/Cmd+拖框` 已支持画笔增量追加，并继续保持单家族选择，不放开跨家族混选。
+  - 画笔框选命中已按路径点/线段与矩形实际相交判断，避免长路径仅靠包围盒造成误选。
+- Phase D.33 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.34（图形对象复制与重复），当前进入图形 clipboard、快捷键分发和提示文案对齐改造。
+- Phase D.34 已完成（图形对象复制与重复）：
+  - 已为图形新增对象级 clipboard，并接入 `Ctrl/Cmd+C`、`Ctrl/Cmd+V`、`Ctrl/Cmd+D`。
+  - 工具栏已补 `复制图形 / 粘贴图形 / 重复图形`，状态文案、顶部帮助和 `ShapeSelectionOverlay` 已同步到复制语义。
+  - 图形复制/重复继续复用统一粘贴偏移和 `offsetShapeAnnotation`，不为线条/箭头/矩形/圆形拆分不同规则。
+- Phase D.34 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.35（图形对象多选基础能力），当前进入图形选择模型、`Ctrl/Cmd+点击` 和批量 mutation 改造。
+- Phase D.35 已完成（图形对象多选基础能力）：
+  - 已为图形补齐“主选中 id + 选中列表”模型，并接入 `Ctrl/Cmd+点击` 增量多选/取消多选。
+  - 多选图形已支持批量删除、层级前后移/置顶置底、方向键微调；颜色和线宽控件继续由主选中图形驱动，并对整组生效。
+  - 图形多选下复制/重复继续显式限制为单个图形，快捷键与工具栏都不会静默退化成“只复制主对象”。
+- Phase D.35 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.36（图形对象分组拖拽），当前进入图形组拖拽状态、预览链路和 pointerup 提交改造。
+- Phase D.36 已完成（图形对象分组拖拽）：
+  - 多选图形时，普通点击组内任一图形已进入整组拖拽，继续采用 preview + pointerup 一次提交历史。
+  - 图形组拖拽已复用 `resolveShapeGroupBounds + clampGroupDeltaToSelection`，整组移动过程中不会越出截图选区。
+  - 单图形句柄编辑保持不变；多选图形仍只做整组平移，不放开组缩放。
+- Phase D.36 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.37（图形对象多选组复制与重复），当前进入图形 clipboard 放开、组粘贴选中和提示文案对齐改造。
+- Phase D.37 已完成（图形对象多选组复制与重复）：
+  - 图形 clipboard 已放开多选写入，`Ctrl/Cmd+C`、`Ctrl/Cmd+V`、`Ctrl/Cmd+D` 现在都支持按整组图形处理。
+  - 图形组粘贴/重复后会自动整组选中新组对象，主选中图形保持为新组最后一个对象。
+  - 状态文案、顶部帮助、图形 overlay 和工具栏按钮已同步到组复制/粘贴/重复语义。
+- Phase D.37 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.38（图形对象接入统一框选入口），当前进入对象框选启动条件、图形命中和 pointerup 提交分支改造。
+- Phase D.38 已完成（图形对象接入统一框选入口）：
+  - 已将图形并入 `objectSelectionMarquee` 的启动条件和家族决策，截图选区内空白拖框现在可直接框选图形。
+  - 图形框选已支持 `Ctrl/Cmd+拖框` 增量追加，并继续保持单家族选择规则，不放开跨家族混选。
+  - 图形框选提交后可直接接续整组拖拽、复制/重复、层级调整和样式批量编辑。
+- Phase D.38 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.39（跨对象家族统一框选可视强化），当前进入对象框选实时预览、候选高亮和家族提示整合。
+- Phase D.39 已完成（跨对象家族统一框选可视强化）：
+  - 对象框选现在会实时解析当前将命中的家族和数量，并在框选期间直接显示“框选/追加”提示。
+  - 图形、画笔、编号、效果已接入统一的框选预高亮层，拖框过程中能直接看到最终会被选中的候选对象。
+  - 其他命中家族会以摘要方式显示，明确说明当前仍保持单家族选择，减少“为什么没一起选中”的理解成本。
+- Phase D.39 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.40（文字对象接入统一对象框选入口），当前进入文字框选命中、家族优先和预览层接入改造。
+- Phase D.40 已完成（文字对象接入统一对象框选入口）：
+  - 已将文字并入 `objectSelectionMarquee` 的启动条件、家族优先和 pointerup 提交分支，空白拖框现在可直接框选文字。
+  - 文字框选命中已复用 `resolveTextAnnotationLayout` 的旋转角点与边线，不再只靠外接 bounds 粗判。
+  - 统一框选预览、状态文案和顶部帮助已同步到文字家族，文字也会显示实时命中数量和追加提示。
+- Phase D.40 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.41（跨对象家族统一组选中框与主对象提示收敛），当前进入共享组选中框、共享提示气泡和各家族 overlay 收敛改造。
+- Phase D.41 已完成（跨对象家族统一组选中框与主对象提示收敛）：
+  - 文字/图形/画笔/编号/effect 在多选时现在都会显示统一的组选中框和组级提示，不再每个对象各弹一套多选提示。
+  - 单对象提示已收敛到共享气泡组件，保留各家族自身语义文案，但视觉结构和排列一致。
+  - 现有句柄、单对象轮廓、拖动和缩放语义保持不变，组级可视层只负责多选反馈。
+- Phase D.41 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.42（统一批处理状态栏收敛），当前进入工具栏状态模型抽取和统一能力标签渲染改造。
+- Phase D.42 已完成（统一批处理状态栏收敛）：
+  - 工具栏状态栏已从单行长文案改为统一的结构化模型：标题、摘要、能力标签。
+  - 框选预览、单对象选中、多对象选中和空闲态现在共用同一套状态栏渲染壳，现有单家族选择语义不变。
+  - 文字/图形/画笔/编号/effect 的批处理能力已收敛成统一标签输出，为后续跨家族混选留出了组合空间。
+- Phase D.42 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.43（跨家族混选基础版），当前进入跨家族 additive 选择、混选批处理入口和混选可视反馈改造。
+- Phase D.43 已完成（跨家族混选基础版）：
+  - 已放开 `Ctrl/Cmd+点击` 的跨家族 additive 选择，并保持混选态统一组选中框与状态栏表达。
+  - 已打通混选下的删除、层级调整、全选；`Ctrl/Cmd+C/V/D` 与方向键微调在混选态下会显式拦截并给出反馈。
+  - 对象框选在混选态下不再沿某个已选家族固定偏向，混选状态下的提示层也已收敛为统一组提示。
+- Phase D.43 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.44（跨家族混选分组拖拽），当前进入 mixed group drag 状态、pointer 交互和预览链路改造。
+- Phase D.44 已完成（跨家族混选分组拖拽）：
+  - 已为 mixed selection 接入统一 group drag 状态，点击任一已选对象时会进入跨家族整组平移。
+  - 已打通 pointermove 预览、pointerup 提交、Esc 取消和边界约束，整组拖拽不会打散现有混选。
+  - 混选组选中框、状态栏和顶部帮助已同步到“可整组拖动”语义，单家族提示与句柄不会在 mixed 拖拽时抢入口。
+- Phase D.44 编译验证通过：
+  - `npm run web:build`
+- 已启动 Phase D.45（跨家族混选复制重复粘贴），当前进入 mixed clipboard、快捷键分发和粘贴后选中恢复改造。
+- Phase D.45 已完成（跨家族混选复制重复粘贴）：
+  - 已新增 mixed clipboard，并打通 mixed selection 下的 `Ctrl/Cmd+C / V / D`、工具栏复制/粘贴/重复入口和粘贴后的 mixed selection 恢复。
+  - mixed clipboard 复制源已改为按原始注释栈顺序提取当前选中对象，保证跨家族复制后组内相对层级不乱。
+  - 混选组选中框、状态栏和顶部帮助已同步到复制/重复/粘贴语义；单家族入口在 mixed 状态下继续保持显式禁用。
+- Phase D.45 编译验证通过：
+  - `npm run web:build`

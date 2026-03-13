@@ -2942,6 +2942,7 @@ mod tests {
             },
             workspace: WorkspacePreferences::default(),
             startup: crate::domain::StartupPreferences::default(),
+            hotkey: crate::domain::HotkeyPreferences::default(),
             tray: TrayPreferences::default(),
             diagnostics: DiagnosticsPreferences::default(),
         });

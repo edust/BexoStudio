@@ -24,6 +24,7 @@ import {
 import { Reorder, useDragControls } from "motion/react";
 import { Controller, useForm } from "react-hook-form";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useParams } from "react-router-dom";
 import { toast } from "sonner";
 
 import {
@@ -60,13 +61,25 @@ import type {
 } from "@/types/backend";
 
 type EditorKey = "vscode" | "jetbrains";
+type SettingsSection = "general" | "hotkeys";
+type HotkeyRecorderStatus = "idle" | "recording" | "saving" | "error";
+
+const DEFAULT_SCREENSHOT_CAPTURE_HOTKEY = "Ctrl+Alt+A";
+const HOTKEY_MODIFIER_TOKENS = new Set(["Ctrl", "Alt", "Shift", "Super"]);
 
 export default function SettingsPage() {
+  const { section } = useParams<{ section?: string }>();
+  const activeSection: SettingsSection = section === "hotkeys" ? "hotkeys" : "general";
   const [pathInlineError, setPathInlineError] = useState<string | null>(null);
   const [startupInlineError, setStartupInlineError] = useState<string | null>(null);
   const [codexHomeInlineError, setCodexHomeInlineError] = useState<string | null>(null);
   const [templateInlineError, setTemplateInlineError] = useState<string | null>(null);
   const [editorInlineError, setEditorInlineError] = useState<string | null>(null);
+  const [hotkeyInlineError, setHotkeyInlineError] = useState<string | null>(null);
+  const [hotkeyRecorderStatus, setHotkeyRecorderStatus] =
+    useState<HotkeyRecorderStatus>("idle");
+  const [hotkeyRecorderPreview, setHotkeyRecorderPreview] = useState("");
+  const [hotkeyRecorderError, setHotkeyRecorderError] = useState<string | null>(null);
   const [isTemplateManagerOpen, setIsTemplateManagerOpen] = useState(false);
   const [isEditorManagerOpen, setIsEditorManagerOpen] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
@@ -112,6 +125,8 @@ export default function SettingsPage() {
   const windowsTerminalPath = resolvedPreferences.terminal.windowsTerminalPath?.trim() ?? "";
   const vscodePath = resolvedPreferences.ide.vscodePath?.trim() ?? "";
   const jetbrainsPath = resolvedPreferences.ide.jetbrainsPath?.trim() ?? "";
+  const screenshotCaptureHotkey =
+    resolvedPreferences.hotkey.screenshotCapture?.trim() || DEFAULT_SCREENSHOT_CAPTURE_HOTKEY;
   const configuredEditorCount = Number(Boolean(vscodePath)) + Number(Boolean(jetbrainsPath));
   const codexHomePath = codexHomeQuery.data?.path?.trim() ?? "";
   const codexHomeExists = codexHomeQuery.data?.exists ?? false;
@@ -139,6 +154,12 @@ export default function SettingsPage() {
     () => sortTerminalCommandTemplates(resolvedPreferences.terminal.commandTemplates ?? []),
     [resolvedPreferences.terminal.commandTemplates],
   );
+  const settingsPageLoading =
+    activeSection === "general"
+      ? preferencesQuery.isLoading || codexHomeQuery.isLoading
+      : preferencesQuery.isLoading;
+  const hotkeyActionsDisabled =
+    !desktopRuntimeAvailable || preferencesQuery.isError || updatePreferencesMutation.isPending;
 
   useEffect(() => {
     setOrderedTemplates(terminalTemplates);
@@ -651,6 +672,148 @@ export default function SettingsPage() {
     }
   }
 
+  const applyRecordedScreenshotHotkey = useCallback(
+    async (shortcut: string) => {
+      if (
+        !desktopRuntimeAvailable ||
+        updatePreferencesMutation.isPending ||
+        preferencesQuery.isError
+      ) {
+        return;
+      }
+
+      const normalizedShortcut = shortcut.trim();
+      if (!normalizedShortcut) {
+        setHotkeyRecorderError("截图热键不能为空");
+        setHotkeyRecorderStatus("error");
+        return;
+      }
+
+      setHotkeyInlineError(null);
+      setHotkeyRecorderError(null);
+      setHotkeyRecorderStatus("saving");
+
+      try {
+        const currentPreferences =
+          queryClient.getQueryData<AppPreferences>(appPreferencesQueryKey) ??
+          resolvedPreferences;
+        await persistPreferences({
+          ...currentPreferences,
+          hotkey: {
+            ...currentPreferences.hotkey,
+            screenshotCapture: normalizedShortcut,
+          },
+        });
+        setHotkeyRecorderPreview(normalizedShortcut);
+        setHotkeyRecorderStatus("idle");
+        toast.success(`截图热键已更新为 ${normalizedShortcut}`);
+      } catch (error) {
+        const summary = getErrorSummary(error);
+        setHotkeyInlineError(summary.message);
+        setHotkeyRecorderError(summary.message);
+        setHotkeyRecorderStatus("error");
+        toast.error(summary.message);
+      }
+    },
+    [
+      desktopRuntimeAvailable,
+      preferencesQuery.isError,
+      queryClient,
+      resolvedPreferences,
+      updatePreferencesMutation.isPending,
+    ],
+  );
+
+  function beginScreenshotHotkeyRecording() {
+    if (
+      !desktopRuntimeAvailable ||
+      updatePreferencesMutation.isPending ||
+      preferencesQuery.isError
+    ) {
+      return;
+    }
+
+    setHotkeyInlineError(null);
+    setHotkeyRecorderError(null);
+    setHotkeyRecorderPreview("");
+    setHotkeyRecorderStatus("recording");
+  }
+
+  function cancelScreenshotHotkeyRecording() {
+    setHotkeyRecorderPreview("");
+    setHotkeyRecorderError(null);
+    setHotkeyRecorderStatus("idle");
+  }
+
+  async function resetScreenshotHotkeyToDefault() {
+    await applyRecordedScreenshotHotkey(DEFAULT_SCREENSHOT_CAPTURE_HOTKEY);
+  }
+
+  useEffect(() => {
+    if (hotkeyRecorderStatus !== "recording") {
+      return;
+    }
+
+    const activeTokens = new Set<string>();
+
+    const finishRecording = (combo: string) => {
+      if (!combo) {
+        return;
+      }
+
+      const tokens = combo.split("+").filter(Boolean);
+      if (!tokens.some((token) => !isHotkeyModifierToken(token))) {
+        setHotkeyRecorderError("热键至少包含一个非修饰键（例如 A / F1 / 0）");
+        setHotkeyRecorderStatus("error");
+        return;
+      }
+
+      void applyRecordedScreenshotHotkey(combo);
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.code === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        cancelScreenshotHotkeyRecording();
+        return;
+      }
+
+      const token = keyboardEventToHotkeyToken(event);
+      if (!token) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      activeTokens.add(token);
+      setHotkeyRecorderPreview(formatHotkeyTokens(activeTokens));
+    };
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      const token = keyboardEventToHotkeyToken(event);
+      if (!token) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      const combo = formatHotkeyTokens(activeTokens);
+      activeTokens.clear();
+      setHotkeyRecorderPreview(combo);
+      finishRecording(combo);
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    window.addEventListener("keyup", handleKeyUp, true);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+      window.removeEventListener("keyup", handleKeyUp, true);
+    };
+  }, [applyRecordedScreenshotHotkey, hotkeyRecorderStatus]);
+
   async function handleSaveTemplate(values: TerminalCommandTemplateFormValues) {
     setTemplateInlineError(null);
     const currentTemplates = orderedTemplates;
@@ -756,7 +919,7 @@ export default function SettingsPage() {
     <div className="flex h-full min-h-0 flex-col bg-white">
       <div className="border-b border-[#e6edf5] px-5 py-4">
         <Typography.Text className="block text-[11px] font-semibold uppercase tracking-[0.22em] text-[#1f2937]">
-          General
+          {activeSection === "hotkeys" ? "Hotkeys" : "General"}
         </Typography.Text>
       </div>
 
@@ -780,246 +943,355 @@ export default function SettingsPage() {
           />
         ) : null}
 
-        {pathInlineError ? (
-          <Alert
-            className="mb-4"
-            closable
-            message="保存设置失败"
-            onClose={() => setPathInlineError(null)}
-            showIcon
-            type="error"
-            description={pathInlineError}
-          />
-        ) : null}
+        {activeSection === "general" ? (
+          <>
+            {pathInlineError ? (
+              <Alert
+                className="mb-4"
+                closable
+                message="保存设置失败"
+                onClose={() => setPathInlineError(null)}
+                showIcon
+                type="error"
+                description={pathInlineError}
+              />
+            ) : null}
 
-        {startupInlineError ? (
-          <Alert
-            className="mb-4"
-            closable
-            message="更新启动设置失败"
-            onClose={() => setStartupInlineError(null)}
-            showIcon
-            type="error"
-            description={startupInlineError}
-          />
-        ) : null}
+            {startupInlineError ? (
+              <Alert
+                className="mb-4"
+                closable
+                message="更新启动设置失败"
+                onClose={() => setStartupInlineError(null)}
+                showIcon
+                type="error"
+                description={startupInlineError}
+              />
+            ) : null}
 
-        {codexHomeInlineError ? (
-          <Alert
-            className="mb-4"
-            closable
-            message="打开目录失败"
-            onClose={() => setCodexHomeInlineError(null)}
-            showIcon
-            type="error"
-            description={codexHomeInlineError}
-          />
-        ) : null}
+            {codexHomeInlineError ? (
+              <Alert
+                className="mb-4"
+                closable
+                message="打开目录失败"
+                onClose={() => setCodexHomeInlineError(null)}
+                showIcon
+                type="error"
+                description={codexHomeInlineError}
+              />
+            ) : null}
 
-        {desktopRuntimeAvailable && (preferencesQuery.isLoading || codexHomeQuery.isLoading) ? (
-          <div className="flex min-h-0 flex-1 items-center justify-center">
-            <Spin size="small" />
-          </div>
-        ) : (
-          <div className="flex min-h-0 flex-1 flex-col gap-0">
-            <div className="rounded-[0] border border-[#eef2f6] bg-white">
-              <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
-                <div className="min-w-0">
-                  <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
-                    随系统启动
-                  </Typography.Text>
-                </div>
-
-                <div className="min-w-0">
-                  <Typography.Text className="block text-[11px] text-[#667085]">
-                    应用会在系统登录后自动启动。
-                  </Typography.Text>
-                </div>
-
-                <Switch
-                  checked={launchAtLoginEnabled}
-                  disabled={
-                    !desktopRuntimeAvailable ||
-                    preferencesQuery.isFetching ||
-                    preferencesQuery.isError
-                  }
-                  loading={updatePreferencesMutation.isPending}
-                  onChange={(checked) =>
-                    void handleToggleStartupSetting(
-                      "launchAtLogin",
-                      checked,
-                      checked ? "已开启随系统启动" : "已关闭随系统启动",
-                    )
-                  }
-                  size="small"
-                />
+            {desktopRuntimeAvailable && settingsPageLoading ? (
+              <div className="flex min-h-0 flex-1 items-center justify-center">
+                <Spin size="small" />
               </div>
-            </div>
+            ) : (
+              <div className="flex min-h-0 flex-1 flex-col gap-0">
+                <div className="rounded-[0] border border-[#eef2f6] bg-white">
+                  <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
+                    <div className="min-w-0">
+                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
+                        随系统启动
+                      </Typography.Text>
+                    </div>
 
-            <div className="rounded-[0] border border-[#eef2f6] bg-white">
-              <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
-                <div className="min-w-0">
-                  <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
-                    静默启动
-                  </Typography.Text>
-                </div>
+                    <div className="min-w-0">
+                      <Typography.Text className="block text-[11px] text-[#667085]">
+                        应用会在系统登录后自动启动。
+                      </Typography.Text>
+                    </div>
 
-                <div className="min-w-0">
-                  <Typography.Text className="block text-[11px] text-[#667085]">
-                    仅在自启动场景生效：应用启动后保持托盘常驻，不主动弹出主窗口。
-                  </Typography.Text>
-                </div>
-
-                <Switch
-                  checked={startSilentlyEnabled}
-                  disabled={
-                    !desktopRuntimeAvailable ||
-                    preferencesQuery.isFetching ||
-                    preferencesQuery.isError
-                  }
-                  loading={updatePreferencesMutation.isPending}
-                  onChange={(checked) =>
-                    void handleToggleStartupSetting(
-                      "startSilently",
-                      checked,
-                      checked ? "已开启静默启动" : "已关闭静默启动",
-                    )
-                  }
-                  size="small"
-                />
-              </div>
-            </div>
-
-            <div className="rounded-[0] border border-[#eef2f6] bg-white">
-              <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
-                <div className="min-w-0">
-                  <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
-                    Windows Terminal 位置
-                  </Typography.Text>
-                </div>
-
-                <div
-                  className="flex h-[32px] items-center overflow-hidden rounded-[8px] border border-[#d8e1eb] bg-[#f8fafc] px-3 font-mono text-[12px] text-[#475467] select-none"
-                  onContextMenu={preventCopy}
-                  onCopy={preventCopy}
-                  onCut={preventCopy}
-                  onMouseDown={(event) => {
-                    if (event.detail > 1) {
-                      preventCopy(event);
-                    }
-                  }}
-                  onSelect={(event) => preventCopy(event)}
-                  title={windowsTerminalPath || "未配置 Windows Terminal 路径"}
-                >
-                  <span className="truncate">
-                    {windowsTerminalPath || "未配置 Windows Terminal 路径"}
-                  </span>
-                </div>
-
-                <Button
-                  className="!h-[32px] !px-3 !text-[12px]"
-                  disabled={
-                    !desktopRuntimeAvailable ||
-                    preferencesQuery.isFetching ||
-                    preferencesQuery.isError
-                  }
-                  icon={<FolderOpenOutlined />}
-                  loading={updatePreferencesMutation.isPending}
-                  onClick={() => void handlePickWindowsTerminalDirectory()}
-                  size="small"
-                >
-                  选择目录
-                </Button>
-              </div>
-            </div>
-
-            <div className="rounded-[0] border border-[#eef2f6] bg-white">
-              <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
-                <div className="min-w-0">
-                  <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
-                    Codex 配置目录
-                  </Typography.Text>
-                </div>
-
-                <div className="min-w-0">
-                  <div
-                    className="flex h-[32px] items-center overflow-hidden rounded-[8px] border border-[#d8e1eb] bg-[#f8fafc] px-3 font-mono text-[12px] text-[#475467] select-none"
-                    onContextMenu={preventCopy}
-                    onCopy={preventCopy}
-                    onCut={preventCopy}
-                    onMouseDown={(event) => {
-                      if (event.detail > 1) {
-                        preventCopy(event);
+                    <Switch
+                      checked={launchAtLoginEnabled}
+                      disabled={
+                        !desktopRuntimeAvailable ||
+                        preferencesQuery.isFetching ||
+                        preferencesQuery.isError
                       }
-                    }}
-                    onSelect={(event) => preventCopy(event)}
-                    title={codexHomeDisplayValue}
-                  >
-                    <span className="truncate">{codexHomeDisplayValue}</span>
+                      loading={updatePreferencesMutation.isPending}
+                      onChange={(checked) =>
+                        void handleToggleStartupSetting(
+                          "launchAtLogin",
+                          checked,
+                          checked ? "已开启随系统启动" : "已关闭随系统启动",
+                        )
+                      }
+                      size="small"
+                    />
                   </div>
-                  <Typography.Text className="mt-1 block text-[11px] text-[#667085]">
-                    {codexHomeDescription}
-                  </Typography.Text>
                 </div>
 
-                <Button
-                  className="!h-[32px] !px-3 !text-[12px]"
-                  disabled={!canOpenCodexHomeDirectory}
-                  icon={<FolderOpenOutlined />}
-                  onClick={() => void handleOpenCodexHomeDirectory()}
-                  size="small"
-                >
-                  打开目录
-                </Button>
-              </div>
-            </div>
+                <div className="rounded-[0] border border-[#eef2f6] bg-white">
+                  <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
+                    <div className="min-w-0">
+                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
+                        静默启动
+                      </Typography.Text>
+                    </div>
 
-            <div className="rounded-[0] border border-[#eef2f6] bg-white">
-              <div className="flex items-center justify-between gap-4 px-4 py-4">
-                <div className="min-w-0">
+                    <div className="min-w-0">
+                      <Typography.Text className="block text-[11px] text-[#667085]">
+                        仅在自启动场景生效：应用启动后保持托盘常驻，不主动弹出主窗口。
+                      </Typography.Text>
+                    </div>
+
+                    <Switch
+                      checked={startSilentlyEnabled}
+                      disabled={
+                        !desktopRuntimeAvailable ||
+                        preferencesQuery.isFetching ||
+                        preferencesQuery.isError
+                      }
+                      loading={updatePreferencesMutation.isPending}
+                      onChange={(checked) =>
+                        void handleToggleStartupSetting(
+                          "startSilently",
+                          checked,
+                          checked ? "已开启静默启动" : "已关闭静默启动",
+                        )
+                      }
+                      size="small"
+                    />
+                  </div>
+                </div>
+
+                <div className="rounded-[0] border border-[#eef2f6] bg-white">
+                  <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
+                    <div className="min-w-0">
+                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
+                        Windows Terminal 位置
+                      </Typography.Text>
+                    </div>
+
+                    <div
+                      className="flex h-[32px] items-center overflow-hidden rounded-[8px] border border-[#d8e1eb] bg-[#f8fafc] px-3 font-mono text-[12px] text-[#475467] select-none"
+                      onContextMenu={preventCopy}
+                      onCopy={preventCopy}
+                      onCut={preventCopy}
+                      onMouseDown={(event) => {
+                        if (event.detail > 1) {
+                          preventCopy(event);
+                        }
+                      }}
+                      onSelect={(event) => preventCopy(event)}
+                      title={windowsTerminalPath || "未配置 Windows Terminal 路径"}
+                    >
+                      <span className="truncate">
+                        {windowsTerminalPath || "未配置 Windows Terminal 路径"}
+                      </span>
+                    </div>
+
+                    <Button
+                      className="!h-[32px] !px-3 !text-[12px]"
+                      disabled={
+                        !desktopRuntimeAvailable ||
+                        preferencesQuery.isFetching ||
+                        preferencesQuery.isError
+                      }
+                      icon={<FolderOpenOutlined />}
+                      loading={updatePreferencesMutation.isPending}
+                      onClick={() => void handlePickWindowsTerminalDirectory()}
+                      size="small"
+                    >
+                      选择目录
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="rounded-[0] border border-[#eef2f6] bg-white">
+                  <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
+                    <div className="min-w-0">
+                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
+                        Codex 配置目录
+                      </Typography.Text>
+                    </div>
+
+                    <div className="min-w-0">
+                      <div
+                        className="flex h-[32px] items-center overflow-hidden rounded-[8px] border border-[#d8e1eb] bg-[#f8fafc] px-3 font-mono text-[12px] text-[#475467] select-none"
+                        onContextMenu={preventCopy}
+                        onCopy={preventCopy}
+                        onCut={preventCopy}
+                        onMouseDown={(event) => {
+                          if (event.detail > 1) {
+                            preventCopy(event);
+                          }
+                        }}
+                        onSelect={(event) => preventCopy(event)}
+                        title={codexHomeDisplayValue}
+                      >
+                        <span className="truncate">{codexHomeDisplayValue}</span>
+                      </div>
+                      <Typography.Text className="mt-1 block text-[11px] text-[#667085]">
+                        {codexHomeDescription}
+                      </Typography.Text>
+                    </div>
+
+                    <Button
+                      className="!h-[32px] !px-3 !text-[12px]"
+                      disabled={!canOpenCodexHomeDirectory}
+                      icon={<FolderOpenOutlined />}
+                      onClick={() => void handleOpenCodexHomeDirectory()}
+                      size="small"
+                    >
+                      打开目录
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="rounded-[0] border border-[#eef2f6] bg-white">
+                  <div className="flex items-center justify-between gap-4 px-4 py-4">
+                    <div className="min-w-0">
+                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
+                        终端模板管理
+                      </Typography.Text>
+                      <Typography.Text className="mt-1 block text-[11px] text-[#667085]">
+                        首页“新增命令”弹窗会直接读取这里维护的终端命令模板。当前已保存{" "}
+                        {terminalTemplates.length} 个模板。
+                      </Typography.Text>
+                    </div>
+                    <Button
+                      className="!h-[32px] !px-3 !text-[12px]"
+                      disabled={!desktopRuntimeAvailable || preferencesQuery.isError}
+                      icon={<SettingOutlined />}
+                      onClick={openTemplateManager}
+                      size="small"
+                    >
+                      管理模板
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="rounded-[0] border border-[#eef2f6] bg-white">
+                  <div className="flex items-center justify-between gap-4 px-4 py-4">
+                    <div className="min-w-0">
+                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
+                        编辑器管理
+                      </Typography.Text>
+                      <Typography.Text className="mt-1 block text-[11px] text-[#667085]">
+                        管理 VS Code / JetBrains 路径。支持从系统变量 PATH 自动检测。当前已配置{" "}
+                        {configuredEditorCount} 个编辑器。
+                      </Typography.Text>
+                    </div>
+                    <Button
+                      className="!h-[32px] !px-3 !text-[12px]"
+                      disabled={!desktopRuntimeAvailable || preferencesQuery.isError}
+                      icon={<SettingOutlined />}
+                      onClick={openEditorManager}
+                      size="small"
+                    >
+                      管理编辑器
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            {hotkeyInlineError ? (
+              <Alert
+                className="mb-4"
+                closable
+                message="保存热键失败"
+                onClose={() => setHotkeyInlineError(null)}
+                showIcon
+                type="error"
+                description={hotkeyInlineError}
+              />
+            ) : null}
+
+            {hotkeyRecorderError && hotkeyRecorderStatus === "error" ? (
+              <Alert
+                className="mb-4"
+                closable
+                message="热键录制失败"
+                onClose={() => {
+                  setHotkeyRecorderError(null);
+                  setHotkeyRecorderStatus("idle");
+                }}
+                showIcon
+                type="error"
+                description={hotkeyRecorderError}
+              />
+            ) : null}
+
+            {desktopRuntimeAvailable && settingsPageLoading ? (
+              <div className="flex min-h-0 flex-1 items-center justify-center">
+                <Spin size="small" />
+              </div>
+            ) : (
+              <div className="flex min-h-0 flex-1 flex-col gap-0">
+                <div className="rounded-[0] border border-[#eef2f6] bg-white">
+                  <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
+                    <div className="min-w-0">
+                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
+                        截图热键
+                      </Typography.Text>
+                    </div>
+
+                    <div className="min-w-0">
+                      <div
+                        className="flex h-[32px] items-center overflow-hidden rounded-[8px] border border-[#d8e1eb] bg-[#f8fafc] px-3 font-mono text-[12px] text-[#475467]"
+                        title={screenshotCaptureHotkey}
+                      >
+                        <span className="truncate">{screenshotCaptureHotkey}</span>
+                      </div>
+                      <Typography.Text className="mt-1 block text-[11px] text-[#667085]">
+                        {hotkeyRecorderStatus === "recording"
+                          ? hotkeyRecorderPreview
+                            ? `录制中：${hotkeyRecorderPreview}（松开按键后保存）`
+                            : "录制中：请按下新的组合键，按 Esc 取消。"
+                          : `默认 ${DEFAULT_SCREENSHOT_CAPTURE_HOTKEY}，保存后立即生效。`}
+                      </Typography.Text>
+                    </div>
+
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <Button
+                        className="!h-[32px] !px-3 !text-[12px]"
+                        disabled={
+                          hotkeyActionsDisabled ||
+                          hotkeyRecorderStatus === "saving"
+                        }
+                        loading={hotkeyRecorderStatus === "saving"}
+                        onClick={
+                          hotkeyRecorderStatus === "recording"
+                            ? cancelScreenshotHotkeyRecording
+                            : beginScreenshotHotkeyRecording
+                        }
+                        size="small"
+                        type={hotkeyRecorderStatus === "recording" ? "primary" : "default"}
+                      >
+                        {hotkeyRecorderStatus === "recording" ? "取消录制" : "录制热键"}
+                      </Button>
+                      <Button
+                        className="!h-[32px] !px-3 !text-[12px]"
+                        disabled={
+                          hotkeyActionsDisabled ||
+                          hotkeyRecorderStatus === "saving" ||
+                          screenshotCaptureHotkey === DEFAULT_SCREENSHOT_CAPTURE_HOTKEY
+                        }
+                        onClick={() => void resetScreenshotHotkeyToDefault()}
+                        size="small"
+                      >
+                        恢复默认
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-[0] border border-[#eef2f6] bg-white px-4 py-4">
                   <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
-                    终端模板管理
+                    语音输入热键（预留）
                   </Typography.Text>
                   <Typography.Text className="mt-1 block text-[11px] text-[#667085]">
-                    首页“新增命令”弹窗会直接读取这里维护的终端命令模板。当前已保存{" "}
-                    {terminalTemplates.length} 个模板。
+                    当前阶段已在后端预留 `voiceInputToggle / voiceInputHold` 接口字段，后续合并
+                    voiceType 语音输入能力时可直接接入。
                   </Typography.Text>
                 </div>
-                <Button
-                  className="!h-[32px] !px-3 !text-[12px]"
-                  disabled={!desktopRuntimeAvailable || preferencesQuery.isError}
-                  icon={<SettingOutlined />}
-                  onClick={openTemplateManager}
-                  size="small"
-                >
-                  管理模板
-                </Button>
               </div>
-            </div>
-
-            <div className="rounded-[0] border border-[#eef2f6] bg-white">
-              <div className="flex items-center justify-between gap-4 px-4 py-4">
-                <div className="min-w-0">
-                  <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
-                    编辑器管理
-                  </Typography.Text>
-                  <Typography.Text className="mt-1 block text-[11px] text-[#667085]">
-                    管理 VS Code / JetBrains 路径。支持从系统变量 PATH 自动检测。当前已配置{" "}
-                    {configuredEditorCount} 个编辑器。
-                  </Typography.Text>
-                </div>
-                <Button
-                  className="!h-[32px] !px-3 !text-[12px]"
-                  disabled={!desktopRuntimeAvailable || preferencesQuery.isError}
-                  icon={<SettingOutlined />}
-                  onClick={openEditorManager}
-                  size="small"
-                >
-                  管理编辑器
-                </Button>
-              </div>
-            </div>
-          </div>
+            )}
+          </>
         )}
       </div>
 
@@ -1612,6 +1884,79 @@ function resolveDetectedEditorPath(availability: AdapterAvailability): string | 
 
   const executablePath = availability.executablePath?.trim();
   return executablePath ? executablePath : null;
+}
+
+function keyboardEventToHotkeyToken(event: KeyboardEvent): string | null {
+  switch (event.code) {
+    case "ControlLeft":
+    case "ControlRight":
+      return "Ctrl";
+    case "AltLeft":
+    case "AltRight":
+      return "Alt";
+    case "ShiftLeft":
+    case "ShiftRight":
+      return "Shift";
+    case "MetaLeft":
+    case "MetaRight":
+      return "Super";
+    default:
+      break;
+  }
+
+  if (event.code.startsWith("Key") && event.code.length === 4) {
+    return event.code.slice(3);
+  }
+
+  if (event.code.startsWith("Digit") && event.code.length === 6) {
+    return event.code.slice(5);
+  }
+
+  const functionKeyMatch = event.code.match(/^F([1-9]|1[0-9]|2[0-4])$/);
+  if (functionKeyMatch) {
+    return functionKeyMatch[0];
+  }
+
+  return null;
+}
+
+function hotkeyTokenOrder(token: string) {
+  const fixedOrder: Record<string, number> = {
+    Ctrl: 10,
+    Alt: 20,
+    Shift: 30,
+    Super: 40,
+  };
+
+  const fixed = fixedOrder[token];
+  if (typeof fixed === "number") {
+    return fixed;
+  }
+
+  if (/^[A-Z]$/.test(token)) {
+    return 100 + token.charCodeAt(0);
+  }
+
+  if (/^[0-9]$/.test(token)) {
+    return 200 + token.charCodeAt(0);
+  }
+
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(token)) {
+    const sequence = Number.parseInt(token.slice(1), 10);
+    return 300 + sequence;
+  }
+
+  return 999;
+}
+
+function formatHotkeyTokens(tokens: Iterable<string>) {
+  return Array.from(new Set(tokens))
+    .sort((left, right) => hotkeyTokenOrder(left) - hotkeyTokenOrder(right))
+    .join("+");
+}
+
+function isHotkeyModifierToken(token: string) {
+  return HOTKEY_MODIFIER_TOKENS.has(token);
 }
 
 function createCustomEditorId() {

@@ -3,7 +3,7 @@ use tauri::State;
 use crate::{
     domain::{AppPreferences, CodexHomeDirectoryInfo, EditorPathDetectionResult},
     error::{AppError, CommandResponse},
-    services::PreferencesService,
+    services::{HotkeyService, PreferencesService},
 };
 
 #[tauri::command(rename_all = "camelCase")]
@@ -27,9 +27,10 @@ pub async fn get_app_preferences(
 pub async fn update_app_preferences(
     app_handle: tauri::AppHandle,
     preferences_service: State<'_, PreferencesService>,
+    hotkey_service: State<'_, HotkeyService>,
     input: AppPreferences,
 ) -> Result<CommandResponse<AppPreferences>, AppError> {
-    match preferences_service.update_preferences(&app_handle, input) {
+    match preferences_service.update_preferences(&app_handle, hotkey_service.inner(), input) {
         Ok(data) => {
             if let Err(error) = crate::app::refresh_tray_menu(&app_handle).await {
                 log::error!(

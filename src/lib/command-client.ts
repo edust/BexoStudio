@@ -4,18 +4,22 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AppPreferences,
   AppError,
+  CancelScreenshotSessionResult,
   CancelRestoreActionResult,
   CancelRestoreRunResult,
   CodexHomeDirectoryInfo,
+  CopyScreenshotSelectionResult,
   CreateSnapshotPayload,
   CodexProfileRecord,
   CommandResponse,
   DeleteResult,
   EditorPathDetectionResult,
+  HotkeyTriggerEvent,
   LaunchTaskRecord,
   OpenLogDirectoryResult,
   OpenWorkspaceInEditorResult,
   OpenWorkspaceTerminalResult,
+  SaveScreenshotSelectionResult,
   RunWorkspaceTerminalCommandResult,
   RunWorkspaceTerminalCommandsResult,
   RecentRestoreTarget,
@@ -25,7 +29,12 @@ import type {
   RestorePreviewPayload,
   RestoreRunDetail,
   RestoreRunSummary,
+  ScreenshotRenderedImageInput,
+  ScreenshotSelectionInput,
+  ScreenshotSessionUpdatedEvent,
+  ScreenshotSessionView,
   SnapshotRecord,
+  StartScreenshotSessionResult,
   StartRestoreDryRunPayload,
   StartRestoreRunPayload,
   UpdateSnapshotPayload,
@@ -144,6 +153,13 @@ export function openWorkspaceTerminal(workspaceId: string) {
   return invokeCommand<OpenWorkspaceTerminalResult>("open_workspace_terminal", { workspaceId });
 }
 
+export function openWorkspaceTerminalAtPath(workspaceId: string, targetPath?: string | null) {
+  return invokeCommand<OpenWorkspaceTerminalResult>("open_workspace_terminal_at_path", {
+    workspaceId,
+    targetPath: targetPath?.trim() ? targetPath.trim() : null,
+  });
+}
+
 export function openWorkspaceInEditor(workspaceId: string, editorKey: string) {
   return invokeCommand<OpenWorkspaceInEditorResult>("open_workspace_in_editor", {
     workspaceId,
@@ -217,6 +233,44 @@ export function updateSnapshot(input: UpdateSnapshotPayload) {
   return invokeCommand<SnapshotRecord>("update_snapshot", { input });
 }
 
+export function startScreenshotSession() {
+  return invokeCommand<StartScreenshotSessionResult>("start_screenshot_session");
+}
+
+export function getScreenshotSession() {
+  return invokeCommand<ScreenshotSessionView>("get_screenshot_session");
+}
+
+export function copyScreenshotSelection(
+  sessionId: string,
+  selection: ScreenshotSelectionInput,
+  renderedImage?: ScreenshotRenderedImageInput | null,
+) {
+  return invokeCommand<CopyScreenshotSelectionResult>("copy_screenshot_selection", {
+    sessionId,
+    selection,
+    renderedImage: renderedImage ?? null,
+  });
+}
+
+export function saveScreenshotSelection(
+  sessionId: string,
+  selection: ScreenshotSelectionInput,
+  filePath?: string | null,
+  renderedImage?: ScreenshotRenderedImageInput | null,
+) {
+  return invokeCommand<SaveScreenshotSelectionResult>("save_screenshot_selection", {
+    sessionId,
+    selection,
+    filePath: filePath?.trim() ? filePath.trim() : null,
+    renderedImage: renderedImage ?? null,
+  });
+}
+
+export function cancelScreenshotSession(sessionId: string) {
+  return invokeCommand<CancelScreenshotSessionResult>("cancel_screenshot_session", { sessionId });
+}
+
 export function previewRestore(input: RestorePreviewPayload) {
   return invokeCommand<RestorePreview>("preview_restore", { input });
 }
@@ -273,6 +327,30 @@ export async function listenToRestoreRunEvents(
   }
 
   return listen<RestoreRunEvent>("restore://run-event", (event) => {
+    handler(event.payload);
+  });
+}
+
+export async function listenToHotkeyTriggerEvents(
+  handler: (event: HotkeyTriggerEvent) => void,
+): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    desktopRuntimeRequired();
+  }
+
+  return listen<HotkeyTriggerEvent>("hotkey://trigger", (event) => {
+    handler(event.payload);
+  });
+}
+
+export async function listenToScreenshotSessionUpdatedEvents(
+  handler: (event: ScreenshotSessionUpdatedEvent) => void,
+): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    desktopRuntimeRequired();
+  }
+
+  return listen<ScreenshotSessionUpdatedEvent>("screenshot://session-updated", (event) => {
     handler(event.payload);
   });
 }

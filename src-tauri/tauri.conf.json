@@ -22,6 +22,25 @@
         "decorations": true,
         "fullscreen": false,
         "visible": true
+      },
+      {
+        "label": "screenshot_overlay",
+        "title": "Bexo Studio Screenshot",
+        "url": "index.html?overlay=screenshot",
+        "x": 0,
+        "y": 0,
+        "width": 1280,
+        "height": 720,
+        "minWidth": 640,
+        "minHeight": 360,
+        "resizable": false,
+        "decorations": false,
+        "transparent": false,
+        "fullscreen": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "focus": false
       }
     ],
     "security": {

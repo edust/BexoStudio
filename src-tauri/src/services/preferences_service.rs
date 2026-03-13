@@ -8,12 +8,14 @@ use std::{
 use chrono::Utc;
 use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_autostart::ManagerExt;
+use tauri_plugin_global_shortcut::Shortcut;
 use tauri_plugin_store::{Store, StoreExt};
 
 use crate::{
     adapters::{resolve_configured_executable, IdeAdapter, JetBrainsAdapter, VSCodeAdapter},
-    domain::{AppPreferences, EditorPathDetectionResult},
+    domain::{AppPreferences, EditorPathDetectionResult, HotkeyAction, HotkeyPreferences},
     error::{AppError, AppResult},
+    services::HotkeyService,
 };
 
 const PREFERENCES_STORE_PATH: &str = "settings/preferences.json";
@@ -50,12 +52,26 @@ impl PreferencesService {
     pub fn update_preferences<R: Runtime>(
         &self,
         app: &AppHandle<R>,
+        hotkey_service: &HotkeyService,
         input: AppPreferences,
     ) -> AppResult<AppPreferences> {
+        let previous_preferences = self.get_preferences()?;
         let validated = validate_preferences(input)?;
         sync_autostart_launch_at_login(app, validated.startup.launch_at_login)?;
+        hotkey_service.apply_preferences(app, &validated)?;
         let store = self.open_store(app)?;
-        self.write_store(&store, &validated)?;
+        if let Err(error) = self.write_store(&store, &validated) {
+            if let Err(rollback_error) =
+                hotkey_service.apply_preferences(app, &previous_preferences)
+            {
+                log::error!(
+                    target: "bexo::service::preferences",
+                    "hotkey rollback failed after store write error: {}",
+                    rollback_error
+                );
+            }
+            return Err(error);
+        }
         self.replace_cache(validated.clone())?;
         Ok(validated)
     }
@@ -288,6 +304,7 @@ fn validate_preferences(input: AppPreferences) -> AppResult<AppPreferences> {
         },
         workspace: validate_workspace_preferences(input.workspace)?,
         startup: validate_startup_preferences(input.startup)?,
+        hotkey: validate_hotkey_preferences(input.hotkey)?,
         tray: input.tray,
         diagnostics: input.diagnostics,
     })
@@ -333,6 +350,99 @@ fn validate_workspace_preferences(
     Ok(crate::domain::WorkspacePreferences {
         selected_workspace_ids,
     })
+}
+
+fn validate_hotkey_preferences(input: HotkeyPreferences) -> AppResult<HotkeyPreferences> {
+    let screenshot_capture = validate_hotkey_shortcut(
+        HotkeyAction::ScreenshotCapture,
+        input.screenshot_capture,
+        true,
+    )?
+    .unwrap_or_else(|| HotkeyPreferences::default().screenshot_capture);
+    let voice_input_toggle =
+        validate_hotkey_shortcut_option(HotkeyAction::VoiceInputToggle, input.voice_input_toggle)?;
+    let voice_input_hold =
+        validate_hotkey_shortcut_option(HotkeyAction::VoiceInputHold, input.voice_input_hold)?;
+
+    let mut seen_shortcuts: HashSet<String> = HashSet::new();
+    let mut ensure_unique = |action: HotkeyAction, shortcut: Option<&str>| -> AppResult<()> {
+        let Some(shortcut) = shortcut else {
+            return Ok(());
+        };
+
+        let normalized = shortcut.to_ascii_lowercase();
+        if !seen_shortcuts.insert(normalized) {
+            return Err(AppError::new(
+                "HOTKEY_DUPLICATE_SHORTCUT",
+                "热键冲突：不同动作不能使用同一组合键",
+            )
+            .with_detail("field", action.preference_field().to_string())
+            .with_detail("shortcut", shortcut.to_string()));
+        }
+
+        Ok(())
+    };
+
+    ensure_unique(
+        HotkeyAction::ScreenshotCapture,
+        Some(screenshot_capture.as_str()),
+    )?;
+    ensure_unique(
+        HotkeyAction::VoiceInputToggle,
+        voice_input_toggle.as_deref(),
+    )?;
+    ensure_unique(HotkeyAction::VoiceInputHold, voice_input_hold.as_deref())?;
+
+    Ok(HotkeyPreferences {
+        screenshot_capture,
+        voice_input_toggle,
+        voice_input_hold,
+    })
+}
+
+fn validate_hotkey_shortcut_option(
+    action: HotkeyAction,
+    value: Option<String>,
+) -> AppResult<Option<String>> {
+    let Some(raw) = value else {
+        return Ok(None);
+    };
+
+    validate_hotkey_shortcut(action, raw, false)
+}
+
+fn validate_hotkey_shortcut(
+    action: HotkeyAction,
+    value: String,
+    required: bool,
+) -> AppResult<Option<String>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        if required {
+            return Err(
+                AppError::new("HOTKEY_SHORTCUT_REQUIRED", "截图热键不能为空")
+                    .with_detail("field", action.preference_field().to_string()),
+            );
+        }
+
+        return Ok(None);
+    }
+
+    if trimmed.len() > 64 {
+        return Err(
+            AppError::new("HOTKEY_SHORTCUT_TOO_LONG", "热键长度不能超过 64 个字符")
+                .with_detail("field", action.preference_field().to_string()),
+        );
+    }
+
+    trimmed.parse::<Shortcut>().map_err(|error| {
+        AppError::new("HOTKEY_SHORTCUT_INVALID", "热键格式无效")
+            .with_detail("field", action.preference_field().to_string())
+            .with_detail("shortcut", trimmed.to_string())
+            .with_detail("reason", error.to_string())
+    })?;
+
+    Ok(Some(trimmed.to_string()))
 }
 
 fn validate_command_templates(

@@ -1,10 +1,11 @@
 import { App as AntApp, ConfigProvider, Empty, theme, type ThemeConfig } from "antd";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { type PropsWithChildren, useEffect, useMemo, useState } from "react";
-import { Toaster } from "sonner";
+import { Toaster, toast } from "sonner";
 import zhCN from "antd/locale/zh_CN";
 
 import { AppErrorBoundary } from "@/app/error-boundary";
+import { hasDesktopRuntime, listenToHotkeyTriggerEvents } from "@/lib/command-client";
 import { bootstrapDesktopRuntime } from "@/lib/tauri-runtime";
 import { createAppQueryClient } from "@/queries/query-client";
 import { useShellStore } from "@/stores/shell-store";
@@ -95,6 +96,45 @@ export function AppProviders({ children }: PropsWithChildren) {
   }, []);
 
   useEffect(() => {
+    if (!hasDesktopRuntime()) {
+      return;
+    }
+
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    void (async () => {
+      try {
+        const attached = await listenToHotkeyTriggerEvents((event) => {
+          if (event.action === "screenshot_capture") {
+            return;
+          }
+          const label = resolveHotkeyActionLabel(event.action);
+          toast.info(`${label}已触发`, {
+            description: event.shortcut,
+          });
+        });
+
+        if (disposed) {
+          attached();
+          return;
+        }
+
+        unlisten = attached;
+      } catch (error) {
+        console.error("Failed to listen hotkey trigger events", error);
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (typeof document === "undefined") {
       return;
     }
@@ -177,4 +217,17 @@ export function AppProviders({ children }: PropsWithChildren) {
       </ConfigProvider>
     </AppErrorBoundary>
   );
+}
+
+function resolveHotkeyActionLabel(action: string) {
+  switch (action) {
+    case "screenshot_capture":
+      return "截图热键";
+    case "voice_input_toggle":
+      return "语音输入切换热键";
+    case "voice_input_hold":
+      return "语音输入按住热键";
+    default:
+      return "热键";
+  }
 }

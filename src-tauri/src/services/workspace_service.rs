@@ -1,4 +1,7 @@
-use std::{path::Path, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use crate::{
     adapters::{
@@ -78,11 +81,17 @@ impl WorkspaceService {
         workspace_id: String,
         preferences_service: &PreferencesService,
     ) -> AppResult<OpenWorkspaceTerminalResult> {
-        let workspace_id = workspace_id.trim().to_string();
-        if workspace_id.is_empty() {
-            return Err(AppError::validation("workspaceId is required"));
-        }
+        self.open_workspace_terminal_at_path(workspace_id, None, preferences_service)
+            .await
+    }
 
+    pub async fn open_workspace_terminal_at_path(
+        &self,
+        workspace_id: String,
+        target_path: Option<String>,
+        preferences_service: &PreferencesService,
+    ) -> AppResult<OpenWorkspaceTerminalResult> {
+        let workspace_id = require_non_empty_workspace_id(workspace_id)?;
         let workspace = self
             .database
             .read("list_workspaces_for_terminal_launch", list_workspaces)
@@ -93,42 +102,17 @@ impl WorkspaceService {
                 AppError::new("WORKSPACE_NOT_FOUND", "workspace was not found")
                     .with_detail("workspaceId", workspace_id.clone())
             })?;
-
-        let workspace_path = resolve_workspace_terminal_path(&workspace)?;
-        let preferences = preferences_service.get_preferences()?;
-        let terminal_adapter = WindowsTerminalAdapter;
-        let availability =
-            terminal_adapter.detect(preferences.terminal.windows_terminal_path.as_deref());
-
-        if !availability.available {
-            let error_code =
-                if availability.source == "user_config" && availability.status == "invalid" {
-                    "WINDOWS_TERMINAL_PATH_INVALID"
-                } else {
-                    "TERMINAL_ADAPTER_UNAVAILABLE"
-                };
-            let error_message = if error_code == "WINDOWS_TERMINAL_PATH_INVALID" {
-                "configured Windows Terminal path is invalid"
-            } else {
-                "Windows Terminal is not available on this machine"
-            };
-
-            return Err(AppError::new(error_code, error_message)
-                .with_detail("adapter", "windows_terminal")
-                .with_detail("workspaceId", workspace.id.clone())
-                .with_detail("workspacePath", workspace_path)
-                .with_detail("message", availability.message));
-        }
-
-        let executable_path = availability.executable_path.ok_or_else(|| {
-            AppError::new(
-                "TERMINAL_ADAPTER_UNAVAILABLE",
-                "Windows Terminal executable path is missing",
-            )
-            .with_detail("adapter", "windows_terminal")
-            .with_detail("workspaceId", workspace.id.clone())
-        })?;
-
+        let workspace_root_path = resolve_workspace_terminal_path(&workspace)?;
+        let workspace_root_canonical =
+            canonicalize_existing_directory(&workspace_root_path, "INVALID_WORKSPACE_PATH")
+                .map_err(|error| error.with_detail("workspaceId", workspace.id.clone()))?;
+        let workspace_path = resolve_workspace_terminal_target_path(
+            &workspace,
+            &workspace_root_canonical,
+            target_path,
+        )?;
+        let (terminal_adapter, executable_path) =
+            resolve_workspace_terminal_adapter(preferences_service, &workspace, &workspace_path)?;
         let launch_command = terminal_adapter.build_launch_plan(
             &executable_path,
             TerminalLaunchInput {
@@ -371,6 +355,135 @@ fn resolve_workspace_terminal_path(workspace: &WorkspaceRecord) -> AppResult<Str
 
     ensure_absolute_directory(&raw_path, "INVALID_WORKSPACE_PATH")
         .map_err(|error| error.with_detail("workspaceId", workspace.id.clone()))
+}
+
+fn canonicalize_existing_path(path: &Path, error_code: &str) -> AppResult<PathBuf> {
+    std::fs::canonicalize(path).map_err(|error| {
+        AppError::new(error_code, "failed to canonicalize path")
+            .with_detail("path", path.display().to_string())
+            .with_detail("reason", error.to_string())
+    })
+}
+
+fn canonicalize_existing_directory(path: &str, error_code: &str) -> AppResult<PathBuf> {
+    let normalized = ensure_absolute_directory(path, error_code)?;
+    canonicalize_existing_path(Path::new(&normalized), error_code)
+}
+
+fn resolve_workspace_terminal_target_path(
+    workspace: &WorkspaceRecord,
+    workspace_root: &Path,
+    target_path: Option<String>,
+) -> AppResult<String> {
+    let requested_target = target_path.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    });
+    let Some(requested_target) = requested_target else {
+        return Ok(workspace_root.display().to_string());
+    };
+
+    let requested_path = Path::new(&requested_target);
+    if !requested_path.is_absolute() {
+        return Err(AppError::new(
+            "INVALID_RESOURCE_PATH",
+            "resource path must be an absolute path",
+        )
+        .with_detail("workspaceId", workspace.id.clone())
+        .with_detail("targetPath", requested_target));
+    }
+
+    let canonical_target = canonicalize_existing_path(requested_path, "INVALID_RESOURCE_PATH")
+        .map_err(|error| {
+            error
+                .with_detail("workspaceId", workspace.id.clone())
+                .with_detail("targetPath", requested_target.clone())
+        })?;
+    let metadata = std::fs::metadata(&canonical_target).map_err(|error| {
+        AppError::new(
+            "INVALID_RESOURCE_PATH",
+            "failed to inspect target resource path",
+        )
+        .with_detail("workspaceId", workspace.id.clone())
+        .with_detail("targetPath", requested_target.clone())
+        .with_detail("reason", error.to_string())
+    })?;
+    let target_directory = if metadata.is_dir() {
+        canonical_target
+    } else if metadata.is_file() {
+        canonical_target
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| {
+                AppError::new(
+                    "INVALID_RESOURCE_PATH",
+                    "resource file path does not have a parent directory",
+                )
+                .with_detail("workspaceId", workspace.id.clone())
+                .with_detail("targetPath", requested_target.clone())
+            })?
+    } else {
+        return Err(AppError::new(
+            "INVALID_RESOURCE_PATH",
+            "resource path must be a file or directory",
+        )
+        .with_detail("workspaceId", workspace.id.clone())
+        .with_detail("targetPath", requested_target));
+    };
+
+    if !target_directory.starts_with(workspace_root) {
+        return Err(AppError::new(
+            "RESOURCE_PATH_OUT_OF_SCOPE",
+            "resource path is outside workspace root",
+        )
+        .with_detail("workspaceId", workspace.id.clone())
+        .with_detail("workspaceRoot", workspace_root.display().to_string())
+        .with_detail("targetPath", target_directory.display().to_string()));
+    }
+
+    Ok(target_directory.display().to_string())
+}
+
+fn resolve_workspace_terminal_adapter(
+    preferences_service: &PreferencesService,
+    workspace: &WorkspaceRecord,
+    workspace_path: &str,
+) -> AppResult<(WindowsTerminalAdapter, String)> {
+    let preferences = preferences_service.get_preferences()?;
+    let terminal_adapter = WindowsTerminalAdapter;
+    let availability =
+        terminal_adapter.detect(preferences.terminal.windows_terminal_path.as_deref());
+    if !availability.available {
+        let error_code = if availability.source == "user_config" && availability.status == "invalid"
+        {
+            "WINDOWS_TERMINAL_PATH_INVALID"
+        } else {
+            "TERMINAL_ADAPTER_UNAVAILABLE"
+        };
+        let error_message = if error_code == "WINDOWS_TERMINAL_PATH_INVALID" {
+            "configured Windows Terminal path is invalid"
+        } else {
+            "Windows Terminal is not available on this machine"
+        };
+
+        return Err(AppError::new(error_code, error_message)
+            .with_detail("adapter", "windows_terminal")
+            .with_detail("workspaceId", workspace.id.clone())
+            .with_detail("workspacePath", workspace_path.to_string())
+            .with_detail("message", availability.message));
+    }
+
+    let executable_path = availability.executable_path.ok_or_else(|| {
+        AppError::new(
+            "TERMINAL_ADAPTER_UNAVAILABLE",
+            "Windows Terminal executable path is missing",
+        )
+        .with_detail("adapter", "windows_terminal")
+        .with_detail("workspaceId", workspace.id.clone())
+        .with_detail("workspacePath", workspace_path.to_string())
+    })?;
+
+    Ok((terminal_adapter, executable_path))
 }
 
 fn require_non_empty_workspace_id(workspace_id: String) -> AppResult<String> {
@@ -949,6 +1062,7 @@ mod tests {
             ide: IdePreferences::default(),
             workspace: WorkspacePreferences::default(),
             startup: crate::domain::StartupPreferences::default(),
+            hotkey: crate::domain::HotkeyPreferences::default(),
             tray: TrayPreferences::default(),
             diagnostics: DiagnosticsPreferences::default(),
         });
@@ -973,6 +1087,78 @@ mod tests {
         assert!(terminal_payload.contains("new-tab"));
         assert!(terminal_payload.contains("-d"));
         assert!(terminal_payload.contains(&workspace_directory.display().to_string()));
+    }
+
+    #[tokio::test]
+    async fn open_workspace_terminal_at_path_uses_parent_directory_for_file_target() {
+        let database =
+            crate::persistence::Database::new(unique_db_path("open-workspace-terminal-at-path"));
+        database.initialize().await.expect("db init");
+
+        let service = WorkspaceService::new(database);
+        let workspace_directory = env::temp_dir().join(format!(
+            "bexo-open-workspace-terminal-at-path-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let nested_directory = workspace_directory.join("src");
+        fs::create_dir_all(&nested_directory).expect("create nested workspace directory");
+        let file_path = nested_directory.join("main.ts");
+        fs::write(&file_path, "export const ready = true;\n").expect("write file target");
+
+        let shim_directory = env::temp_dir().join(format!(
+            "bexo-open-terminal-at-path-shim-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&shim_directory).expect("create shim directory");
+        let log_path = shim_directory.join("wt.log");
+        fs::write(
+            shim_directory.join("wt.cmd"),
+            format!(
+                "@echo off\r\necho ARGS=%*>>\"{}\"\r\nexit /b 0\r\n",
+                log_path.display()
+            ),
+        )
+        .expect("write wt shim");
+
+        let preferences_service = crate::services::PreferencesService::new();
+        preferences_service.hydrate_for_test(AppPreferences {
+            terminal: TerminalPreferences {
+                windows_terminal_path: Some(shim_directory.display().to_string()),
+                codex_cli_path: None,
+                command_templates: Vec::new(),
+            },
+            ide: IdePreferences::default(),
+            workspace: WorkspacePreferences::default(),
+            startup: crate::domain::StartupPreferences::default(),
+            hotkey: crate::domain::HotkeyPreferences::default(),
+            tray: TrayPreferences::default(),
+            diagnostics: DiagnosticsPreferences::default(),
+        });
+
+        let workspace = service
+            .register_workspace_folder(workspace_directory.display().to_string())
+            .await
+            .expect("register workspace folder");
+
+        let result = service
+            .open_workspace_terminal_at_path(
+                workspace.id.clone(),
+                Some(file_path.display().to_string()),
+                &preferences_service,
+            )
+            .await
+            .expect("open workspace terminal by file target");
+
+        assert_eq!(result.workspace_id, workspace.id);
+        assert_eq!(
+            result.workspace_path,
+            nested_directory.display().to_string()
+        );
+
+        let terminal_payload = fs::read_to_string(&log_path).expect("read terminal log");
+        assert!(terminal_payload.contains("new-tab"));
+        assert!(terminal_payload.contains("-d"));
+        assert!(terminal_payload.contains(&nested_directory.display().to_string()));
     }
 
     #[tokio::test]
@@ -1010,6 +1196,7 @@ mod tests {
             },
             workspace: WorkspacePreferences::default(),
             startup: crate::domain::StartupPreferences::default(),
+            hotkey: crate::domain::HotkeyPreferences::default(),
             tray: TrayPreferences::default(),
             diagnostics: DiagnosticsPreferences::default(),
         });

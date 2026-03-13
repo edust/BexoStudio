@@ -110,6 +110,29 @@ pub async fn open_workspace_terminal(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn open_workspace_terminal_at_path(
+    workspace_service: State<'_, WorkspaceService>,
+    preferences_service: State<'_, PreferencesService>,
+    workspace_id: String,
+    target_path: Option<String>,
+) -> Result<CommandResponse<OpenWorkspaceTerminalResult>, AppError> {
+    match workspace_service
+        .open_workspace_terminal_at_path(workspace_id, target_path, &preferences_service)
+        .await
+    {
+        Ok(data) => Ok(CommandResponse::success(data)),
+        Err(error) => {
+            log::error!(
+                target: "bexo::command::workspace",
+                "open_workspace_terminal_at_path failed: {}",
+                error
+            );
+            Ok(CommandResponse::failure(error))
+        }
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn open_workspace_in_editor(
     workspace_service: State<'_, WorkspaceService>,
     preferences_service: State<'_, PreferencesService>,

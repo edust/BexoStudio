@@ -13,7 +13,13 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use crate::error::{AppError, AppResult};
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Debug, Clone)]
 pub struct LaunchCommand {
@@ -431,6 +437,7 @@ fn launch_blocking(command: LaunchCommand) -> AppResult<ProcessLaunchResult> {
     for (key, value) in &command.envs {
         process.env(key, value);
     }
+    configure_spawn_window_behavior(&mut process, &program);
 
     let mut child = process.spawn().map_err(|error| {
         AppError::new("PROCESS_SPAWN_FAILED", "failed to spawn external command")
@@ -529,6 +536,19 @@ fn launch_blocking(command: LaunchCommand) -> AppResult<ProcessLaunchResult> {
     }
 }
 
+fn configure_spawn_window_behavior(process: &mut Command, program: &Path) {
+    #[cfg(windows)]
+    {
+        let file_name = program
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(|value| value.to_ascii_lowercase());
+        if matches!(file_name.as_deref(), Some("cmd.exe" | "cmd")) {
+            process.creation_flags(CREATE_NO_WINDOW);
+        }
+    }
+}
+
 fn resolve_program(executable_path: &Path) -> (PathBuf, Vec<String>) {
     let extension = executable_path
         .extension()
@@ -555,7 +575,12 @@ fn process_cancelled_error(executable_path: &Path, process_id: Option<u32>) -> A
 }
 
 fn terminate_process_tree(pid: u32) -> AppResult<bool> {
-    let output = Command::new("taskkill")
+    let mut command = Command::new("taskkill");
+    #[cfg(windows)]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = command
         .args(["/PID", &pid.to_string(), "/T", "/F"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

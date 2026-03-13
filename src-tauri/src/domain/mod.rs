@@ -1,5 +1,6 @@
 mod adapter;
 mod codex_profile;
+mod hotkey;
 mod launch_task;
 mod preferences;
 mod project;
@@ -7,6 +8,7 @@ mod resource_browser;
 mod restore_event;
 mod restore_run;
 mod restore_run_task;
+mod screenshot;
 mod snapshot;
 mod validation;
 mod workspace;
@@ -19,6 +21,7 @@ pub use adapter::{
     RunWorkspaceTerminalCommandResult, RunWorkspaceTerminalCommandsResult, StartRestoreRunInput,
 };
 pub use codex_profile::{CodexProfileRecord, UpsertCodexProfileInput};
+pub use hotkey::{HotkeyAction, HotkeyTriggerEvent, HOTKEY_TRIGGER_EVENT_NAME};
 pub use launch_task::{
     validate_launch_task_args, validate_launch_task_command, validate_launch_task_id,
     validate_launch_task_retry_policy, validate_launch_task_timeout, validate_launch_task_type,
@@ -28,8 +31,8 @@ pub use launch_task::{
 #[allow(unused_imports)]
 pub use preferences::{
     AppPreferences, CodexHomeDirectoryInfo, CustomEditorPreference, DiagnosticsPreferences,
-    IdePreferences, StartupPreferences, TerminalCommandTemplate, TerminalPreferences,
-    TrayPreferences, WorkspacePreferences,
+    HotkeyPreferences, IdePreferences, StartupPreferences, TerminalCommandTemplate,
+    TerminalPreferences, TrayPreferences, WorkspacePreferences,
 };
 pub use project::{ProjectRecord, UpsertProjectInput};
 pub use resource_browser::{
@@ -43,6 +46,12 @@ pub use restore_run::{
 };
 pub use restore_run_task::{
     RestoreActionPlan, RestoreProjectPlan, RestoreRunProjectRecord, RestoreRunTaskRecord,
+};
+pub use screenshot::{
+    CancelScreenshotSessionResult, CopyScreenshotSelectionResult, SaveScreenshotSelectionResult,
+    ScreenshotRenderedImageInput, ScreenshotSelectionInput, ScreenshotSessionUpdatedEvent,
+    ScreenshotSessionView, StartScreenshotSessionResult, SCREENSHOT_OVERLAY_WINDOW_LABEL,
+    SCREENSHOT_SESSION_UPDATED_EVENT_NAME,
 };
 pub use snapshot::{
     CreateSnapshotInput, SnapshotCodexProfilePayload, SnapshotPayload, SnapshotProjectPayload,

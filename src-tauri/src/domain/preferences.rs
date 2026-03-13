@@ -7,6 +7,7 @@ pub struct AppPreferences {
     pub ide: IdePreferences,
     pub workspace: WorkspacePreferences,
     pub startup: StartupPreferences,
+    pub hotkey: HotkeyPreferences,
     pub tray: TrayPreferences,
     pub diagnostics: DiagnosticsPreferences,
 }
@@ -63,6 +64,29 @@ pub struct WorkspacePreferences {
 pub struct StartupPreferences {
     pub launch_at_login: bool,
     pub start_silently: bool,
+}
+
+fn default_screenshot_capture_hotkey() -> String {
+    "Ctrl+Alt+A".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HotkeyPreferences {
+    #[serde(default = "default_screenshot_capture_hotkey")]
+    pub screenshot_capture: String,
+    pub voice_input_toggle: Option<String>,
+    pub voice_input_hold: Option<String>,
+}
+
+impl Default for HotkeyPreferences {
+    fn default() -> Self {
+        Self {
+            screenshot_capture: default_screenshot_capture_hotkey(),
+            voice_input_toggle: None,
+            voice_input_hold: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

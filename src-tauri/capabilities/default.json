@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main Bexo Studio window",
-  "windows": ["main"],
+  "windows": ["main", "screenshot_overlay"],
   "permissions": [
     "core:default",
     "autostart:default",

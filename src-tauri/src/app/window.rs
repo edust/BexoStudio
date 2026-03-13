@@ -1,8 +1,29 @@
 use tauri::{Manager, PhysicalPosition, Position, Runtime, WebviewWindow, Window, WindowEvent};
 
-use crate::services::PreferencesService;
+use crate::{
+    domain::SCREENSHOT_OVERLAY_WINDOW_LABEL,
+    services::{PreferencesService, ScreenshotService},
+};
 
 pub fn handle_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
+    if window.label() == SCREENSHOT_OVERLAY_WINDOW_LABEL {
+        if let WindowEvent::CloseRequested { .. } = event {
+            match window
+                .state::<ScreenshotService>()
+                .clear_active_session(None)
+            {
+                Ok(_) => {}
+                Err(error) => {
+                    log::warn!(
+                        target: "bexo::window",
+                        "clear screenshot session on overlay close failed: {error}"
+                    );
+                }
+            }
+        }
+        return;
+    }
+
     if window.label() != "main" {
         return;
     }

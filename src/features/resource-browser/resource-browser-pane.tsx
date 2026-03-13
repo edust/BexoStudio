@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   CaretRightOutlined,
+  ConsoleSqlOutlined,
   CopyOutlined,
   EyeOutlined,
   FileOutlined,
@@ -46,6 +47,7 @@ import {
   getErrorSummary,
   getWorkspaceResourceGitStatuses,
   listWorkspaceResourceChildren,
+  openWorkspaceTerminalAtPath,
 } from "@/lib/command-client";
 import {
   clamp,
@@ -1248,6 +1250,7 @@ export function ResourceBrowserPane({
   const contextMenuItems = useMemo<MenuProps["items"]>(
     () => [
       { key: "reveal", icon: <EyeOutlined />, label: "在资源管理器中显示" },
+      { key: "open-terminal", icon: <ConsoleSqlOutlined />, label: "在这里打开终端" },
       { key: "copy", icon: <CopyOutlined />, label: "复制绝对路径" },
     ],
     [],
@@ -1280,6 +1283,18 @@ export function ResourceBrowserPane({
               void handleRevealPath(normalizedPath);
               return;
             }
+            if (key === "open-terminal") {
+              void openWorkspaceTerminalAtPath(workspaceId, normalizedPath)
+                .then((result) => {
+                  toast.success("已打开终端", {
+                    description: result.workspacePath,
+                  });
+                })
+                .catch((error) => {
+                  toast.error(getErrorSummary(error).message);
+                });
+              return;
+            }
             if (key === "copy") {
               void copyTextToClipboard(normalizedPath, "选中资源为空")
                 .then(() => {
@@ -1310,6 +1325,7 @@ export function ResourceBrowserPane({
       handleToggleExpand,
       loadingPaths,
       selectedPaths,
+      workspaceId,
     ],
   );
 

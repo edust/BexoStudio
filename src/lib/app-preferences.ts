@@ -18,6 +18,11 @@ export const defaultAppPreferences: AppPreferences = {
     launchAtLogin: false,
     startSilently: false,
   },
+  hotkey: {
+    screenshotCapture: "Ctrl+Alt+A",
+    voiceInputToggle: null,
+    voiceInputHold: null,
+  },
   tray: {
     closeToTray: true,
     showRecentWorkspaces: true,

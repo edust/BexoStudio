@@ -4,5 +4,6 @@ pub mod launch_task;
 pub mod preferences;
 pub mod resource_browser;
 pub mod restore;
+pub mod screenshot;
 pub mod snapshot;
 pub mod workspace;
