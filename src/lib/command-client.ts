@@ -31,6 +31,7 @@ import type {
   RestoreRunSummary,
   ScreenshotRenderedImageInput,
   ScreenshotSelectionInput,
+  ScreenshotSelectionRenderView,
   ScreenshotSessionUpdatedEvent,
   ScreenshotSessionView,
   SnapshotRecord,
@@ -239,6 +240,30 @@ export function startScreenshotSession() {
 
 export function getScreenshotSession() {
   return invokeCommand<ScreenshotSessionView>("get_screenshot_session");
+}
+
+export async function getScreenshotPreviewRgba(sessionId: string) {
+  if (!isTauri()) {
+    desktopRuntimeRequired();
+  }
+
+  try {
+    return await invoke<Uint8Array | ArrayBuffer | number[]>("get_screenshot_preview_rgba", {
+      sessionId,
+    });
+  } catch (error) {
+    throw normalizeUnknownError(error);
+  }
+}
+
+export function getScreenshotSelectionRender(
+  sessionId: string,
+  selection: ScreenshotSelectionInput,
+) {
+  return invokeCommand<ScreenshotSelectionRenderView>("get_screenshot_selection_render", {
+    sessionId,
+    selection,
+  });
 }
 
 export function copyScreenshotSelection(

@@ -44,8 +44,10 @@ pub async fn update_app_preferences(
         Err(error) => {
             log::error!(
                 target: "bexo::command::preferences",
-                "update_app_preferences failed: {}",
-                error
+                "update_app_preferences failed code={} message={} details={:?}",
+                error.code.as_str(),
+                error.message.as_str(),
+                error.details.as_ref()
             );
             Ok(CommandResponse::failure(error))
         }

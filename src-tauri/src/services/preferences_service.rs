@@ -8,15 +8,21 @@ use std::{
 use chrono::Utc;
 use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_autostart::ManagerExt;
-use tauri_plugin_global_shortcut::Shortcut;
 use tauri_plugin_store::{Store, StoreExt};
 
 use crate::{
     adapters::{resolve_configured_executable, IdeAdapter, JetBrainsAdapter, VSCodeAdapter},
-    domain::{AppPreferences, EditorPathDetectionResult, HotkeyAction, HotkeyPreferences},
+    domain::{
+        AppPreferences, EditorPathDetectionResult, HotkeyAction, HotkeyPreferences,
+        ScreenshotToolHotkeyPreferences, DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
+        EARLIER_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY, LEGACY_SCREENSHOT_CAPTURE_HOTKEY,
+        PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
+    },
     error::{AppError, AppResult},
     services::HotkeyService,
 };
+
+use super::windows_hook_hotkey::classify_supported_shortcut;
 
 const PREFERENCES_STORE_PATH: &str = "settings/preferences.json";
 const PREFERENCES_STORE_KEY: &str = "appPreferences";
@@ -150,13 +156,28 @@ impl PreferencesService {
 
     fn load_or_seed_store<R: Runtime>(&self, store: &Store<R>) -> AppResult<AppPreferences> {
         match store.get(PREFERENCES_STORE_KEY) {
-            Some(value) => serde_json::from_value::<AppPreferences>(value).map_err(|error| {
-                AppError::new(
-                    "PREFERENCES_PARSE_FAILED",
-                    "failed to parse persisted app preferences",
-                )
-                .with_detail("reason", error.to_string())
-            }),
+            Some(value) => {
+                let parsed = serde_json::from_value::<AppPreferences>(value).map_err(|error| {
+                    AppError::new(
+                        "PREFERENCES_PARSE_FAILED",
+                        "failed to parse persisted app preferences",
+                    )
+                    .with_detail("reason", error.to_string())
+                })?;
+                let migrated = migrate_legacy_preferences(parsed);
+                let repaired = repair_invalid_preferences(migrated.preferences);
+
+                if migrated.changed || repaired.changed {
+                    log::info!(
+                        target: "bexo::service::preferences",
+                        "normalized persisted hotkey preferences to {}",
+                        DEFAULT_SCREENSHOT_CAPTURE_HOTKEY
+                    );
+                    self.write_store(store, &repaired.preferences)?;
+                }
+
+                Ok(repaired.preferences)
+            }
             None => {
                 let defaults = AppPreferences::default();
                 self.write_store(store, &defaults)?;
@@ -184,6 +205,334 @@ impl PreferencesService {
                 .with_detail("reason", error.to_string())
         })
     }
+}
+
+#[derive(Debug)]
+struct PreferenceMigrationResult {
+    preferences: AppPreferences,
+    changed: bool,
+}
+
+#[derive(Debug)]
+struct PreferenceRepairResult {
+    preferences: AppPreferences,
+    changed: bool,
+}
+
+fn migrate_legacy_preferences(mut preferences: AppPreferences) -> PreferenceMigrationResult {
+    let trimmed = preferences.hotkey.screenshot_capture.trim();
+    if trimmed.eq_ignore_ascii_case(LEGACY_SCREENSHOT_CAPTURE_HOTKEY)
+        || trimmed.eq_ignore_ascii_case(PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY)
+        || trimmed.eq_ignore_ascii_case(EARLIER_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY)
+    {
+        preferences.hotkey.screenshot_capture = DEFAULT_SCREENSHOT_CAPTURE_HOTKEY.to_string();
+        return PreferenceMigrationResult {
+            preferences,
+            changed: true,
+        };
+    }
+
+    PreferenceMigrationResult {
+        preferences,
+        changed: false,
+    }
+}
+
+fn repair_invalid_preferences(mut preferences: AppPreferences) -> PreferenceRepairResult {
+    let repaired_hotkeys = sanitize_hotkey_preferences(preferences.hotkey);
+    preferences.hotkey = repaired_hotkeys.preferences;
+
+    PreferenceRepairResult {
+        preferences,
+        changed: repaired_hotkeys.changed,
+    }
+}
+
+#[derive(Debug)]
+struct HotkeyPreferenceRepairResult {
+    preferences: HotkeyPreferences,
+    changed: bool,
+}
+
+fn sanitize_hotkey_preferences(input: HotkeyPreferences) -> HotkeyPreferenceRepairResult {
+    let defaults = HotkeyPreferences::default();
+    let mut changed = false;
+
+    let input_voice_toggle = input.voice_input_toggle.clone();
+    let input_voice_hold = input.voice_input_hold.clone();
+
+    let mut screenshot_capture = sanitize_required_hotkey_shortcut(
+        HotkeyAction::ScreenshotCapture,
+        input.screenshot_capture,
+        defaults.screenshot_capture.as_str(),
+        &mut changed,
+    );
+    let voice_input_toggle = sanitize_optional_hotkey_shortcut(
+        HotkeyAction::VoiceInputToggle,
+        input.voice_input_toggle,
+        &mut changed,
+    );
+    let voice_input_hold = sanitize_optional_hotkey_shortcut(
+        HotkeyAction::VoiceInputHold,
+        input.voice_input_hold,
+        &mut changed,
+    );
+    let mut screenshot_tools =
+        sanitize_screenshot_tool_hotkeys(input.screenshot_tools, &mut changed);
+
+    if screenshot_tool_conflicts_with_capture(&screenshot_tools, screenshot_capture.as_str()) {
+        screenshot_capture = defaults.screenshot_capture.clone();
+        changed = true;
+    }
+
+    screenshot_tools = deduplicate_screenshot_tool_hotkeys(screenshot_tools, &mut changed);
+
+    let mut repaired = HotkeyPreferences {
+        screenshot_capture,
+        screenshot_tools,
+        voice_input_toggle,
+        voice_input_hold,
+    };
+
+    repaired.voice_input_toggle = repaired
+        .voice_input_toggle
+        .take()
+        .filter(|shortcut| !shortcut.eq_ignore_ascii_case(repaired.screenshot_capture.as_str()));
+    if repaired.voice_input_toggle.is_none() && input_voice_toggle.is_some() {
+        changed = true;
+    }
+
+    repaired.voice_input_hold = repaired.voice_input_hold.take().filter(|shortcut| {
+        !shortcut.eq_ignore_ascii_case(repaired.screenshot_capture.as_str())
+            && repaired
+                .voice_input_toggle
+                .as_deref()
+                .map(|toggle| !shortcut.eq_ignore_ascii_case(toggle))
+                .unwrap_or(true)
+    });
+    if repaired.voice_input_hold.is_none() && input_voice_hold.is_some() {
+        changed = true;
+    }
+
+    if let Err(error) = validate_hotkey_preferences(repaired.clone()) {
+        log::warn!(
+            target: "bexo::service::preferences",
+            "failed to preserve persisted hotkeys during repair, fallback to defaults reason={}",
+            error
+        );
+        return HotkeyPreferenceRepairResult {
+            preferences: defaults,
+            changed: true,
+        };
+    }
+
+    HotkeyPreferenceRepairResult {
+        preferences: repaired,
+        changed,
+    }
+}
+
+fn sanitize_required_hotkey_shortcut(
+    action: HotkeyAction,
+    value: String,
+    fallback: &str,
+    changed: &mut bool,
+) -> String {
+    match validate_hotkey_shortcut(action, value.clone(), true) {
+        Ok(Some(validated)) => validated,
+        Ok(None) => fallback.to_string(),
+        Err(error) => {
+            log::warn!(
+                target: "bexo::service::preferences",
+                "repair required hotkey action={} shortcut={} reason={}",
+                action.key(),
+                value,
+                error
+            );
+            *changed = true;
+            fallback.to_string()
+        }
+    }
+}
+
+fn sanitize_optional_hotkey_shortcut(
+    action: HotkeyAction,
+    value: Option<String>,
+    changed: &mut bool,
+) -> Option<String> {
+    let Some(raw) = value else {
+        return None;
+    };
+
+    match validate_hotkey_shortcut(action, raw.clone(), false) {
+        Ok(validated) => validated,
+        Err(error) => {
+            log::warn!(
+                target: "bexo::service::preferences",
+                "repair optional hotkey action={} shortcut={} reason={}",
+                action.key(),
+                raw,
+                error
+            );
+            *changed = true;
+            None
+        }
+    }
+}
+
+fn sanitize_screenshot_tool_hotkeys(
+    input: ScreenshotToolHotkeyPreferences,
+    changed: &mut bool,
+) -> ScreenshotToolHotkeyPreferences {
+    let defaults = ScreenshotToolHotkeyPreferences::default();
+
+    ScreenshotToolHotkeyPreferences {
+        select: sanitize_screenshot_tool_hotkey_shortcut(
+            "hotkey.screenshotTools.select",
+            input.select,
+            defaults.select.as_str(),
+            "选区工具",
+            changed,
+        ),
+        line: sanitize_screenshot_tool_hotkey_shortcut(
+            "hotkey.screenshotTools.line",
+            input.line,
+            defaults.line.as_str(),
+            "线条工具",
+            changed,
+        ),
+        rect: sanitize_screenshot_tool_hotkey_shortcut(
+            "hotkey.screenshotTools.rect",
+            input.rect,
+            defaults.rect.as_str(),
+            "矩形工具",
+            changed,
+        ),
+        ellipse: sanitize_screenshot_tool_hotkey_shortcut(
+            "hotkey.screenshotTools.ellipse",
+            input.ellipse,
+            defaults.ellipse.as_str(),
+            "圆形工具",
+            changed,
+        ),
+        arrow: sanitize_screenshot_tool_hotkey_shortcut(
+            "hotkey.screenshotTools.arrow",
+            input.arrow,
+            defaults.arrow.as_str(),
+            "箭头工具",
+            changed,
+        ),
+    }
+}
+
+fn sanitize_screenshot_tool_hotkey_shortcut(
+    field: &str,
+    value: String,
+    fallback: &str,
+    label: &str,
+    changed: &mut bool,
+) -> String {
+    match validate_screenshot_tool_hotkey_shortcut(field, value.clone(), label) {
+        Ok(validated) => validated,
+        Err(error) => {
+            log::warn!(
+                target: "bexo::service::preferences",
+                "repair screenshot tool hotkey field={} shortcut={} reason={}",
+                field,
+                value,
+                error
+            );
+            *changed = true;
+            fallback.to_string()
+        }
+    }
+}
+
+fn screenshot_tool_conflicts_with_capture(
+    tools: &ScreenshotToolHotkeyPreferences,
+    screenshot_capture: &str,
+) -> bool {
+    let capture = screenshot_capture.to_ascii_lowercase();
+    [
+        tools.select.as_str(),
+        tools.line.as_str(),
+        tools.rect.as_str(),
+        tools.ellipse.as_str(),
+        tools.arrow.as_str(),
+    ]
+    .iter()
+    .any(|shortcut| shortcut.to_ascii_lowercase() == capture)
+}
+
+fn deduplicate_screenshot_tool_hotkeys(
+    mut tools: ScreenshotToolHotkeyPreferences,
+    changed: &mut bool,
+) -> ScreenshotToolHotkeyPreferences {
+    let defaults = ScreenshotToolHotkeyPreferences::default();
+    let default_candidates = [
+        defaults.select.as_str(),
+        defaults.line.as_str(),
+        defaults.rect.as_str(),
+        defaults.ellipse.as_str(),
+        defaults.arrow.as_str(),
+    ];
+    let mut seen = HashSet::new();
+
+    tools.select = reserve_unique_screenshot_tool_shortcut(
+        tools.select,
+        &default_candidates,
+        &mut seen,
+        changed,
+    );
+    tools.line = reserve_unique_screenshot_tool_shortcut(
+        tools.line,
+        &default_candidates,
+        &mut seen,
+        changed,
+    );
+    tools.rect = reserve_unique_screenshot_tool_shortcut(
+        tools.rect,
+        &default_candidates,
+        &mut seen,
+        changed,
+    );
+    tools.ellipse = reserve_unique_screenshot_tool_shortcut(
+        tools.ellipse,
+        &default_candidates,
+        &mut seen,
+        changed,
+    );
+    tools.arrow = reserve_unique_screenshot_tool_shortcut(
+        tools.arrow,
+        &default_candidates,
+        &mut seen,
+        changed,
+    );
+
+    tools
+}
+
+fn reserve_unique_screenshot_tool_shortcut(
+    current: String,
+    default_candidates: &[&str],
+    seen: &mut HashSet<String>,
+    changed: &mut bool,
+) -> String {
+    let normalized = current.to_ascii_lowercase();
+    if seen.insert(normalized) {
+        return current;
+    }
+
+    for candidate in default_candidates {
+        let candidate_normalized = candidate.to_ascii_lowercase();
+        if seen.insert(candidate_normalized) {
+            *changed = true;
+            return (*candidate).to_string();
+        }
+    }
+
+    *changed = true;
+    "F24".to_string()
 }
 
 fn sync_autostart_launch_at_login<R: Runtime>(
@@ -363,6 +712,7 @@ fn validate_hotkey_preferences(input: HotkeyPreferences) -> AppResult<HotkeyPref
         validate_hotkey_shortcut_option(HotkeyAction::VoiceInputToggle, input.voice_input_toggle)?;
     let voice_input_hold =
         validate_hotkey_shortcut_option(HotkeyAction::VoiceInputHold, input.voice_input_hold)?;
+    let screenshot_tools = validate_screenshot_tool_hotkeys(input.screenshot_tools)?;
 
     let mut seen_shortcuts: HashSet<String> = HashSet::new();
     let mut ensure_unique = |action: HotkeyAction, shortcut: Option<&str>| -> AppResult<()> {
@@ -393,11 +743,279 @@ fn validate_hotkey_preferences(input: HotkeyPreferences) -> AppResult<HotkeyPref
     )?;
     ensure_unique(HotkeyAction::VoiceInputHold, voice_input_hold.as_deref())?;
 
+    let mut seen_tool_shortcuts: HashSet<String> = HashSet::new();
+    let mut ensure_tool_unique = |field: &str, shortcut: &str| -> AppResult<()> {
+        let normalized = shortcut.to_ascii_lowercase();
+        if !seen_tool_shortcuts.insert(normalized) {
+            return Err(AppError::new(
+                "HOTKEY_DUPLICATE_SHORTCUT",
+                "截图工具热键冲突：不同工具不能使用同一组合键",
+            )
+            .with_detail("field", field.to_string())
+            .with_detail("shortcut", shortcut.to_string()));
+        }
+        Ok(())
+    };
+
+    ensure_tool_unique(
+        "hotkey.screenshotTools.select",
+        screenshot_tools.select.as_str(),
+    )?;
+    ensure_tool_unique(
+        "hotkey.screenshotTools.line",
+        screenshot_tools.line.as_str(),
+    )?;
+    ensure_tool_unique(
+        "hotkey.screenshotTools.rect",
+        screenshot_tools.rect.as_str(),
+    )?;
+    ensure_tool_unique(
+        "hotkey.screenshotTools.ellipse",
+        screenshot_tools.ellipse.as_str(),
+    )?;
+    ensure_tool_unique(
+        "hotkey.screenshotTools.arrow",
+        screenshot_tools.arrow.as_str(),
+    )?;
+
+    let normalized_capture = screenshot_capture.to_ascii_lowercase();
+    for (field, shortcut) in [
+        (
+            "hotkey.screenshotTools.select",
+            screenshot_tools.select.as_str(),
+        ),
+        (
+            "hotkey.screenshotTools.line",
+            screenshot_tools.line.as_str(),
+        ),
+        (
+            "hotkey.screenshotTools.rect",
+            screenshot_tools.rect.as_str(),
+        ),
+        (
+            "hotkey.screenshotTools.ellipse",
+            screenshot_tools.ellipse.as_str(),
+        ),
+        (
+            "hotkey.screenshotTools.arrow",
+            screenshot_tools.arrow.as_str(),
+        ),
+    ] {
+        if shortcut.to_ascii_lowercase() == normalized_capture {
+            return Err(AppError::new(
+                "HOTKEY_DUPLICATE_SHORTCUT",
+                "截图热键不能与截图工具热键重复",
+            )
+            .with_detail("field", field.to_string())
+            .with_detail("shortcut", shortcut.to_string()));
+        }
+    }
+
     Ok(HotkeyPreferences {
         screenshot_capture,
+        screenshot_tools,
         voice_input_toggle,
         voice_input_hold,
     })
+}
+
+fn validate_screenshot_tool_hotkeys(
+    input: ScreenshotToolHotkeyPreferences,
+) -> AppResult<ScreenshotToolHotkeyPreferences> {
+    Ok(ScreenshotToolHotkeyPreferences {
+        select: validate_screenshot_tool_hotkey_shortcut(
+            "hotkey.screenshotTools.select",
+            input.select,
+            "选区工具",
+        )?,
+        line: validate_screenshot_tool_hotkey_shortcut(
+            "hotkey.screenshotTools.line",
+            input.line,
+            "线条工具",
+        )?,
+        rect: validate_screenshot_tool_hotkey_shortcut(
+            "hotkey.screenshotTools.rect",
+            input.rect,
+            "矩形工具",
+        )?,
+        ellipse: validate_screenshot_tool_hotkey_shortcut(
+            "hotkey.screenshotTools.ellipse",
+            input.ellipse,
+            "圆形工具",
+        )?,
+        arrow: validate_screenshot_tool_hotkey_shortcut(
+            "hotkey.screenshotTools.arrow",
+            input.arrow,
+            "箭头工具",
+        )?,
+    })
+}
+
+fn validate_screenshot_tool_hotkey_shortcut(
+    field: &str,
+    value: String,
+    label: &str,
+) -> AppResult<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(
+            AppError::new("HOTKEY_SHORTCUT_REQUIRED", format!("{label}热键不能为空"))
+                .with_detail("field", field.to_string()),
+        );
+    }
+
+    if trimmed.len() > 64 {
+        return Err(
+            AppError::new("HOTKEY_SHORTCUT_TOO_LONG", "热键长度不能超过 64 个字符")
+                .with_detail("field", field.to_string()),
+        );
+    }
+
+    let normalized = normalize_screenshot_tool_shortcut(trimmed).map_err(|reason| {
+        AppError::new("HOTKEY_SHORTCUT_INVALID", "热键格式无效")
+            .with_detail("field", field.to_string())
+            .with_detail("shortcut", trimmed.to_string())
+            .with_detail("reason", reason)
+    })?;
+
+    Ok(normalized)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScreenshotToolHotkeyModifier {
+    Ctrl,
+    Alt,
+    Shift,
+    Super,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ScreenshotToolHotkeyToken {
+    Modifier(ScreenshotToolHotkeyModifier),
+    Key(String),
+}
+
+fn normalize_screenshot_tool_shortcut(input: &str) -> Result<String, String> {
+    let mut has_ctrl = false;
+    let mut has_alt = false;
+    let mut has_shift = false;
+    let mut has_super = false;
+    let mut key: Option<String> = None;
+
+    for raw_part in input.split('+') {
+        let part = raw_part.trim();
+        if part.is_empty() {
+            return Err("热键包含空片段".to_string());
+        }
+
+        let token = normalize_screenshot_tool_hotkey_token(part)
+            .ok_or_else(|| format!("不支持的按键片段：{part}"))?;
+        match token {
+            ScreenshotToolHotkeyToken::Modifier(modifier) => match modifier {
+                ScreenshotToolHotkeyModifier::Ctrl => has_ctrl = true,
+                ScreenshotToolHotkeyModifier::Alt => has_alt = true,
+                ScreenshotToolHotkeyModifier::Shift => has_shift = true,
+                ScreenshotToolHotkeyModifier::Super => has_super = true,
+            },
+            ScreenshotToolHotkeyToken::Key(normalized_key) => {
+                if key.is_some() {
+                    return Err("热键最多包含一个非修饰键".to_string());
+                }
+                key = Some(normalized_key);
+            }
+        }
+    }
+
+    if !has_ctrl && !has_alt && !has_shift && !has_super && key.is_none() {
+        return Err("热键不能为空".to_string());
+    }
+
+    if key.is_none() {
+        return Err("热键至少包含一个非修饰键".to_string());
+    }
+
+    let mut parts = Vec::new();
+    if has_ctrl {
+        parts.push("Ctrl".to_string());
+    }
+    if has_alt {
+        parts.push("Alt".to_string());
+    }
+    if has_shift {
+        parts.push("Shift".to_string());
+    }
+    if has_super {
+        parts.push("Super".to_string());
+    }
+    if let Some(normalized_key) = key {
+        parts.push(normalized_key);
+    }
+
+    Ok(parts.join("+"))
+}
+
+fn normalize_screenshot_tool_hotkey_token(input: &str) -> Option<ScreenshotToolHotkeyToken> {
+    let normalized = input.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    match normalized.as_str() {
+        "ctrl" | "control" | "lctrl" | "leftctrl" | "leftcontrol" | "rctrl" | "rightctrl"
+        | "rightcontrol" => {
+            return Some(ScreenshotToolHotkeyToken::Modifier(
+                ScreenshotToolHotkeyModifier::Ctrl,
+            ));
+        }
+        "alt" | "lalt" | "leftalt" | "ralt" | "rightalt" | "altgraph" => {
+            return Some(ScreenshotToolHotkeyToken::Modifier(
+                ScreenshotToolHotkeyModifier::Alt,
+            ));
+        }
+        "shift" | "lshift" | "leftshift" | "rshift" | "rightshift" => {
+            return Some(ScreenshotToolHotkeyToken::Modifier(
+                ScreenshotToolHotkeyModifier::Shift,
+            ));
+        }
+        "super" | "meta" | "win" | "windows" | "lwin" | "leftwin" | "leftwindows" | "rwin"
+        | "rightwin" | "rightwindows" => {
+            return Some(ScreenshotToolHotkeyToken::Modifier(
+                ScreenshotToolHotkeyModifier::Super,
+            ));
+        }
+        "space" => return Some(ScreenshotToolHotkeyToken::Key("Space".to_string())),
+        "tab" => return Some(ScreenshotToolHotkeyToken::Key("Tab".to_string())),
+        "enter" | "return" => return Some(ScreenshotToolHotkeyToken::Key("Enter".to_string())),
+        "backspace" => return Some(ScreenshotToolHotkeyToken::Key("Backspace".to_string())),
+        "delete" | "del" => return Some(ScreenshotToolHotkeyToken::Key("Delete".to_string())),
+        "escape" | "esc" => return Some(ScreenshotToolHotkeyToken::Key("Escape".to_string())),
+        "arrowup" => return Some(ScreenshotToolHotkeyToken::Key("ArrowUp".to_string())),
+        "arrowdown" => return Some(ScreenshotToolHotkeyToken::Key("ArrowDown".to_string())),
+        "arrowleft" => return Some(ScreenshotToolHotkeyToken::Key("ArrowLeft".to_string())),
+        "arrowright" => return Some(ScreenshotToolHotkeyToken::Key("ArrowRight".to_string())),
+        _ => {}
+    }
+
+    if normalized.len() == 1 {
+        let single = normalized.chars().next()?;
+        if single.is_ascii_alphanumeric() {
+            let value = if single.is_ascii_alphabetic() {
+                single.to_ascii_uppercase().to_string()
+            } else {
+                single.to_string()
+            };
+            return Some(ScreenshotToolHotkeyToken::Key(value));
+        }
+    }
+
+    if normalized.starts_with('f') {
+        let number = normalized[1..].parse::<u8>().ok()?;
+        if (1..=24).contains(&number) {
+            return Some(ScreenshotToolHotkeyToken::Key(format!("F{number}")));
+        }
+    }
+
+    None
 }
 
 fn validate_hotkey_shortcut_option(
@@ -435,14 +1053,122 @@ fn validate_hotkey_shortcut(
         );
     }
 
-    trimmed.parse::<Shortcut>().map_err(|error| {
+    classify_supported_shortcut(trimmed).map_err(|error| {
         AppError::new("HOTKEY_SHORTCUT_INVALID", "热键格式无效")
             .with_detail("field", action.preference_field().to_string())
             .with_detail("shortcut", trimmed.to_string())
-            .with_detail("reason", error.to_string())
+            .with_detail("reason", error)
+    })?;
+
+    validate_hotkey_shortcut_semantics(action, trimmed).map_err(|reason| {
+        AppError::new("HOTKEY_SHORTCUT_INVALID", "热键格式无效")
+            .with_detail("field", action.preference_field().to_string())
+            .with_detail("shortcut", trimmed.to_string())
+            .with_detail("reason", reason)
     })?;
 
     Ok(Some(trimmed.to_string()))
+}
+
+fn validate_hotkey_shortcut_semantics(action: HotkeyAction, value: &str) -> Result<(), String> {
+    let tokens = split_hotkey_shortcut_tokens(value);
+    if tokens.is_empty() {
+        return Err("热键不能为空".to_string());
+    }
+
+    let has_non_modifier = tokens.iter().any(|token| !is_hotkey_modifier_token(token));
+    if action == HotkeyAction::ScreenshotCapture && !has_non_modifier {
+        return Err("截图热键至少包含一个非修饰键，例如 Ctrl+Shift+X".to_string());
+    }
+
+    if matches!(
+        action,
+        HotkeyAction::VoiceInputToggle | HotkeyAction::VoiceInputHold
+    ) && !has_non_modifier
+        && !tokens
+            .iter()
+            .all(|token| is_side_specific_hotkey_modifier_token(token))
+    {
+        return Err(
+            "语音输入热键如果只使用修饰键，必须使用单侧修饰键，例如 RAlt / LWin+LAlt".to_string(),
+        );
+    }
+
+    Ok(())
+}
+
+fn split_hotkey_shortcut_tokens(value: &str) -> Vec<String> {
+    value
+        .split('+')
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(|token| token.to_ascii_lowercase())
+        .collect()
+}
+
+fn is_hotkey_modifier_token(token: &str) -> bool {
+    matches!(
+        token,
+        "ctrl"
+            | "control"
+            | "lctrl"
+            | "leftctrl"
+            | "leftcontrol"
+            | "rctrl"
+            | "rightctrl"
+            | "rightcontrol"
+            | "alt"
+            | "altgraph"
+            | "lalt"
+            | "leftalt"
+            | "ralt"
+            | "rightalt"
+            | "shift"
+            | "lshift"
+            | "leftshift"
+            | "rshift"
+            | "rightshift"
+            | "super"
+            | "meta"
+            | "win"
+            | "windows"
+            | "lwin"
+            | "leftwin"
+            | "leftwindows"
+            | "rwin"
+            | "rightwin"
+            | "rightwindows"
+            | "command"
+            | "commandorcontrol"
+            | "cmd"
+            | "cmdorctrl"
+    )
+}
+
+fn is_side_specific_hotkey_modifier_token(token: &str) -> bool {
+    matches!(
+        token,
+        "lctrl"
+            | "leftctrl"
+            | "leftcontrol"
+            | "rctrl"
+            | "rightctrl"
+            | "rightcontrol"
+            | "lalt"
+            | "leftalt"
+            | "ralt"
+            | "rightalt"
+            | "lshift"
+            | "leftshift"
+            | "rshift"
+            | "rightshift"
+            | "lwin"
+            | "leftwin"
+            | "leftwindows"
+            | "rwin"
+            | "rightwin"
+            | "rightwindows"
+    )
 }
 
 fn validate_command_templates(
@@ -727,7 +1453,15 @@ fn build_codex_home_directory_info(
 mod tests {
     use std::{env, fs};
 
-    use super::build_codex_home_directory_info;
+    use super::{
+        build_codex_home_directory_info, migrate_legacy_preferences,
+        normalize_screenshot_tool_shortcut, sanitize_hotkey_preferences, validate_hotkey_shortcut,
+    };
+    use crate::domain::{
+        AppPreferences, HotkeyAction, DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
+        EARLIER_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY, LEGACY_SCREENSHOT_CAPTURE_HOTKEY,
+        PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
+    };
 
     #[test]
     fn codex_home_directory_info_marks_existing_directory() {
@@ -751,5 +1485,131 @@ mod tests {
         assert_eq!(resolved.path.as_deref(), Some(directory_path.as_str()));
         assert_eq!(resolved.source, "default");
         assert!(!resolved.exists);
+    }
+
+    #[test]
+    fn migrate_legacy_preferences_updates_legacy_screenshot_hotkey() {
+        let mut preferences = AppPreferences::default();
+        preferences.hotkey.screenshot_capture = LEGACY_SCREENSHOT_CAPTURE_HOTKEY.to_string();
+
+        let migrated = migrate_legacy_preferences(preferences);
+        assert!(migrated.changed);
+        assert_eq!(
+            migrated.preferences.hotkey.screenshot_capture,
+            DEFAULT_SCREENSHOT_CAPTURE_HOTKEY
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_preferences_preserves_custom_screenshot_hotkey() {
+        let mut preferences = AppPreferences::default();
+        preferences.hotkey.screenshot_capture = "Ctrl+Shift+Q".to_string();
+
+        let migrated = migrate_legacy_preferences(preferences);
+        assert!(!migrated.changed);
+        assert_eq!(
+            migrated.preferences.hotkey.screenshot_capture,
+            "Ctrl+Shift+Q"
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_preferences_updates_previous_default_screenshot_hotkey() {
+        let mut preferences = AppPreferences::default();
+        preferences.hotkey.screenshot_capture =
+            PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY.to_string();
+
+        let migrated = migrate_legacy_preferences(preferences);
+        assert!(migrated.changed);
+        assert_eq!(
+            migrated.preferences.hotkey.screenshot_capture,
+            DEFAULT_SCREENSHOT_CAPTURE_HOTKEY
+        );
+    }
+
+    #[test]
+    fn normalize_screenshot_tool_shortcut_accepts_default_digit_shortcut() {
+        let normalized = normalize_screenshot_tool_shortcut("1").expect("normalize digit shortcut");
+        assert_eq!(normalized, "1");
+    }
+
+    #[test]
+    fn normalize_screenshot_tool_shortcut_accepts_modifier_combo() {
+        let normalized =
+            normalize_screenshot_tool_shortcut("ctrl+shift+2").expect("normalize combo");
+        assert_eq!(normalized, "Ctrl+Shift+2");
+    }
+
+    #[test]
+    fn normalize_screenshot_tool_shortcut_rejects_modifier_only_shortcut() {
+        let error = normalize_screenshot_tool_shortcut("Ctrl+Shift")
+            .expect_err("modifier-only shortcut should be rejected");
+        assert!(error.contains("至少包含一个非修饰键"));
+    }
+
+    #[test]
+    fn validate_hotkey_shortcut_rejects_modifier_only_screenshot_shortcut() {
+        let error = validate_hotkey_shortcut(
+            HotkeyAction::ScreenshotCapture,
+            "LCtrl+LShift".to_string(),
+            true,
+        )
+        .expect_err("modifier-only screenshot shortcut should be rejected");
+        assert_eq!(error.code, "HOTKEY_SHORTCUT_INVALID");
+        assert_eq!(
+            error
+                .details
+                .as_ref()
+                .and_then(|details| details.get("reason"))
+                .map(String::as_str),
+            Some("截图热键至少包含一个非修饰键，例如 Ctrl+Shift+X")
+        );
+    }
+
+    #[test]
+    fn validate_hotkey_shortcut_accepts_ralt_for_voice_toggle() {
+        let validated =
+            validate_hotkey_shortcut(HotkeyAction::VoiceInputToggle, "RAlt".to_string(), false)
+                .expect("voice toggle should allow side-specific modifier-only shortcut");
+        assert_eq!(validated.as_deref(), Some("RAlt"));
+    }
+
+    #[test]
+    fn sanitize_hotkey_preferences_repairs_invalid_capture_shortcut() {
+        let mut preferences = AppPreferences::default();
+        preferences.hotkey.screenshot_capture = "LCtrl+LShift".to_string();
+
+        let repaired = sanitize_hotkey_preferences(preferences.hotkey);
+        assert!(repaired.changed);
+        assert_eq!(
+            repaired.preferences.screenshot_capture,
+            DEFAULT_SCREENSHOT_CAPTURE_HOTKEY
+        );
+    }
+
+    #[test]
+    fn sanitize_hotkey_preferences_repairs_duplicate_tool_shortcuts() {
+        let mut preferences = AppPreferences::default();
+        preferences.hotkey.screenshot_tools.select = "2".to_string();
+        preferences.hotkey.screenshot_tools.line = "2".to_string();
+
+        let repaired = sanitize_hotkey_preferences(preferences.hotkey);
+        assert!(repaired.changed);
+        assert_eq!(repaired.preferences.screenshot_tools.select, "2");
+        assert_eq!(repaired.preferences.screenshot_tools.line, "1");
+    }
+
+    #[test]
+    fn migrate_legacy_preferences_updates_earlier_default_screenshot_hotkey() {
+        let mut preferences = AppPreferences::default();
+        preferences.hotkey.screenshot_capture =
+            EARLIER_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY.to_string();
+
+        let migrated = migrate_legacy_preferences(preferences);
+        assert!(migrated.changed);
+        assert_eq!(
+            migrated.preferences.hotkey.screenshot_capture,
+            DEFAULT_SCREENSHOT_CAPTURE_HOTKEY
+        );
     }
 }

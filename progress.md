@@ -1,5 +1,179 @@
 # progress
 
+## 2026-03-15
+- 初始化 `scripts/work/2026-03-15-desktop-duplication-live-capture/`：
+  - `task_plan.md`
+  - `notes.md`
+  - `deliverable.md`
+- 已完成 Desktop Duplication 原型方案落盘：
+  - 明确本轮不改前端协议
+  - 优先替换 Rust 侧 live capture 后端
+  - 失败不再启动 WGC live capture，保留现有 one-shot 兜底
+- 已完成 Desktop Duplication 常驻最近帧原型代码落地：
+  - 新增 `src-tauri/src/services/desktop_duplication_capture.rs`
+  - `ScreenshotService.initialize_live_capture_windows()` 现已优先启动 DD live capture
+  - 启动期 `app.setup()` 已重新接回 `initialize_live_capture()`
+  - `try_capture_from_live_cache()` 会记录 `backend=desktop_duplication` 并输出 `capture_strategy=desktop_duplication_live_cache`
+- 编译验证通过：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`
+
+## 2026-03-14
+- 已完成截图加载黑屏移除：
+  - `src/pages/screenshot-overlay-page.tsx` 加载期不再渲染黑色 mask，且加载期不显示顶部帮助与工具条。
+  - overlay 根容器背景改为透明，避免底图未就绪时出现整屏黑底。
+  - `src-tauri/tauri.conf.json` 与 `ScreenshotService` runtime builder 均改为透明窗口。
+  - `src-tauri/src/services/screenshot_service.rs` 新增 `preview_mode`，uniform scale 场景优先走 `native_uniform_scale` 预览拼接路径。
+- 本轮验证通过：
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `cargo test --manifest-path src-tauri/Cargo.toml --lib --no-run`
+  - `npm run web:build`
+- 已确认仓库既有示例编译问题仍存在（非本次改动引入）：
+  - `cargo test --manifest-path src-tauri/Cargo.toml --no-run` 失败：`examples/phase6c_verify.rs` 初始化 `AppPreferences` 缺少 `hotkey` 字段。
+
+- 已完成 overlay 几何锁定第二轮修正（基于用户新日志）：
+  - 几何探测从 `outer_position` 切换为 `inner_position`，改为对齐窗口 client 区域，避免外框膨胀导致的误判。
+  - Windows 下新增原生样式锁：移除 `WS_CAPTION/WS_THICKFRAME/WS_SYSMENU` 等样式，并强制 `WS_POPUP`。
+  - 每次显示 overlay 时会再次应用样式锁和几何校正，降低会话内漂移概率。
+- 本轮编译验证通过：
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `cargo test --manifest-path src-tauri/Cargo.toml --lib --no-run`
+- 已确认仓库既有示例编译问题仍存在（非本次改动引入）：
+  - `cargo test --manifest-path src-tauri/Cargo.toml --no-run` 失败：`examples/phase6c_verify.rs` 初始化 `AppPreferences` 缺少 `hotkey` 字段。
+
+- 已完成截图 overlay 几何锁定修复：
+  - `src-tauri/src/services/screenshot_service.rs` 新增 overlay 几何探测与回正能力，输出 `overlay_geometry_applied` / `overlay_geometry_drift_detected` 日志。
+  - `src-tauri/src/app/window.rs` 已在 `Moved/Resized/ScaleFactorChanged` 事件上接入 `enforce_overlay_window_geometry`，会话期间自动拉回目标位置/尺寸。
+  - 回正逻辑采用 1px 容差，避免浮点换算造成无意义重复重设。
+- 本轮编译验证通过：
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `cargo test --manifest-path src-tauri/Cargo.toml --lib --no-run`
+- 已确认仓库既有示例编译问题仍存在（非本次改动引入）：
+  - `cargo test --manifest-path src-tauri/Cargo.toml --no-run` 失败：`examples/phase6c_verify.rs` 初始化 `AppPreferences` 缺少 `hotkey` 字段。
+
+- 已完成截图 preview 性能优化（基于 DPI 修复后的链路）：
+  - `src-tauri/src/services/screenshot_service.rs` 新增 `encode_preview_png_fast`，使用 `Fast + NoFilter` 编码 preview PNG。
+  - preview 编码链路新增稳健回退：快速编码失败时自动回落到默认 `encode_png`，避免会话中断。
+  - `CapturedMonitorFrame` 原图缓存改为 `Arc<RgbaImage>`，preview 拼图和选区裁剪改为按引用读取，去除整图 clone。
+  - `preview_image_ready` 日志新增 `png_bytes` 与 `png_path` 字段，便于评估优化收益。
+- 本轮编译验证通过：
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `cargo test --manifest-path src-tauri/Cargo.toml --lib --no-run`
+
+- 初始化 `scripts/work/2026-03-14-screenshot-dpi-coordinate-normalize/`：`task_plan.md`、`notes.md`、`deliverable.md`。
+- 已完成截图 preview DPI 坐标归一化修复：
+  - `src-tauri/src/services/screenshot_service.rs` 新增 monitor 级 display 坐标标准化逻辑，统一会话 `display_*` 为 logical px。
+  - 已接入第二轮兜底：优先使用 Tauri monitor `scale_factor` 与 physical rect 还原 logical rect，规避 `display_info.scale_factor=1` 的机型误判。
+  - 抓屏阶段新增 `monitor_display_normalized` 结构化日志，输出 raw/measured/reported/normalized 关键字段与判定坐标空间。
+  - 会话启动日志新增 `display_origin` 与 `display_unit=logical_px`，明确窗口定位输入单位。
+  - 新增坐标标准化单元测试，覆盖“raw logical”“raw physical 需转换”“tauri monitor 优先”三类场景。
+- 编译验证结果：
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `cargo test --manifest-path src-tauri/Cargo.toml --lib --no-run`
+  - `cargo test --manifest-path src-tauri/Cargo.toml --no-run` 失败：`examples/phase6c_verify.rs` 里 `AppPreferences` 初始化缺少 `hotkey` 字段（仓库既有问题，非本次改动引入）。
+
+- 初始化 `scripts/work/2026-03-14-screenshot-latency-dpi-fix/`：`task_plan.md`、`notes.md`、`deliverable.md`。
+- 已完成本轮方案确认：
+  - 截图启动链路先做耗时打点与 overlay 先显后装图
+  - 截图数据模型改为“显示图 / 原始图”分离
+  - 后续再参考 `ParrotTranslator` 收敛交互细节
+- 已同步根级 `task_plan.md`、`findings.md`、`progress.md`，为后续实现留出接续点。
+- 已完成截图启动延迟与 DPI 修复主链路落地：
+  - Rust `ScreenshotService` 现已改为“同步抓 monitor 原始帧 -> 建立 loading session -> 立即显示 overlay -> 后台异步准备 preview”
+  - 截图会话已新增 `imageStatus / imageError / monitors`
+  - 新增 `get_screenshot_selection_render`，前端导出标注时改走新的 selection render 底图路径
+  - 未传 `rendered_image` 时，复制/保存已改走 selection render，不再依赖全局 `captureWidth / displayWidth`
+  - overlay 已支持 loading / failed 状态；同一 session 的 `loading -> ready` 更新不再重置选区和标注
+  - overlay 标注导出已接入 tile-aware 底图渲染，单屏高 DPI 与统一缩放多屏走 native；混合 DPI 多屏走后端 `logical_fallback`
+- 编译验证通过：
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `npm run web:build`
+- 待用户本机手工确认：
+  - 热键触发后 overlay 首帧是否明显更快出现
+  - 单屏高 DPI 截图与保存是否不再错位
+  - 混合 DPI 多屏 selection 是否按 `logical_fallback` 保持显示一致
+
+- 初始化 `scripts/work/2026-03-14-global-hotkey-reliability/`：准备对全局热键链路做系统级排查与修复。
+- 初始化 `scripts/work/2026-03-14-screenshot-tool-hotkeys-config/`：`task_plan.md`、`notes.md`、`deliverable.md`。
+- 已完成截图工具热键可配置化（Settings -> Hotkeys）：
+  - 截图全局默认热键已切到 `Ctrl+Shift+1`，并兼容迁移历史默认 `Ctrl+Shift+4`
+  - 设置页已新增 `选区/线条/矩形/圆形/箭头` 五个工具热键配置项
+  - overlay 已改为读取 `hotkey.screenshotTools`，不再使用硬编码 `TOOL_HOTKEY_MAP`
+  - 偏好服务已改为 overlay 专用热键校验，`1~5` 默认值可正常保存，不再触发“热键格式无效”
+- 已修复设置页热键草稿同步导致的 React 无限更新（`Maximum update depth exceeded`）：
+  - `screenshotToolHotkeys` 改为 `useMemo` 稳定引用
+  - 同步草稿时新增相等性判断，避免重复 `setState`
+- 编译验证通过：
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `npm run web:build`
+
+- 初始化 `scripts/work/2026-03-14-bexo-windows-hook-hotkey/`：`task_plan.md`、`notes.md`、`deliverable.md`。
+- 已完成现状梳理：
+  - `voiceType` 在 Windows 下使用 `WH_KEYBOARD_LL` 处理 `RAlt` 等高级热键
+  - `Bexo` 当前仅有 `tauri-plugin-global-shortcut` 路径
+  - `Bexo` 设置页录制器暂不支持左右侧 modifier token
+- 已完成方案落地：
+  - `src-tauri/src/services/windows_hook_hotkey.rs` 已新增 Windows 低层键盘 hook 管理器，支持 side-specific / modifier-only 热键
+  - `src-tauri/src/services/hotkey_service.rs` 已改为 basic/global + advanced/hook 双通道注册
+  - `src-tauri/src/services/preferences_service.rs` 已扩展为接受 `RAlt` 等高级热键字符串
+  - `src/pages/settings-page.tsx` 已支持录制 `LCtrl / RCtrl / LAlt / RAlt / LWin / RWin / LShift / RShift`
+  - 当前默认截图热键仍保持 `Ctrl+Shift+4`，但设置页已可保存 `RAlt` 等高级热键
+- 编译验证通过：
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `npm run web:build`
+- Rust 单测宿主问题仍存在：
+  - `cargo test --manifest-path src-tauri/Cargo.toml validate_windows_hook_shortcut_accepts_ralt -- --nocapture`
+  - 测试二进制编译成功，但运行仍返回 `0xc0000139 (STATUS_ENTRYPOINT_NOT_FOUND)`
+- 已补 Hotkeys 错误反馈收敛：
+  - 设置页不再把同一次热键失败同时渲染成“保存失败 + 录制失败 + toast”三份提示
+  - 后端 `update_app_preferences` 日志现在会带上 `details`，下次复现可直接看到具体 `shortcut / reason`
+- 已补恢复默认自愈逻辑：
+  - 若 basic/global 热键在当前应用内存在残留注册，重新注册前会先自动清掉旧注册
+  - “已占用”错误在前端已改为简化提示，不再暴露底层 `HotKey { ... }` 对象串
+- 已进一步加固 basic/global 重注册：
+  - 现在注册 basic 热键前会无条件尝试注销同名 basic 热键，不再依赖本地 `is_registered` 判断
+  - 这样即使插件内部残留了同名注册，也能在恢复默认前先清掉
+
+- 初始化 `scripts/work/2026-03-14-screenshot-hotkey-reliability/`：`task_plan.md`、`notes.md`、`deliverable.md`。
+- 已完成热键问题定位：
+  - `Ctrl+Alt+A` 在后端可成功注册为全局热键
+  - 当前链路缺少“收到热键”成功日志
+  - 默认值同时存在于 Rust domain 与前端 settings 常量
+  - 老用户若已持久化历史默认值，仅改默认常量不会自动修复
+- 已完成实现：
+  - 截图热键默认值已从 `Ctrl+Alt+A` 调整为 `Ctrl+Shift+4`
+  - 偏好初始化阶段已补充历史默认值迁移，命中旧默认时会自动写回 store
+  - 设置页对 `Ctrl+Alt+...` 组合新增风险提示与保存后 warning toast
+  - 热键服务已补充“收到热键”和“截图会话启动结果”日志
+- 编译验证通过：
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `npm run web:build`
+- Rust 单测宿主问题仍存在：
+  - `cargo test --manifest-path src-tauri/Cargo.toml migrate_legacy_preferences -- --nocapture`
+  - 测试二进制编译成功，但运行返回 `0xc0000139 (STATUS_ENTRYPOINT_NOT_FOUND)`
+
+- 初始化 `scripts/work/2026-03-14-startup-screenshot-overlay-fix/`：`task_plan.md`、`notes.md`、`deliverable.md`。
+- 已完成启动异常排查：确认黑屏提示来自预创建 `screenshot_overlay` 窗口，而不是主窗口中的弹窗组件。
+- 已确认根因：`tauri-plugin-window-state` 在无已保存状态的窗口上仍会执行 `show() + set_focus()`，导致本应隐藏的 `screenshot_overlay` 在启动时被顶到前台。
+- 已完成修复：
+  - `src-tauri/src/app/mod.rs` 将 `screenshot_overlay` 加入 `tauri-plugin-window-state` denylist
+  - `src/pages/screenshot-overlay-page.tsx` 在无活动截图会话时主动隐藏当前窗口并清空本地状态
+- 编译验证通过：
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `npm run web:build`
+- 待用户本机手工确认：
+  - 冷启动不再弹出 overlay
+  - 截图热键仍可正常拉起 overlay
+
 ## 2026-03-11
 - 初始化 `scripts/work/2026-03-11-resource-browser-open-terminal/`：`task_plan.md`、`notes.md`、`deliverable.md`。
 - 已完成 `open_workspace_terminal_at_path` 命令链路（Rust service/command + 前端 command-client）。
@@ -359,3 +533,437 @@
   - 混选组选中框、状态栏和顶部帮助已同步到复制/重复/粘贴语义；单家族入口在 mixed 状态下继续保持显式禁用。
 - Phase D.45 编译验证通过：
   - `npm run web:build`
+- 2026-03-14 全局热键可靠性修复已完成第一轮落地：
+  - 后端启动现在会自修复持久化的异常热键配置，当前用户机器上的 `LCtrl+LShift` 这类截图热键会在启动时回退到安全默认 `Ctrl+Shift+1`。
+  - 截图热键校验已收紧为“必须包含一个非修饰键”；语音预留热键仍允许 `RAlt` / `LWin+LAlt` 这类 side-specific modifier-only 组合。
+  - 全局基础热键重注册前会先执行 `unregister_all()` 清理残留，避免恢复默认或切换热键时出现“已占用”的自冲突。
+  - 设置页录制器已与后端语义对齐，不再允许把截图热键录成纯修饰键。
+- 2026-03-14 本轮验证结果：
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `npm run web:build`
+  - `cargo test --manifest-path src-tauri/Cargo.toml sanitize_hotkey_preferences -- --nocapture` 未能完成：测试二进制在本机启动时报 `STATUS_ENTRYPOINT_NOT_FOUND`，属于本机运行时依赖问题，不是本次改动的编译错误。
+- 2026-03-14 截图 overlay 启动黑屏移除已完成：
+  - 在 `index.html` 启动早期根据 `overlay=screenshot` 写入 `data-overlay="screenshot"`，让透明样式可在 React 挂载前生效。
+  - 在 `globals.css` 增加 overlay 专用透明规则，覆盖 `html/body/#root/.ant-app`，避免全局主题背景在预热阶段透出。
+  - 在 `screenshot-overlay-page.tsx` 去掉“无会话”中心提示兜底，避免截图流程中出现额外等待提示层。
+- 2026-03-14 本轮验证结果（黑屏移除）：
+  - `npm run web:build`
+- 2026-03-14 截图单阶段进入（取消可见过渡界面）已完成：
+  - `src-tauri/src/services/screenshot_service.rs` 新增 `prepare_overlay_window`，预热阶段仅做隐藏窗口的几何与样式锁，不再提前 show。
+  - `start_session` 改为 `overlay_show=deferred_until_preview_ready`：会话创建后只发 loading 状态，不显示第一阶段界面。
+  - `finish_preview_preparation` 在 `image_status=ready` 后再 `ensure_overlay_window` 显示窗口，失败态保持隐藏。
+- 2026-03-14 本轮验证结果（单阶段进入）：
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+- 2026-03-14 单阶段进入策略已调整为“立即工作态 + 异步底图”：
+  - 回退了 `overlay_show=deferred_until_preview_ready`，`start_session` 重新改为立即 `ensure_overlay_window`。
+  - `finish_preview_preparation` 不再驱动窗口 show/hide，只更新 session 的 `image_status/image_data_url` 并发事件。
+  - 前端 overlay 的遮罩与工具区不再依赖 `sessionImageReady` 才渲染，按热键后立即进入工作态外观。
+- 2026-03-14 本轮验证结果（策略调整）：
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `npm run web:build`
+- 2026-03-14 overlay 顶部蓝色标题栏闪现修复：
+  - `src-tauri/tauri.conf.json` 将 `screenshot_overlay.title` 置空，避免系统标题栏闪现时暴露文本。
+  - `src-tauri/src/services/screenshot_service.rs` 在 prepare/show 阶段强制 `set_title("")`。
+  - 新增 `stabilize_overlay_window_after_show`（短轮询 `lock style + set geometry`），降低 show 初期非客户区闪现概率。
+- 2026-03-14 本轮验证结果（标题栏闪现修复）：
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+- 2026-03-14 截图首帧延迟诊断日志已补齐（毫秒）：
+  - Rust `ScreenshotService`：
+    - `capture_virtual_desktop_completed`（枚举+拼接总耗时）
+    - `monitor_capture_profile`（每块屏抓取耗时）
+    - `start_session_completed`（hide/capture/store/overlay/emit/spawn 分段耗时）
+    - `preview_image_ready`（prepare/encode/base64/total 与字节大小）
+    - `finish_preview_preparation_completed`（状态更新+事件发送耗时）
+    - `get_active_session_completed`（会话视图构建耗时与 `image_data_url_bytes`）
+  - Rust `commands::screenshot`：
+    - `start_screenshot_session completed`
+    - `get_screenshot_session completed`（含 payload 字节大小）
+    - `get_screenshot_selection_render completed`
+  - Rust `HotkeyService`：
+    - `started screenshot session from hotkey ... total_ms=...`
+  - 前端 overlay：
+    - `[screenshot][pipeline] session_updated_event`
+    - `[screenshot][pipeline] load_session_done`
+    - `[screenshot][pipeline] preview_image_decode_start/preview_image_decode_done`
+    - `[screenshot][pipeline] preview_canvas_first_paint`
+- 2026-03-14 本轮验证结果（链路日志补齐）：
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `npm run web:build`
+- 2026-03-14 截图预览文件链路加速已完成：
+  - `src-tauri/src/domain/screenshot.rs`：`ScreenshotSessionView` 新增 `preview_image_path`。
+  - `src-tauri/src/services/screenshot_service.rs`：
+    - 预览生成改为“编码后写入 temp 文件，返回路径”，不再主链路构造超大 base64。
+    - 新增 `preview_bmp_encode_failed` / `preview_payload_applied` / `preview_image_ready(... preview_image_path=...)` 日志。
+    - 会话替换与清理时删除旧预览临时文件，补上生命周期清理。
+    - 单屏预览走快路径，减少不必要的整图拼接拷贝。
+  - `src-tauri/src/commands/screenshot.rs`：
+    - `get_screenshot_session` 日志新增 `preview_image_path`，便于核对是否走文件链路。
+  - `src/pages/screenshot-overlay-page.tsx`：
+    - 优先使用 `convertFileSrc(previewImagePath)` 加载预览；dataUrl 仅作 fallback。
+    - 前端 pipeline 日志新增 `source_kind=file|data_url` 与 `source_size`。
+  - `src/types/backend.ts`：同步 `previewImagePath?: string | null` 类型定义。
+- 2026-03-14 本轮验证结果（预览文件链路）：
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `npm run web:build`
+  - 说明：当前会话未执行 GUI 手工回归（本环境不可直接观察桌面热键行为），需在本机 `npm run desktop:dev` 下用真实热键复测首帧耗时日志。
+- 2026-03-14 截图预览自定义协议修复已完成：
+  - `src-tauri/src/app/mod.rs` 新增 `bexo-preview` 只读协议，限制只服务 temp 预览目录内文件。
+  - 协议增加成功/404/403 诊断日志，定位“文件存在但前端不显示”的读取断点。
+  - `src/pages/screenshot-overlay-page.tsx` 不再走 `convertFileSrc`，改为构造 `bexo-preview` URL。
+- 2026-03-14 本轮验证结果（预览自定义协议）：
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `npm run web:build`
+- 2026-03-14 已开始新一轮截图首帧提速（基于用户 `log.log`）：
+  - 已确认当前链路的主瓶颈已从 `dataUrl/IPCs` 转移到“4K BMP 预览编码 + ready 后前端首帧不可观测”。
+  - 当前量化结果：抓屏约 `340~370ms`，overlay ready 约 `120~180ms`，`preview_image_ready` 的 BMP 编码约 `494~532ms`。
+  - 本轮将把 overlay 预览优先切到逻辑显示尺寸，并把前端 `decode / first-paint` 日志接入 Tauri log 以继续压测。
+- 2026-03-14 截图首帧提速第二轮已完成：
+  - `src-tauri/src/services/screenshot_service.rs`
+    - 高 DPI 场景下，overlay 预览不再优先走 `native_uniform_scale` 的 4K 预览文件，而是改为逻辑显示尺寸 `logical_display_fast`。
+    - 保留 `scale_factor≈1` 时的 native 直通，避免 100% 缩放场景被不必要降采样。
+  - `src/pages/screenshot-overlay-page.tsx`
+    - `load_session_done / session_updated_event / preview_image_decode_* / preview_canvas_first_paint` 改为同时写入 Tauri log，便于在 `log.log` 里看到前端首帧链路。
+    - 无 effect 预览时不再挂整屏 canvas，只保留 `<img>` 作为首屏背景；首次可见改记为 `preview_first_paint surface=img`。
+- 2026-03-14 本轮验证结果（首帧继续提速）：
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `npm run web:build`
+  - 说明：本环境无法直接触发桌面热键与观测真实首屏，新的耗时下降幅度仍需你本机 `npm run desktop:dev` 复测确认。
+- 2026-03-14 已确认第二轮优化方向有误（基于用户新日志与 ParrotTranslator 对照）：
+  - 当前高 DPI 逻辑尺寸路径把瓶颈转移到了 `prepare_ms≈1200ms` 的 CPU resize，实际首帧仍约 `1.4s~1.5s`，热键到可见接近 `1.8s~1.9s`。
+  - 下一轮改为对齐 ParrotTranslator：单屏会话新增 `raw_rgba_fast` 直显快路径，显示阶段不再首屏 `resize/encode/file`，导出仍保留原始 capture。
+- 2026-03-14 截图首帧直显快路径已完成：
+  - `src-tauri/src/domain/screenshot.rs` / `src/types/backend.ts`
+    - 会话 view 新增 `previewTransport`、`previewPixelWidth`、`previewPixelHeight`。
+  - `src-tauri/src/services/screenshot_service.rs`
+    - 单屏全屏会话新增 `raw_rgba_fast` 传输模式。
+    - 快路径下 `image_status` 直接进入 `Ready`，不再后台生成首屏 preview 文件。
+    - 新增 `get_preview_rgba`，直接从原始 monitor RGBA 返回二进制字节。
+  - `src-tauri/src/commands/screenshot.rs` / `src/lib/command-client.ts`
+    - 新增 `get_screenshot_preview_rgba` 命令与前端调用。
+  - `src/pages/screenshot-overlay-page.tsx`
+    - 新增 base preview canvas，单屏快路径直接把 raw RGBA 画到 canvas。
+    - 文件预览链路保留为 fallback。
+    - 新增 `preview_raw_fetch_start / preview_raw_fetch_done / preview_first_paint surface=raw_canvas` 日志。
+- 2026-03-14 本轮验证结果（raw 直显快路径）：
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `npm run web:build`
+  - 说明：仍需你本机 `npm run desktop:dev` 热键实测，确认 `preview_transport=raw_rgba_fast` 是否走通以及首帧体感是否显著下降。
+- 2026-03-14 补充核对（用户贴回 `log.log` 与当前代码不一致）：
+  - 当前代码里的 `start_session_completed / get_active_session_completed / load_session_done` 都已经带 `preview_transport` 字段，且单屏快路径会出现 `get_screenshot_preview_rgba / preview_raw_fetch_* / preview_first_paint surface=raw_canvas`。
+  - 用户贴回的 `log.log` 中完全没有这些字段，说明那份日志来自“raw 直显快路径落地前”的旧运行结果，不能继续拿来判断当前实现的真实性能。
+  - 已再次执行 `cargo check --manifest-path src-tauri/Cargo.toml` 与 `npm run web:build`，确认当前工作区代码可编译、前端可构建。
+- 2026-03-14 最新 `log.log` 结论（raw 直显快路径之后）：
+  - 单屏链路已经进入 `preview_transport=RawRgbaFast`，`start_session_completed total_ms≈439~447`。
+  - `get_preview_rgba_completed total_ms≈3~4ms`，Rust 侧读取会话原图已经不是瓶颈。
+  - 前端 `preview_raw_fetch_done fetch_ms≈313~318ms`，`preview_first_paint draw_ms≈22~30ms`。
+  - 下一轮优化目标确定为：去掉 `raw RGBA -> JS invoke -> putImageData`，改走 Rust custom protocol 直供首屏图片。
+- 2026-03-14 协议直供首屏预览已完成：
+  - `src-tauri/src/services/screenshot_service.rs`
+    - 新增 `get_preview_protocol_bmp`，单屏 `RawRgbaFast` 会话可直接输出协议首屏预览。
+    - `encode_preview_bmp_fast` 改为手写 24-bit BMP 快编码，不再走 `DynamicImage::write_to(ImageOutputFormat::Bmp)`。
+  - `src-tauri/src/app/mod.rs`
+    - `bexo-preview` 协议新增 `session:<session_id>` 路径，直接从当前会话内存图返回 `image/bmp`。
+    - 保留原有 temp file 协议路径，作为多屏/文件 fallback。
+  - `src/pages/screenshot-overlay-page.tsx`
+    - 单屏快路径不再 `invoke get_screenshot_preview_rgba + putImageData`。
+    - 改为 `<img src=\"bexo-preview://...session:...\">` 统一走浏览器原生解码。
+    - 前端日志从 `preview_raw_fetch_*` 收敛为 `preview_image_decode_* source_kind=raw_protocol`。
+- 2026-03-14 本轮验证结果（协议直供首屏预览）：
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `npm run web:build`
+  - 说明：当前环境无法直接测你机器的桌面首帧体感，新的耗时需要你本机 `npm run desktop:dev` 后用 `log.log` 复测。
+
+- 初始化 `scripts/work/2026-03-15-screenshot-preview-fast-first-frame/`：`task_plan.md`、`notes.md`、`deliverable.md`。
+- 已完成最新日志复盘与在线资料对照：当前主瓶颈已定位为 4K 首帧协议编码/解码，而不是抓屏 API 是否可用。
+- 已开始实施“快预览图 + 后台原图”方案，准备先改单屏快路径并避免后台补齐触发首帧重载。
+
+- 已完成单屏高 DPI 快路径重构：Windows 下单次 GDI 采集同时生成原始物理像素图和逻辑尺寸预览 BMP，首帧不再等待 4K 预览协议编码。
+- 前端预览加载 effect 已收敛依赖，避免会话对象的无关更新导致首帧重新加载。
+- 本轮编译验证通过：`cargo fmt --manifest-path src-tauri/Cargo.toml`、`cargo check --manifest-path src-tauri/Cargo.toml`、`npm run web:build`。
+- 2026-03-15 最新日志复盘：
+  - `fast_preview_capture_completed raw_capture_ms≈398~421 total_ms≈398~422`
+  - `start_session_completed capture_ms≈399~422 overlay_ready_ms≈119~144 total_ms≈518~567`
+  - `get_preview_protocol_bmp_completed encode_ms=0 encode_path=cached`
+  - `preview_image_decode_done decode_ms≈52~102 from_loading_seen_ms≈88~161`
+  - 结论：首帧图片协议/解码已不是主要瓶颈，剩余大头是 GDI 抓屏与 overlay show/stabilize。
+- 2026-03-15 已完成在线资料核对：
+  - Microsoft Learn 的 `Windows.Graphics.Capture` / `CreateForMonitor` / `Direct3D11CaptureFramePool.CreateFreeThreaded` 更适合低延迟桌面抓屏；
+  - `Desktop Duplication API` 更适合持续帧流与“热键时冻结最近帧”的架构。
+- 2026-03-15 当前建议方向已调整：
+  - 不再继续优化 BMP / `<img>` / JS decode；
+  - 下一轮应优先评估 `Windows.Graphics.Capture` 常驻会话，或至少把 overlay 改成真正预热复用而不是每次 `hide/show/stabilize`。
+
+- 2026-03-15 已完成 `Windows.Graphics.Capture` 单显示器原型接入：
+  - `src-tauri/Cargo.toml`
+    - 新增 Windows 专用 `windows = 0.61.3` 依赖与 `Graphics_Capture / Direct3D11 / WinRT` 等 feature。
+  - `src-tauri/src/services/wgc_capture.rs`
+    - 新建 WGC 捕获模块，输出 `WgcRawCapture { width, height, bgra_top_down, device_create_ms, item_create_ms, session_create_ms, frame_wait_ms, map_ms, total_ms }`。
+  - `src-tauri/src/services/screenshot_service.rs`
+    - 单显示器快路径优先尝试 `capture_monitor_raw_and_preview_wgc_windows()`。
+    - 新增 `capture_strategy=wgc_single_monitor`，失败自动回退 `gdi_single_monitor_dual_capture`。
+    - 增加 `overlay_prewarmed` 状态读写，并在 `start_session_completed` 输出。
+  - `src-tauri/src/app/mod.rs`
+    - 启动期调用 `screenshot_service.prewarm_overlay_window(&app.handle())`，预热 overlay 窗口。
+- 2026-03-15 本轮静态验证结果：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`
+  - 结果：全部通过，当前工作区代码可编译、前端可构建。
+- 2026-03-15 待你本机热键实测的核心日志：
+  - `overlay_prewarm_ready`
+  - `wgc_capture_attempted ... result=success`
+  - `wgc_capture_completed ... frame_wait_ms=... map_ms=...`
+  - `wgc_capture_failed ... fallback=gdi_single_monitor_dual_capture`
+  - `start_session_completed ... capture_strategy=... overlay_prewarmed=true overlay_ready_ms=...`
+- 2026-03-15 最新日志复盘与在线资料核对：
+  - `overlay_prewarm_ready total_ms=38` 说明启动预热已生效；
+  - `wgc_capture_completed total_ms≈181~256ms`，WGC 抓帧本身不慢；
+  - 但 `wgc_capture_attempted elapsed_ms≈801~873ms`，意味着 WGC 之后仍有约 `0.55~0.62s` 的本地 CPU/GDI 构建成本；
+  - `start_session_completed total_ms≈869~957ms`，`overlay_ready_ms≈64~81ms`；
+  - `preview_first_paint from_loading_seen_ms≈77~142ms`，前端首帧显示已不是主瓶颈。
+- 2026-03-15 本轮结论：
+  - 当前 1 秒体感的主因不是 WGC API 慢，而是“WGC 抓到 DXGI 纹理后，代码仍然立即做 GPU->CPU readback + 4K BGRA->RGBA 转换 + GDI 缩放预览 + BMP 包装”；
+  - overlay 预热已拿到一部分收益，但还不足以把整体压到微信/Qt 那种无感级别。
+- 2026-03-15 在线资料结论：
+  - Microsoft Learn 推荐的高性能路线是长期持有 `GraphicsCaptureSession/FramePool`，并让帧留在 GPU 上；
+  - `Desktop Duplication API` 还支持 dirty rect / move rect，更适合“持续帧流 + 最近帧冻结”。
+- 2026-03-15 本轮未再改应用代码，仅更新分析记录，避免下一轮继续在 BMP/WebView decode 上浪费迭代。
+- 2026-03-15 已完成常驻 WGC 最近帧缓存接入：
+  - `src-tauri/src/services/wgc_capture.rs`
+    - 新增 `start_live_capture()`，长期持有 `GraphicsCaptureSession / Direct3D11CaptureFramePool / D3D11 device`，通过 `FrameArrived` 持续回调最近帧。
+  - `src-tauri/src/services/screenshot_service.rs`
+    - `ScreenshotService` 新增 `live_capture` 状态。
+    - `CapturedMonitorFrame` 从“只存 RGBA”改成“可存 BGRA，RGBA 懒转换”。
+    - 启动期支持 `initialize_live_capture()`。
+    - `start_session()` 优先尝试 `live_cache`，并输出 `live_capture_available / frame_age_ms / live_capture_sequence / capture_strategy`。
+    - 若活动截图会话存在，live capture 回调会丢弃新帧，避免 overlay 污染缓存。
+  - `src-tauri/src/app/mod.rs`
+    - `setup()` 现已在 overlay 预热后启动 live capture。
+- 2026-03-15 本轮静态验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`
+  - 结果：全部通过。
+- 2026-03-15 下一步需要你本机复测并贴回新日志，重点看：
+  - `live_capture_started`
+  - `live_capture_frame_ready`
+  - `live_capture_snapshot_used`
+  - `start_session_completed ... capture_strategy=live_cache ... frame_age_ms=...`
+  - 若仍回退，关注 `live_capture_snapshot_skipped` / `live_capture_snapshot_use_failed`
+- 2026-03-15 已继续优化 live cache 热键路径：
+  - `LiveCaptureSnapshot` 新增 `preview_protocol_bytes` 缓存。
+  - live capture 回调阶段就尝试生成逻辑尺寸预览 BMP，并随最近帧一起缓存。
+  - `try_capture_from_live_cache()` 现在优先直接复用缓存预览，日志新增 `preview_source=cached|hot_path_fallback`。
+- 2026-03-15 本轮静态验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`
+  - 结果：全部通过。
+- 2026-03-15 这轮的复测关注点已经从“是否命中 live cache”进一步收敛为：
+  - `start_session_completed capture_ms` 是否从当前约 100ms 继续下降；
+  - `live_capture_snapshot_used ... preview_source=cached` 是否稳定出现；
+  - 若热键总时延仍然明显，则下一步直接处理 `overlay_ready_ms`。
+- 2026-03-15 已继续优化 overlay 几何路径：
+  - `set_overlay_window_geometry()` 现已优先走 `apply_overlay_window_geometry_for_session()`。
+  - Windows 单屏快路径下新增 `resolve_native_overlay_geometry()` 与 `apply_overlay_window_geometry_native_windows()`，直接用 Win32 `SetWindowPos` 设物理坐标/尺寸。
+  - 多屏或非统一缩放场景仍保留原 Tauri 逻辑坐标实现，不扩大回归面。
+- 2026-03-15 本轮静态验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`
+  - 结果：全部通过。
+- 2026-03-15 这轮复测关注点已更新为：
+  - `start_session_completed overlay_ready_ms` 是否继续下降；
+  - `overlay_geometry_drift_detected` 次数是否减少；
+  - `preview_first_paint from_loading_seen_ms` 是否同步下降。
+- 2026-03-15 最新日志出现功能性回归：热键后进程无响应，`log.log` 连续刷屏 `overlay_geometry_drift_detected current_logical=1907x1074@-2,0 target_logical=1920x1080@0,0 outer_physical=3840x2160@-16,0`，最终只能 `Ctrl+C` 强制退出。
+- 2026-03-15 根因判定：
+  - 最新 Win32 物理坐标路径把窗口外框设到了 4K 物理尺寸；
+  - Tauri/WebView 实际逻辑客户区没有与之对齐；
+  - `src-tauri/src/app/window.rs` 对 `Moved/Resized/ScaleFactorChanged` 的自动回正逻辑因此进入事件风暴，造成“冻结”。
+- 2026-03-15 已完成止血回退：
+  - 删除 `apply_overlay_window_geometry_for_session / resolve_native_overlay_geometry / apply_overlay_window_geometry_native_windows`
+  - `set_overlay_window_geometry()` 恢复为稳定的逻辑坐标定位 + probe 回正
+  - 保留此前 live capture、缓存预览、overlay 预热等性能优化
+- 2026-03-15 本轮静态验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - 结果：通过
+- 2026-03-15 你回传的新 `log.log` 说明当前截图链路已经进入可视实时区间：
+  - `start_session_completed total_ms≈88~93ms`
+  - `preview_first_paint from_loading_seen_ms≈79~83ms`
+  - `capture_ms=1`
+  - `overlay_ready_ms≈87~91ms`
+- 2026-03-15 新发现的功能性问题不是时延，而是窗口复用导致的旧预览闪屏：
+  - 第二次显示 overlay 时，前端在新 `session` 拉取完成前仍然渲染旧 `session` 的 `<img>`；
+  - 因此用户会先看到上一张截图，再在几十毫秒后切成新截图。
+- 2026-03-15 已完成修复：
+  - `src/pages/screenshot-overlay-page.tsx`
+    - `session_updated_event` 收到新 `sessionId` 时立即清空旧预览状态和交互状态
+    - 预览 `<img>` 仅在 `previewSurfaceReady` 为真时渲染
+    - 预览 `<img>` 增加 `key={session.sessionId}`，按会话强制重建
+- 2026-03-15 本轮静态验证：
+  - `npm run web:build`
+  - 结果：通过
+- 2026-03-15 已完成默认截图热键切换：
+  - Rust 默认值从 `Ctrl+Shift+1` 调整为 `Ctrl+Shift+X`
+  - 前端默认值和设置页默认文案同步改为 `Ctrl+Shift+X`
+  - 迁移逻辑扩展为同时接管：
+    - `Ctrl+Shift+4`
+    - `Ctrl+Shift+1`
+    - `Ctrl+Alt+A`
+    并统一迁移到 `Ctrl+Shift+X`
+  - 新增测试覆盖“更早默认值 `Ctrl+Shift+4` 可迁移”
+- 2026-03-15 本轮静态验证：
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`
+  - 结果：通过
+- 2026-03-15 新回归问题：程序启动后整块屏幕四边出现黄色边框。结合当前代码和 Windows.Graphics.Capture 机制，已判定这是系统级捕获边框，不是应用自己的绘制层。
+- 2026-03-15 根因：
+  - `src-tauri/src/app/mod.rs` 在 `setup()` 阶段就调用了 `screenshot_service.initialize_live_capture(&app.handle())`
+  - 这会让应用启动后立即进入常驻 monitor capture
+  - Windows 因此立刻对整块显示器绘制黄色捕获边框
+- 2026-03-15 已完成止血：
+  - 删除启动期 `initialize_live_capture()` 调用
+  - 保留 WGC 单次抓帧路径，但不再在程序启动时常驻屏幕捕获
+- 2026-03-15 本轮静态验证：
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - 结果：通过
+- 2026-03-15 已继续处理 overlay 生命周期剩余瓶颈：
+  - `src-tauri/src/services/screenshot_service.rs`
+    - 删除 `1x1` 预热/热键再放大的路径
+    - 新增 overlay `dormant/interactive` 两种状态切换
+    - 预热后保持全尺寸透明热态常驻
+    - 激活时若几何已对齐则跳过 `set_overlay_window_geometry + stabilize`
+    - 仅在存在活动截图会话时才在采集前隐藏 overlay
+    - 新增 `restore_overlay_hot_state()`，在截图结束后把窗口恢复为透明热态而非隐藏
+  - `src-tauri/src/commands/screenshot.rs`
+    - 取消/复制/保存后不再 `window.hide()`，改为调用 `restore_overlay_hot_state()`
+  - `src/pages/screenshot-overlay-page.tsx`
+    - 取消/复制/保存后改为清空前端 session/preview 状态，不再主动隐藏 overlay
+    - `SCREENSHOT_SESSION_NOT_FOUND` 时同样只清空状态，保持窗口透明热态
+- 2026-03-15 本轮静态验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`
+  - 结果：通过
+- 2026-03-15 已继续修复 overlay 热态回归抖动：
+  - `src-tauri/src/services/screenshot_service.rs`
+    - 新增 `realign_overlay_window_if_needed()`
+    - `move_and_focus_overlay_window()` 在 `set_focus()` 后再 probe 一次，若窗口从热态切到可交互态后发生 `-1,0` 漂移，立即回正
+    - `restore_overlay_window_hot_state()` 也补了 restore 后 probe 回正，避免下一次激活前热态几何本身已偏移
+    - `overlay_hot_state_activated` 日志增加 `corrected_after_focus`，避免再把“激活前对齐、激活后漂移”误记成 `geometry_reused=true`
+- 2026-03-15 本轮静态验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - 结果：通过
+## 2026-03-15 Overlay 抖动止血
+- 修改 `src-tauri/src/services/screenshot_service.rs`
+  - 收紧 `OverlayGeometryProbe::is_aligned()`：位置要求精确匹配，尺寸保留 1px 容差。
+  - 优化 `restore_overlay_window_hot_state()`：避免无条件重设全屏几何，仅在 probe 判定漂移时才修正。
+- 验证
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+- 说明：本轮是 Rust-only 修复，未改前端，因此未重跑 `npm run web:build`。
+## 2026-03-15 Overlay 事件风暴止血补丁
+- 修改 `src-tauri/src/services/screenshot_service.rs`
+  - 新增 `OVERLAY_EVENT_SUPPRESS_MS = 250`
+  - `ScreenshotState` 新增 `overlay_event_suppressed_until`
+  - 预热/热态恢复/截图激活前调用 `suppress_overlay_window_events()`
+  - `enforce_overlay_window_geometry()` 提前短路抑制窗口内的事件
+  - 新增 `should_ignore_overlay_window_event()`
+- 修改 `src-tauri/src/app/window.rs`
+  - overlay 的 `Moved/Resized/ScaleFactorChanged` 事件先检查抑制状态，再决定是否执行几何回正
+- 验证
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+- 说明：本轮为 Rust-only 修复，未改前端，未重跑 `npm run web:build`。
+## 2026-03-16 Overlay 事件监听回退 + 固定日志文件
+- 修改 `src-tauri/src/app/window.rs`
+  - 移除 screenshot overlay 的 `Moved/Resized/ScaleFactorChanged` 自动几何回正监听
+  - 仅保留 `CloseRequested` 时清理会话
+- 修改 `src-tauri/src/logging/mod.rs`
+  - 增加固定目录日志目标：当前工作目录下 `log.log`
+  - 保留 stdout 和 OS log dir 输出
+- 验证
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+- 说明：本轮是 Rust-only 修复，未改前端，未重跑 `npm run web:build`。
+## 2026-03-16 Overlay 回退到隐藏稳态
+- 修改 `src-tauri/src/services/screenshot_service.rs`
+  - `prewarm_overlay_window_once()` 不再 `show()` overlay，若已可见则直接 `hide()`
+  - `restore_overlay_window_hot_state()` 改为隐藏 overlay，而不是恢复透明热态
+  - 服务日志从 `overlay_hot_state_restored` 改为 `overlay_hidden_after_session`
+- 修改 `src-tauri/src/commands/screenshot.rs`
+  - copy/save/cancel 后的日志语义改为“hide overlay window”
+- 验证
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+- 说明：本轮是 Rust-only 修复，未改前端，未重跑 `npm run web:build`。
+## 2026-03-16 固定日志路径避开 src-tauri 监听
+- 修改 `src-tauri/src/logging/mod.rs`
+  - 增加 `resolve_fixed_log_dir()`
+  - 若当前工作目录为 `src-tauri`，固定日志写到仓库根目录 `runtime-logs\log.log`
+- 验证
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+- 说明：本轮只修日志路径，无前端改动，未重跑 `npm run web:build`。
+## 2026-03-16 Overlay 激活热路径修正
+- 修改 `src-tauri/src/services/screenshot_service.rs`
+  - 修复 `move_and_focus_overlay_window()` 的几何复用判断：隐藏但已预热且已对齐的 overlay 现在会直接复用 geometry，不再因为 `was_visible=false` 强制重跑 `set_overlay_window_geometry() + stabilize_overlay_window_after_show()`
+  - `start_session()` 改为先 `prepare_overlay_window()` 并发送 `emit_session_updated()`，再执行 overlay 激活，让隐藏 overlay 在弹出前就开始加载最新截图会话
+  - 新增 `overlay_activation_profile` 结构化日志，拆分 `style/geometry/show/stabilize/focus/realign` 热路径耗时
+- 验证
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+- 说明：本轮是 Rust-only 修复，未改前端，未重跑 `npm run web:build`。
+## 2026-03-16 Live Cache 短等待兜底
+- 修改 `src-tauri/src/services/screenshot_service.rs`
+  - 当首次 `try_capture_from_live_cache()` 未命中时，不再立刻退回 `wgc_single_monitor`
+  - 增加 `wait_for_live_capture_snapshot()`，在 180ms 短窗口内轮询 DD 最新帧
+  - 新增 `live_capture_snapshot_wait_succeeded` / `live_capture_snapshot_wait_timed_out` 日志
+- 验证
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+- 说明：本轮是 Rust-only 修复，未改前端，未重跑 `npm run web:build`。
+## 2026-03-16 Hidden-Prewarmed Overlay 稳定化短路
+- 修改 `src-tauri/src/services/screenshot_service.rs`
+  - 新增 `hidden_prewarmed` 判定
+  - 对“已预热但当前隐藏”的 overlay，保留一次 geometry 设置，但跳过 `stabilize_overlay_window_after_show()`
+  - `overlay_activation_profile` 新增 `hidden_prewarmed` 字段
+- 验证
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+- 说明：本轮是 Rust-only 修复，未改前端，未重跑 `npm run web:build`。
+## 2026-03-16 Overlay 透明背景前置 + 激活轻量化
+- 修改 `src-tauri/src/services/screenshot_service.rs`
+  - 修正 `Color` 导入为 `tauri::window::Color`
+  - 保持 overlay 统一显式透明背景
+  - 隐藏预热窗口若 probe 已对齐，则不再强制重放 geometry
+- 修改 `index.html`
+  - 在 `<head>` 内联 screenshot overlay 透明背景样式，抢在主 CSS 包前消除首屏白底
+- 验证
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`
+- 说明：当前缺的仍是你这轮新的完整截图会话日志；你手动复制的根目录 `log.log` 只有启动段，不足以反映本轮修复后的热路径。
+## 2026-03-16 Overlay 焦点漂移补偿记忆
+- 修改 `src-tauri/src/services/screenshot_service.rs`
+  - `ScreenshotState` 新增 `overlay_focus_drift_compensation`
+  - 隐藏预热 overlay 激活前可读取上次观测到的焦点漂移补偿
+  - 若 `realign` 仍观察到小范围偏移，则更新补偿缓存，后续激活前直接预补偿
+  - `overlay_activation_profile` 新增 `focus_compensation=(x,y)`
+- 验证
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`
+- 说明：这一轮的目标不是继续改抓屏，而是把稳定出现的 `post_focus_activation @-2,0` 从热路径中拿掉。

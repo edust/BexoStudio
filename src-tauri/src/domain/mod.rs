@@ -31,8 +31,10 @@ pub use launch_task::{
 #[allow(unused_imports)]
 pub use preferences::{
     AppPreferences, CodexHomeDirectoryInfo, CustomEditorPreference, DiagnosticsPreferences,
-    HotkeyPreferences, IdePreferences, StartupPreferences, TerminalCommandTemplate,
-    TerminalPreferences, TrayPreferences, WorkspacePreferences,
+    HotkeyPreferences, IdePreferences, ScreenshotToolHotkeyPreferences, StartupPreferences,
+    TerminalCommandTemplate, TerminalPreferences, TrayPreferences, WorkspacePreferences,
+    DEFAULT_SCREENSHOT_CAPTURE_HOTKEY, EARLIER_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
+    LEGACY_SCREENSHOT_CAPTURE_HOTKEY, PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
 };
 pub use project::{ProjectRecord, UpsertProjectInput};
 pub use resource_browser::{
@@ -49,7 +51,9 @@ pub use restore_run_task::{
 };
 pub use screenshot::{
     CancelScreenshotSessionResult, CopyScreenshotSelectionResult, SaveScreenshotSelectionResult,
-    ScreenshotRenderedImageInput, ScreenshotSelectionInput, ScreenshotSessionUpdatedEvent,
+    ScreenshotImageStatus, ScreenshotMonitorView, ScreenshotPreviewTransport,
+    ScreenshotRenderedImageInput, ScreenshotSelectionInput, ScreenshotSelectionRenderMode,
+    ScreenshotSelectionRenderTile, ScreenshotSelectionRenderView, ScreenshotSessionUpdatedEvent,
     ScreenshotSessionView, StartScreenshotSessionResult, SCREENSHOT_OVERLAY_WINDOW_LABEL,
     SCREENSHOT_SESSION_UPDATED_EVENT_NAME,
 };

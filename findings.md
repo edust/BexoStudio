@@ -1,5 +1,73 @@
 # findings
 
+## 2026-03-15
+- 用户当前目标已从“继续抠 WGC/WebView 图片链路”切换为“无黄边 + 接近实时”，这要求 live capture 后端本身不再依赖 `Windows.Graphics.Capture` 的系统捕获边框机制。
+- 在当前 `tauri dev` / 非 package identity 运行形态下，`GraphicsCaptureAccessKind::Borderless + graphicsCaptureWithoutBorder capability` 并不是可立即稳定落地的方案；即使发布态可做，也不能解决当前开发态黄边问题。
+- 因此下一轮正确路线是 `Desktop Duplication API` 常驻最近帧原型，而不是继续围绕 `WGC borderless` 打补丁。
+- `Desktop Duplication` 的实现关键约束来自官方 DXGI 文档：
+  - `IDXGIOutput1::DuplicateOutput` 需要“来自目标输出适配器”的 D3D11 设备；
+  - `AcquireNextFrame` 必须使用有限超时，不能永久阻塞 worker；
+  - 成功获取一帧后必须及时 `ReleaseFrame`；
+  - 更适合做“常驻最近帧缓存 + 热键时冻结”的路径。
+- 当前工程下，`Desktop Duplication` 初始化失败时不应自动回退到启动期 `WGC live capture`，否则会重新引入 WGC 的系统黄边；更稳妥的兜底是仅保留现有热键后的 one-shot `WGC/GDI` 链路。
+
+## 2026-03-14
+- 在 Tauri 进程 DPI awareness 打开的场景下，`display_info.scale_factor` 可能固定为 `1`，即使系统缩放并非 100%；这会让“仅依赖 screenshots/display_info.scale_factor”的归一化策略失效。
+- 针对上述机型，应优先使用 Tauri `available_monitors()` 的 monitor `scale_factor` 和 physical rect 来恢复 logical rect，再回落到 screenshots 侧启发式。
+- 在部分 Windows 高 DPI 机型上，`display_info.width/height` 可能与截图返回的 `capture_width/height` 接近 1:1，而 `display_info.scale_factor` 仍大于 1；这说明 display 坐标语义可能偏向 physical。
+- 当这类 raw display 坐标直接喂给 `Position::Logical/Size::Logical` 时，overlay 会被按逻辑像素再次放大，表现为“preview 巨大”。
+- 更稳妥的做法是先做 monitor 级坐标标准化：依据 `capture/raw_display` 的 measured scale 与 reported scale 判定坐标空间，再统一折算为 logical display 坐标进入会话与窗口定位。
+- 修复后需要保留结构化诊断日志（raw display、capture、reported sf、measured sf、normalized display、coordinate space），否则不同机型很难复盘 DPI 语义漂移。
+- 预览性能瓶颈除 PNG 编码外，还包括“会话图像二次 clone”；此前 `CapturedMonitorFrame::to_image()` 每次会复制整块 RGBA 原图。
+- 把会话原图缓存改成 `Arc<RgbaImage>` 并在 preview/crop 链路按引用访问，可显著减少 4K 场景下的内存复制开销。
+- preview 编码改为 `PngEncoder(Fast + NoFilter)` 后，编码耗时可明显下降；为稳健性可保留失败回退到默认 PNG 编码路径。
+- overlay 页面对窗口拖拽并无显式调用：仓库内未检索到 `data-tauri-drag-region / startDragging`，可排除前端主动拖拽窗口路径。
+- 现有 screenshot overlay 链路缺少“运行期几何锁定”；窗口显示后若发生 `Moved/Resized/ScaleFactorChanged`，此前不会自动回正。
+- 在高 DPI 与无边框窗口组合下，单次 `set_position/set_size` 后仍可能出现逻辑几何漂移；应记录“目标 vs 当前几何差值”并在漂移时回正。
+- 你提供的新日志证明漂移依然存在且可人为拖动：`overlay_geometry_drift_detected` 的 `window_moved` 偏移可达 `(1412, 685)`，说明仅靠事件后回正不足以满足“不可移动”要求。
+- `overlay_geometry_applied` 中 `outer_physical=3866x2173`（目标 4K 为 3840x2160）表明存在无边框窗口外框膨胀；几何探测应以 `inner_position/inner_size`（client 区域）为准，而不是 `outer_position`。
+- Windows 场景需要额外做原生样式锁（去掉 `WS_CAPTION/WS_THICKFRAME/WS_SYSMENU` 等）才能从底层禁止拖动。
+- 截图进入后的“黑屏等待”来自两点叠加：`sessionImageReady=false` 时页面仍渲染全屏 `bg-black/45` mask，且 overlay 窗口本身是非透明。
+- 仅移除 loading 提示文案不够，必须同时处理“加载期渲染策略 + 窗口透明策略”，否则黑屏仍会出现。
+- 对 uniform scale 场景，preview 生成可走 native 拼接路径，避免先缩到 logical 再编码，从而缩短底图就绪时间。
+
+- 当前截图启动慢的主因不是热键注册，而是 `start_session()` 把抓屏、多屏拼接、PNG 编码、Base64 包装全部放在 overlay 显示之前；窗口真正出现前已经走完了一整条重链路。
+- 当前 `capture_virtual_desktop()` 会把 `screenshots` 抓到的物理像素图缩回 `display_info.width/height`，同时会话 `scale_factor` 又被写死为 `1.0`；这意味着高 DPI 信息在后端已经丢失，前端再按统一比例导出只能做近似。
+- `screenshots@0.8.10` 在 Windows 下实际上已经按 `display_info.scale_factor` 抓取物理像素大小，Bexo 当前额外的 `resize` 才是 DPI 丢失的关键步骤。
+- `ParrotTranslator` 的可借鉴点不是它的单屏抓取路径，而是“显示图 + 原图”分离和最终导出时再做坐标回映射的架构。
+- `screenshot://session-updated` 一旦改成同一 session 内的 `loading -> ready` 更新，前端不能再沿用“收到事件就整页 reset”的旧写法，否则 preview 一准备好就会把用户当前状态清空。
+- 多屏 mixed DPI 场景下不存在一个天然统一的 native 像素网格；更稳妥的做法是后端显式区分 `native` 与 `logical_fallback`，在无法保证统一倍率时退回逻辑尺寸底图，而不是继续伪造全局 `captureWidth / displayWidth`。
+
+- `voiceType` 的热键实现不是单纯依赖 `tauri-plugin-global-shortcut`；它在 Windows 上额外维护了一条 `WH_KEYBOARD_LL` 低层键盘钩子路径，用来承载 `RAlt`、`LWin+LAlt` 这类 side-specific / modifier-only 热键。
+- `voiceType` 的默认 toggle 已经从历史 `Alt+B` 迁移到 `RAlt`，说明它自己也回避了 `Alt + 字母` 的不稳定路径。
+- `voiceType` 明确限制高级热键中的 `Alt + 字母/功能键` 与 `Win + 字母/功能键`，理由分别是菜单抢占与开始菜单抢占；这套限制适合直接移植到 Bexo。
+- Bexo 当前设置页录制器只支持通用 `Ctrl / Alt / Shift / Super`，不支持 `LAlt / RAlt` 这类 side-specific token，因此即使后端支持 hook，前端也必须同步扩展。
+- Windows hook 热键线程如果在消息队列尚未创建时就接收 `PostThreadMessageW`，配置更新可能直接投递失败；启动线程时需要先显式创建消息队列，再接受配置消息。
+- 若设置页仍坚持“热键必须包含非修饰键”，即使后端已支持 hook，`RAlt` 这类 modifier-only 热键也永远无法由用户录制出来；录制器必须单独放开“side-specific modifier-only”这一类组合。
+- 截图工具热键属于 overlay 内部热键，不应复用 `tauri-plugin-global-shortcut` 的解析器；否则 `1~5` 这类单键会被误判为“热键格式无效”。
+- 仅改 Settings 保存逻辑不够，overlay 如果仍用硬编码 `TOOL_HOTKEY_MAP`，用户配置不会生效；必须把读取偏好与事件匹配一起改造。
+- 截图全局热键改为 `Ctrl+Shift+1` 后，与默认工具热键 `1~5` 在应用内不冲突：全局热键含修饰键，overlay 工具热键默认无修饰键。
+- `settings-page` 中若直接在渲染阶段构造 `screenshotToolHotkeys` 对象，并在 `useEffect` 里无条件 `setScreenshotToolHotkeyDrafts`，会触发 React 无限更新；需要 `useMemo` 稳定引用并在 `setState` 前做值比较。
+
+- 当前截图热键 `Ctrl+Alt+A` 已能成功注册到全局热键层，但日志里缺少对应的“收到热键”记录，说明问题更偏向 Windows 对该组合的实际投递稳定性，而不是注册失败。
+- `tauri-plugin-global-shortcut` 在 Windows 下直接调用 `RegisterHotKey`，没有额外的补偿或去抖层；默认键位设计本身必须规避高风险组合。
+- 只改前端默认值不足以修复老用户，因为历史默认 `Ctrl+Alt+A` 已可能持久化到 `settings/preferences.json`；必须在偏好初始化阶段补一次迁移。
+- 对 `Ctrl+Alt+...` 更稳妥的策略是“提示风险但不强制拦截”，既能把问题暴露清楚，也不阻止少数用户继续自定义。
+
+- 启动时看到“当前没有可用截图会话，请先按截图热键。”并不是普通对话框，而是预创建的 `screenshot_overlay` 独立窗口被错误显示到了前台。
+- 本机 `C:\Users\aka86\AppData\Roaming\studio.bexo.desktop\.window-state.json` 当前只记录了 `main`，说明这次异常不是“overlay 上次状态被保存后恢复”，而是启动期窗口恢复逻辑本身把隐藏窗口显示了出来。
+- `tauri-plugin-window-state@2.4.1` 的 `restore_state` 在“窗口没有已保存状态”的分支里仍会执行 `show() + set_focus()`；对预创建且 `visible: false` 的 `screenshot_overlay` 来说，这会把辅助窗口错误顶到最前面。
+- `screenshot_overlay` 属于临时工具窗口，不应该参与通用窗口状态保存/恢复；更稳妥的做法是把它加入 window-state denylist，并在前端 overlay 页对“无会话”场景做自隐藏兜底。
+- 你本次 `log.log` 已证明当前首帧慢点不在协议读文件，而在两段固定成本：`start_session_completed total_ms≈463~516ms` 与 `preview_image_ready total_ms≈522~567ms`；其中 4K BMP 编码约 `494~532ms`，已经是新的主瓶颈。
+- 同一批日志里 `preview protocol served file` 紧跟在 `finish_preview_preparation_completed` 之后，说明自定义协议读取链路已通，不再是主故障点。
+- overlay 页已经埋了 `preview_image_decode_* / preview_canvas_first_paint`，但当前只写 `console.info`，不会稳定进入 Tauri/Rust 持久化日志，因此 ready 之后的前端首帧阶段仍不可观测。
+- 当前 overlay 在 `imageStatus=ready` 后会同时渲染整屏 `<img>` 与整屏 `<canvas>`，而 canvas 默认会再次把整张底图画一遍；即使没有 effect 预览，这次整屏重绘也会额外占用首屏预算。
+- 对截图编辑 overlay 而言，首屏背景图只需要与逻辑显示尺寸一致；最终复制/保存仍走原始 capture 数据，因此高 DPI 单屏没有必要优先生成 3840x2160 native 预览文件。
+- 你最新的 `log.log` 证明，“逻辑尺寸预览”这轮并没有把首帧做快，反而把瓶颈从 `encode_ms≈500ms` 转成了 `prepare_ms≈1200ms`；当前最慢的是 CPU resize，不是编码。
+- `ParrotTranslator` 本地源码的关键点不是“缩得更好”，而是“显示路径根本不缩”：`QScreen::grabWindow(0)` 直接拿到 `QPixmap`，编辑窗口 `paintEvent` 直接 `drawPixmap(...)`，最终导出时才用 `scaleRect` 把逻辑选区映射回原始图。
+- `ParrotTranslator` 的 `displayScreenshot` 与 `originalScreenshot` 是两套职责：显示快路径直接用 display pixmap，导出/复制才依赖原始图；这是当前 Bexo 应该对齐的结构。
+- 在你这台 4K@200% 单屏机上，ParrotTranslator 的 `displayCapture.scaled(screenGeometry * devicePixelRatio)` 实际目标尺寸仍然是物理像素尺寸，本质上接近“保留原图 + 附带 DPR 元数据”，而不是先缩成逻辑图。
+
 ## 2026-03-11
 - 仓库缺少 `docs/*` 文档与根级计划文件，已按当前任务补齐最小工作记录。
 - 现有命令仅支持按 workspace 根路径打开终端，不支持资源路径定向打开。
@@ -96,3 +164,153 @@
 - mixed group drag 不需要第 6 套专用位移算法；直接复用统一 `ObjectSelectionAnnotation` 偏移和统一 group bounds，就能让预览、提交、组选中框和边界约束保持同源。
 - mixed clipboard 复制源不能按家族拼接；必须按 `annotations` 原始栈顺序提取当前选中对象，否则跨家族复制后组内相对层级会被打乱。
 - mixed paste / duplicate 不该再单独维护第 6 套“混选恢复”逻辑；继续复用 `split buckets + restoreObjectSelections` 才能保证粘贴后各家族主选中对象、组选中框和后续 mixed drag 保持一致。
+- 当前用户本机持久化的 `preferences.json` 里，`hotkey.screenshotCapture` 实际是 `LCtrl+LShift`；这类“仅修饰键”的截图热键会在按下第二个修饰键时误触发/不稳定，必须在启动时自修复，不能只靠设置页录制器约束新输入。
+- `Bexo Studio` 当前真正的系统级全局热键只有后端 `HotkeyService` 注册的 `screenshotCapture / voiceInputToggle / voiceInputHold`；资源浏览器和截图 overlay 里的 `Ctrl+Shift+...` 只是页面内或 overlay 内快捷键，不能把它们和系统级热键混为一谈。
+- `tauri-plugin-global-shortcut` 支持运行时 `unregister_all`/重新注册；当应用内热键状态和插件内部注册态发生漂移时，先清空再重建比按缓存逐个反注册更稳，适合用来修复“恢复默认提示已占用”这类自占用问题。
+- 截图 overlay 的“黑屏等待”不只是图片编码耗时问题；只要全局 `body` 背景仍是主题色，窗口在底图未就绪时就会直接显示为整屏黑底/深色底。
+- 仅把 overlay 根容器改透明不够，必须在 HTML 启动早期就对 `overlay=screenshot` 打标，并覆盖 `html/body/#root/.ant-app` 四层背景，否则仍会先闪一次主题背景。
+- 若目标是“不要任何过渡界面”，仅做透明化仍不够；必须把 overlay 的 `show` 时机后移到 `preview_ready` 之后，预热阶段保持隐藏。
+- 把窗口几何和原生样式锁前置到隐藏预热阶段，可以避免 show 瞬间出现“标题栏/边框态”的短暂闪现。
+- 但“`show` 延迟到 `preview_ready`”会直接把 `preview_prepare+encode`（当前约 2s）暴露成可感知等待，不符合“按下即进工作态”的交互预期。
+- 对该产品诉求，更合适的策略是“overlay 立即进入工作态 + 底图异步到位”，而不是“窗口延迟显示”。
+- 顶部短暂蓝色标题栏是 Windows 非客户区（原生标题栏）在 overlay show 初期的瞬时闪现；其触发特征与 `overlay_geometry_drift_detected current_logical@7,0` 同步出现。
+- 抑制该闪现需要窗口层处理：overlay title 置空 + show 后短轮询稳定 `style/geometry`，单靠前端样式无法解决。
+- 当前“按下热键后 4~5 秒才看到冻结底图”的主因不是 `screen.capture()` 本身（该段通常几百毫秒内），而是后续链路叠加：
+  - 全屏图（4K）预览拼图 + PNG 编码
+  - 大体积 Base64 字符串跨 Tauri invoke 传输到前端
+  - 前端 `loadImage(dataUrl)` 解码与首帧绘制
+- `get_screenshot_session` 目前返回完整 `image_data_url`，这会把几十 MB 级字符串搬运成本放在“会话读取”链路里，容易产生明显体感延迟。
+- 将预览主通道改为“临时文件路径 + `convertFileSrc`”后，IPC 只传小字符串路径，不再传输数十 MB 的 `dataUrl`，可直接消除此段大包序列化/反序列化成本。
+- 预览编码选择“BMP 优先 + PNG 回退”能用更低 CPU 成本换取更快首帧，且保留像素无损，适合截图编辑底图场景。
+- 单屏场景下，预览拼图不应总是走“新建黑底 + overlay”路径；直接复用单监视器图像可减少一次大块内存搬运。
+- 在当前工程里，仅把预览改成 `convertFileSrc(tempPath)` 还不够；如果 `asset` 协议 feature/scope 未显式启用，这条链路会表现为“后端 ready 了，但前端底图完全不出现”。
+- 对这个场景，自定义受控协议比继续追 `asset` 配置更稳：路径白名单、日志、MIME 和错误响应都能在应用内闭环控制。
+- 若用户贴回的运行日志里仍然看不到 `preview_transport / get_screenshot_preview_rgba / preview_raw_fetch_*`，应先判定该日志来自旧构建或旧运行，而不是继续基于那份日志分析当前代码路径；否则会把排查重新带回已经废弃的 file/resize 分支。
+- 最新 `log.log` 已证明 `raw_rgba_fast` 本身是通的，当前剩余最大单段耗时不是 Rust `get_preview_rgba`（仅约 `3~4ms`），而是前端 `preview_raw_fetch_done fetch_ms≈313~318ms`；这基本就是 `33MB RGBA` 经由 Tauri invoke 进入 JS 的搬运成本。
+- 在当前 Tauri/WebView 架构下，若目标继续压到“接近实时”，下一步不该再优化 `putImageData` 或 Rust 会话查询，而应把单屏首屏预览改成“协议直供图片给 WebView 原生解码”，减少 JS 大包拷贝。
+- 对截图 overlay 来说，“raw fast”真正该对齐的不是“前端拿到 raw RGBA”，而是“首屏显示阶段不让 JS 处理整张图”；让 WebView 直接从 custom protocol 解码图片，才更接近 ParrotTranslator 的原生显示思路。
+- `DynamicImage::write_to(ImageOutputFormat::Bmp)` 在这条链路里不够快，首屏图若继续走 BMP，最好直接手写 BMP header + BGR row copy，避免通用编码器的额外开销。
+
+## 2026-03-15
+- 你最新的 `log.log` 已证明当前 1 秒延迟的主要成本是：`capture_ms≈330ms`、`overlay_ready_ms≈125ms`、以及 4K 首帧 `encode_ms≈370ms + 浏览器侧 onload 完成≈585~621ms`。
+- 现有 `RawRgbaFast` 已不再经过 JS 大包搬运，但仍然把 `3840x2160` 首帧图送给协议与 WebView2；当前慢点已经从 JS IPC 转移为 4K 首帧图的编码/解码。
+- 本地 `screenshots-0.8.10` crate Windows 后端确认仍是 GDI：`CreateCompatibleBitmap + StretchBlt + GetDIBits`。
+- 因此下一轮最优先的收益点不是继续抠前端 `<img>` 细节，而是改成“逻辑尺寸快预览图 + 后台原图补齐”的 ParrotTranslator 式分离结构。
+
+- 本轮实现从“快预览图 + 后台原图补齐”进一步收敛为“同次 GDI 双产物”：一次采集同时拿到原图和逻辑尺寸预览，避免预览/导出时刻不一致。
+- 最新 `D:\Desktop\rust\BexoStudio\log.log` 已证明首帧图片链路已基本压缩完成：`get_preview_protocol_bmp_completed encode_ms=0 encode_path=cached`，前端 `preview_image_decode_done` 常态仅约 `52~102ms`，不再是主瓶颈。
+- 该日志下真正主瓶颈已经稳定收敛为两段：`capture_ms≈399~422ms` 与 `overlay_ready_ms≈119~144ms`；热键到首帧的核心链路大约是 `518~567ms + 88~161ms`。
+- 当前单屏快路径仍然是重型 GDI 双产物：同一次截图里执行 `CreateDCW/CreateCompatibleDC/CreateCompatibleBitmap + StretchBlt(raw) + StretchBlt(preview) + GetDIBits(raw) + GetDIBits(preview)`，这会把 4K 原图与 1080p 预览都在热键后同步取回，结构性成本仍高。
+- 当前 overlay 也不是“纯热窗口切换”；每次截图仍会走 `hide -> set_decorations/set_resizable -> lock_native_style -> set_position/set_size -> show -> stabilize -> focus`，这解释了稳定的 `overlay_ready_ms≈120ms+`。
+- 微调 BMP、WebView `<img>`、JS decode 的边际收益已经接近耗尽；若目标继续逼近微信/Qt 那种无感首帧，下一步必须优先动抓屏后端与 overlay 生命周期，而不是继续抠前端图片细节。
+- Microsoft 官方资料给出的更合适方向是：
+  - `Windows.Graphics.Capture` + `IGraphicsCaptureItemInterop::CreateForMonitor` 直接为 Win32 桌面应用创建 monitor capture item；
+  - `Direct3D11CaptureFramePool::CreateFreeThreaded` 让 `FrameArrived` 在内部 worker thread 触发，避免 UI 线程/Dispatcher 依赖；
+  - 或使用 `Desktop Duplication API` 保持一个持续的帧流会话，在热键时直接冻结最近一帧，而不是热键后才启动整套抓屏流程。
+- 若产品目标是“几乎实时”，最值得做的不是一次性 one-shot 截图更快一点，而是“常驻捕获会话 + 最近帧缓存 + 热键时立即冻结”，这样才能绕开当前 `capture_ms≈400ms` 这段结构性等待。
+- 2026-03-15 本轮已落地 `Windows.Graphics.Capture` 单显示器原型：
+  - 使用 `RoInitialize(RO_INIT_MULTITHREADED)` 初始化 WinRT；
+  - 通过 `IGraphicsCaptureItemInterop::CreateForMonitor` 为 `HMONITOR` 创建 `GraphicsCaptureItem`；
+  - 使用 `Direct3D11CaptureFramePool::CreateFreeThreaded` + `FrameArrived` + `TryGetNextFrame` 取得首帧；
+  - 通过 staging texture `Map/Unmap` 读回 top-down BGRA，再复用现有逻辑生成 raw RGBA 和预览 BMP。
+- 该 WGC 实现已设计为“只在 Windows + 单显示器快路径尝试一次”，若任一阶段失败，直接记录 `wgc_capture_failed` 并回退现有 GDI 路线，不会中断主截图功能。
+- overlay 预热已改为启动期执行一次：先将 overlay 移到 `(-32000,-32000)` 的 `1x1` 隐藏区域，锁定无边框样式后 `show -> sleep(24ms) -> hide`，将窗口实例保温以减少后续截图时的原生窗口建立即时成本。
+- `ScreenshotState` 已增加 `overlay_prewarmed` 状态位，`start_session_completed` 现在会明确记录本次截图是否命中预热窗口。
+- 2026-03-15 最新 `D:\Desktop\rust\BexoStudio\log.log` 已证实：
+  - WGC 抓帧本身并不慢，`wgc_capture_completed total_ms≈181~256ms`；
+  - 但同一次 `wgc_capture_attempted elapsed_ms≈801~873ms`，说明 WGC 之后的本地构建链路额外吃掉了约 `545~617ms`；
+  - 这段额外成本来自当前代码仍在热路径上执行：
+    - `rgba_image_from_top_down_bgra()` 的 4K 全图 BGRA->RGBA CPU 逐像素转换；
+    - `build_preview_bmp_from_top_down_bgra_windows()` 内的 GDI `CreateDCW/CreateCompatibleBitmap/StretchDIBits/GetDIBits`；
+    - 预览 BMP 包装与内存拷贝。
+- 同一份日志也表明，overlay 预热已把 `overlay_ready_ms` 从此前约 `120~140ms` 压到 `64~81ms`，但仍会出现 `overlay_geometry_drift_detected`，说明窗口虽然预热了，截图时仍在做一次从 `1x1` 隐藏态到全屏态的原生几何修正。
+- 现阶段热键到首帧的大头不再是 WebView decode：
+  - `preview_image_decode_done from_loading_seen_ms≈77~142ms`
+  - 但 `start_session_completed total_ms≈869~957ms`
+  - 所以当前接近 1 秒的体感主要由“截图链路本身”决定，而不是前端显示决定。
+- 对照微软官方资料，真正高收益的方向应改为：
+  - 复用长期存在的 `GraphicsCaptureItem / D3D11 device / Direct3D11CaptureFramePool / GraphicsCaptureSession`，而不是每次热键都重建；
+  - 避免在首帧热路径里做 GPU->CPU 读回与整图像素格式转换；
+  - 让首帧直接走 GPU 纹理到 swap chain / composition surface 的显示路径；
+  - 若需要“几乎无感”，进一步走持续捕获会话或 Desktop Duplication 最近帧缓存，而不是热键后再启动 snapshot。
+- 2026-03-15 本轮实现的关键点不是继续抠 BMP/WebView，而是把 `WgcLiveCaptureHandle` 接入业务层：启动期建立常驻 WGC 会话，热键时优先消费最近一帧缓存，再回退 one-shot WGC/GDI。
+- `CapturedMonitorFrame` 现已支持 `bgra_top_down + OnceLock<RgbaImage>` 双形态；这让热键路径可以只搬运 BGRA，不必立即做 4K `BGRA -> RGBA` 逐像素转换，真正需要裁剪/复制/保存时再 materialize。
+- 只要 `start_session()` 仍然走一次性 `capture_single_monitor_fast_preview()`，日志里的 `capture_ms` 就还会包含抓屏本身；这轮已经加上 `capture_strategy=live_cache`、`frame_age_ms`、`live_capture_sequence`，后续是否真的脱离现抓要直接看这几个字段，而不是只看总时延。
+- 为避免 overlay 污染最近帧缓存，live capture 回调现在会在活动截图会话存在时丢弃新帧，并以节流日志记录 `live_capture_frame_dropped reason=active_screenshot_session`。
+- 当前 live cache 路线仍保留了“热键时用缓存 BGRA 生成逻辑尺寸 BMP 预览”这一步，目的是先把“热键后现抓”从主路径摘掉；如果你本机日志显示 `capture_strategy=live_cache` 后总时延仍明显大于目标，下一阶段就该直接上 native preview/composition，而不是再抠这层 BMP。
+- 2026-03-15 最新 `log.log` 已证明 live cache 接入后，当前主要剩余成本分布大致为：`capture_ms≈100ms`、`overlay_ready_ms≈85~88ms`、`preview_first_paint from_loading_seen_ms≈80~160ms`；总体验已从约 1 秒压到零点几秒。
+- 这 100ms 的 `capture_ms` 已经不再是抓屏 API，而是 `try_capture_from_live_cache()` 中的“缓存 BGRA -> 逻辑尺寸预览 BMP”热键态构建成本。
+- 因此下一刀最划算的不是继续换抓屏 API，而是把预览 BMP 也前移到 live capture 回调里预生成；这样热键路径只读缓存，不再做任何预览编码工作。
+- 当前日志里的 `overlay_geometry_drift_detected current_logical=1x1@7,0 -> 1920x1080@0,0` 说明 overlay 仍保留了“从 1x1 预热态切回全屏”的窗口几何修正成本；若本轮把热键 `capture_ms` 压下去后体感仍不够，下一阶段应优先继续砍 `overlay_ready_ms`，而不是回头优化图片协议。
+- 2026-03-15 最新 `log.log` 已证实这轮预览缓存前移生效：`live_capture_snapshot_used ... preview_source=cached` 稳定出现，`capture_ms` 已从上一轮约 `100ms` 压到 `0~1ms`。
+- 现阶段主瓶颈已经彻底收敛到窗口层：`overlay_ready_ms≈80~96ms`，同时每次热键都会出现 `overlay_geometry_drift_detected current_logical=1920x1080@7,0`，首轮还会额外经历 `1x1 -> 1920x1080` 的预热态切换。
+- 这说明继续优化图片链路的收益已经小于窗口几何链路；下一步应优先绕开 Tauri 逻辑尺寸定位，直接用 Win32 物理坐标/尺寸设定 overlay。
+- 单屏快路径下，`capture_width/height` 与 `display_width/height * scale_factor` 已经一致，可以安全把 overlay 几何直接下发到 `SetWindowPos(hwnd, ..., physical_x, physical_y, physical_width, physical_height)`；多屏/非统一缩放仍保留原 Tauri 逻辑坐标实现作为回退。
+- 2026-03-15 最新冻结日志证明，上述 Win32 物理坐标路径在当前 Tauri/WebView 窗口模型里并不安全：窗口外框被设为 `3840x2160` 后，逻辑客户区却稳定落在 `1907x1074@-2,0`，导致 `Moved` 事件每次都会继续判定漂移，形成无穷回正循环。
+- 这不是“性能优化副作用可以接受”的级别，而是明确的功能性回归。当前必须先回到稳定的逻辑坐标定位基线，再继续优化 `overlay_ready_ms`，否则后续所有性能数据都不可信。
+- 2026-03-15 最新 `log.log` 表明当前热键到截图态已基本进入实时区间：`start_session_completed total_ms≈88~93ms`，`preview_first_paint from_loading_seen_ms≈79~83ms`，主流程已经不是性能问题。
+- 第二次截图时“先闪上一次截图”不是后端把旧图片又发了一遍，而是前端复用同一个 overlay 窗口时，旧 `session` 的 `<img>` 在新会话 `loadSession()` 返回前还继续渲染。
+- 仅在 `useEffect([session])` 中把 `previewSurfaceReady` 置 `false` 不够，因为这一步发生在新 `session` 写入之后；而旧图闪屏发生在 `session_updated_event` 到 `loadSession()` 完成之间这段窗口重用期。
+- 对这个问题，最小且正确的修复点是：
+  - 在收到新的 `sessionId` 事件时立即清空 `previewRenderableRef`、关闭 `previewSurfaceReady`、重置交互态；
+  - 让底图 `<img>` 只在 `previewSurfaceReady` 为真时渲染，并以 `session.sessionId` 为 React `key`，避免旧 DOM 节点复用。
+- 2026-03-15 你看到的“程序启动后整屏四边黄色线”不是应用自己画的 UI，而是 Windows Graphics Capture 的系统级捕获边框。
+- 根因很直接：我们此前在 `setup()` 阶段就调用了 `initialize_live_capture()`，这会让应用一启动就开始常驻 monitor capture，于是 Windows 立即给整块显示器画出捕获边框。
+- 当前代码虽然调用了 `GraphicsCaptureSession.SetIsBorderRequired(false)`，但这不足以在现有运行形态下真正关闭边框；微软官方要求还包括 `GraphicsCaptureAccess.RequestAccessAsync(GraphicsCaptureAccessKind.Borderless)` 与 `graphicsCaptureWithoutBorder` capability。
+- 在当前 `tauri dev` 的 Win32 运行形态下，持续依赖这套 `Borderless` 能力并不稳妥；因此本轮采用的工程取舍是：先取消“启动即常驻 capture”，优先消除系统黄边，再保留单次 WGC 抓帧路径。
+- 2026-03-15 默认截图热键变更不能只改一个常量；当前代码里至少有三层要同步：
+  - Rust domain 默认值
+  - Rust 偏好修复/迁移逻辑
+  - 前端默认值和设置页默认文案
+- 当前版本之前经历过两次默认值演进：`Ctrl+Shift+4 -> Ctrl+Shift+1 -> Ctrl+Shift+X`。如果迁移逻辑只处理一个旧默认值，就会导致一部分老用户停留在旧默认，而不是跟随新默认。
+- 因此本次正确做法是同时保留：
+  - `PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY = Ctrl+Shift+1`
+  - `EARLIER_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY = Ctrl+Shift+4`
+  - 并在 `migrate_legacy_preferences()` 中统一迁移到 `DEFAULT_SCREENSHOT_CAPTURE_HOTKEY = Ctrl+Shift+X`
+- 2026-03-15 最新 `desktop_duplication_live_cache` 日志已表明采集端瓶颈基本消失：`capture_ms≈1ms`，当前主要剩余成本集中在 `overlay_ready_ms≈100ms+` 与 WebView 首帧显示。
+- 继续优化图片链路的边际收益已经很低；下一阶段最有效的方案是让 overlay 脱离 `1x1 -> 全屏 -> 回正` 的窗口切换路径，改为“全尺寸透明热态常驻”。
+- 对当前 Tauri/Windows 组合来说，`set_focusable(false) + set_ignore_cursor_events(true)` 可以把 overlay 维持为可见但不抢交互的透明热态；激活时再切回可交互状态，比反复 `hide/show` 更符合剩余瓶颈位置。
+- 若退出截图态后仍继续 `hide()` overlay，则热态设计无法生效；因此取消/复制/保存之后必须同步改成“恢复透明热态 + 清空前端 session 视图”，否则会再次出现旧图残留或重新走窗口显示路径。
+- 2026-03-15 新日志已确认：这轮性能确实继续下降，最佳样本 `start_session_completed total_ms≈33ms`、常态约 `93~129ms`；但窗口抖动老问题再次出现，根因不是采集退化，而是 overlay 从透明热态切回可交互态后会自行偏移到 `-1,0`。
+- 当前实现里 `geometry_reused=true` 的判断发生在激活前；而实际位移发生在 `set_focusable(true) / set_focus()` 之后，所以旧逻辑会把“激活前对齐、激活后偏移”的窗口错误地当成可复用几何。
+- 解决这类抖动的正确位置不是继续抠 prewarm，而是“激活后再 probe 一次，并立即回正”；否则日志不会出现 `overlay_geometry_drift_detected`，但用户仍会看到窗口闪动位移。
+## 2026-03-15 Overlay 抖动复盘补充
+- 最新日志显示 `overlay_hot_state_activated ... corrected_after_focus=false`，但随后 `overlay_geometry_applied current_logical=1920x1080@-1,0`，说明对齐判定把 `-1px` 位置偏移当成了已对齐。
+- 根因在 `OverlayGeometryProbe::is_aligned()`：之前对 `delta_x/delta_y` 使用了 `abs() <= 1` 容差，导致 post-focus 回正路径不会触发。
+- 热态恢复链路每次强制 `set_overlay_window_geometry()` 也会放大开销；改为 probe 后仅在漂移时重设几何更合理。
+## 2026-03-15 Overlay 无响应根因补充
+- 最新 `log.log` 显示热键后立即进入 `overlay_geometry_drift_detected trigger=window_moved` 风暴，位置在 `7,0 -> -2,0` 间反复抖动，没有任何 `start_session_completed`/前端首帧日志，属于 Rust 侧窗口事件自激，不是前端卡死。
+- 严格位置对齐判定本身是对的，但必须配套“忽略程序化几何事件”机制，否则 `set_overlay_window_geometry()` 触发的 `Moved/Resized` 会再次回调 `enforce_overlay_window_geometry()`。
+## 2026-03-16 Overlay 无响应止血结论
+- 最新日志显示卡死发生在 `window_moved` 事件风暴，且完全没有进入 `start_session_completed`，说明 UI 无响应发生在 Rust 侧 overlay 几何监听环路内。
+- 事件抑制窗口方案不够稳，因为 Windows 仍可在抑制窗口外继续发出程序化 `Moved` 事件；对 overlay 这种固定全屏窗口，更稳妥的方案是撤掉自动监听，改为仅在显式激活流程里做几何控制。
+- `tauri-plugin-log` 已支持 `TargetKind::Folder`，可直接把日志固定写入仓库根目录，避免继续依赖 OS log dir 或手工复制控制台输出。
+## 2026-03-16 Overlay 生命周期判断补充
+- 用户截图里的 `00:15` 控制台表明：`preview_first_paint from_loading_seen_ms=136.6`，所以图片链路不是 2 秒瓶颈；同时又出现 `overlay_geometry_drift_detected trigger=restore_hot_state` 和 `overlay_hot_state_restored total_ms=319`，说明真实问题是截图结束后的 overlay 热态恢复本身。
+- 对 overlay 这种固定全屏窗口，可见热态/restore 链比隐藏稳态更脆弱，尤其在 Windows + Tauri 透明顶置窗口场景下会放大闪屏和几何漂移。
+## 2026-03-16 无限重载根因补充
+- `tauri dev` 会监听 `src-tauri` 目录变化；固定日志文件写进 `src-tauri\log.log` 后，相当于每条日志都在修改被监听文件，从而触发无限重编译。
+- 这不是截图逻辑问题，是开发态日志目标目录选错了。
+## 2026-03-16 Overlay 激活慢的直接根因
+- 最新固定日志已证明采集链路不是瓶颈：`capture_ms=1`，`preview_first_paint from_loading_seen_ms≈130~150ms`；真正拖到 `1.1~1.3s` 的是 `overlay_ready_ms`。
+- 根因在 `move_and_focus_overlay_window()`：几何复用条件写成了 `overlay_prewarmed && was_visible && geometry_aligned`。由于预热后的 overlay 本来就是隐藏的，`was_visible=false` 导致每次热键都被强制走 `set_overlay_window_geometry() + stabilize_overlay_window_after_show()`，把隐藏预热窗口错误地当成“未预热”处理。
+- 同一份日志里的 `overlay_window_stabilization_fallback_exhausted` 和 `overlay_geometry_drift_detected trigger=post_focus_activation` 说明这条错误路径不仅慢，还会放大焦点切换后的几何漂移。
+- 另外，`emit_session_updated()` 原先在 overlay 激活之后才发，导致隐藏窗口无法提前加载新 session，放大了可见阶段的白闪窗口。
+## 2026-03-16 Live Cache 退回 WGC 的直接根因
+- 最新固定日志还表明另一条退化路径：`capture_strategy=wgc_single_monitor` 且 `capture_ms=996ms`，同时 `live_capture_available=true`。这说明 `Desktop Duplication` 后台线程是活的，但热键瞬间没有拿到可用 snapshot，于是直接退回了一次性 WGC。
+- 当前代码原先的行为是：`try_capture_from_live_cache()` 只要返回 `None`，就立即执行 `capture_single_monitor_fast_preview()`；这会把“启动后很快按热键”“snapshot 短暂过期”“后台帧刚好错过轮询窗口”这些场景全部放大成 1 秒级回退。
+- 对当前 `LIVE_CAPTURE_MIN_INTERVAL_MS=80` 与 `LIVE_CAPTURE_MAX_FRAME_AGE_MS=250` 的设置来说，加一个很短的等待窗口比立即退回 WGC 更合理，因为 `Desktop Duplication` 很快就能产出下一帧。
+## 2026-03-16 Overlay 激活真正的主瓶颈
+- 你手动复制的控制台日志已经把热路径拆开了：`capture_ms=1`、`preview_first_paint from_loading_seen_ms≈146~199ms`，但 `overlay_activation_profile ... stabilize_ms≈1003~1265ms total_ms≈1123~1410ms`。
+- 这说明上一阶段真正拖慢体验的不是采集，也不是图片解码，而是 `stabilize_overlay_window_after_show()`。
+- 更关键的是，这段稳定化每次都以 `overlay_window_stabilization_fallback_exhausted` 结束，并且随后仍然要靠 `post_focus_activation` 再做一次 `@-2,0 -> @0,0` 的回正；也就是说它既慢，又没有真正解决问题。
+- 对“hidden 但已 prewarmed”的窗口来说，继续跑这段稳定化没有收益，只会把窗口可见阶段变成 1 秒级阻塞和抖动来源。
+## 2026-03-16 Overlay 白闪剩余根因补充
+- 用户最新手动复制的 `D:\Desktop\rust\BexoStudio\log.log` 只有启动段，没有包含真实截图会话；当前必须以固定日志 `runtime-logs\log.log` 或完整控制台截段为准，不能只看被截断的 tail。
+- 现有全局 CSS 虽然已经对 `html[data-overlay="screenshot"] body/#root/.ant-app` 设置透明，但这些规则依赖主 CSS 包加载完成；在 WebView 首次 show 的极短窗口里，仍可能先刷到系统默认白底。
+- 对这个阶段，最小且正确的修复不是继续抠 React 组件，而是把透明样式前置到 `index.html <head>`，让 overlay 查询参数一命中就立即生效。
+- `move_and_focus_overlay_window()` 此前把 `hidden_prewarmed` 直接等价为 `needs_geometry=true`，即便隐藏预热窗口已经对齐也会重放一次 geometry；这会放大可见前的微小位移。当前更合理的策略是只在 probe 未对齐时才重新设几何。
+## 2026-03-16 Overlay 微抖动剩余根因补充
+- 最新日志已证明当前剩余主成本稳定落在 `focus_ms + realign_ms`，而且 `overlay_geometry_drift_detected trigger=post_focus_activation current_logical=...@-2,0` 在同一台机器上反复一致。
+- 这说明问题已经不是随机抖动，而是“窗口激活后有稳定的逻辑坐标偏移”。继续每次事后回正，只会把这 170~200ms 永久留在热路径里。
+- 对这种稳定偏移，最有效的做法不是继续扩大容差，而是记录一次补偿值，在下次激活前直接预补偿；若设备环境变化，再根据新的 probe 自我修正。

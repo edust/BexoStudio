@@ -85,6 +85,13 @@
     -webkit-user-select: none;
   }
 
+  html[data-overlay="screenshot"],
+  html[data-overlay="screenshot"] body,
+  html[data-overlay="screenshot"] #root,
+  html[data-overlay="screenshot"] .ant-app {
+    background: transparent !important;
+  }
+
   #root {
     @apply min-h-screen;
   }

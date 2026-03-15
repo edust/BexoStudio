@@ -1,5 +1,4 @@
 import { App, Button, Input, Space, Typography } from "antd";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { save } from "@tauri-apps/plugin-dialog";
 import {
   useCallback,
@@ -14,17 +13,23 @@ import {
 import {
   cancelScreenshotSession,
   copyScreenshotSelection,
+  getAppPreferences,
   getErrorSummary,
+  getScreenshotSelectionRender,
   getScreenshotSession,
   hasDesktopRuntime,
   listenToScreenshotSessionUpdatedEvents,
   saveScreenshotSelection,
 } from "@/lib/command-client";
 import type {
+  AppPreferences,
   ScreenshotRenderedImageInput,
   ScreenshotSelectionInput,
+  ScreenshotSelectionRenderView,
   ScreenshotSessionView,
 } from "@/types/backend";
+
+let tauriLogModulePromise: Promise<typeof import("@tauri-apps/plugin-log")> | null = null;
 
 type BusyAction = "copy" | "save" | "cancel" | null;
 type ToolKind = "select" | "line" | "rect" | "ellipse" | "arrow" | "pen" | "text" | "number" | "fill" | "mosaic" | "blur";
@@ -293,6 +298,8 @@ type ShapeHandleDescriptor = {
   point: Point;
   cursor: string;
 };
+type ConfigurableToolKind = "select" | "line" | "rect" | "ellipse" | "arrow";
+type OverlayToolHotkeyPreferences = AppPreferences["hotkey"]["screenshotTools"];
 
 const TOOLS: Array<{ key: ToolKind; label: string }> = [
   { key: "select", label: "选区" },
@@ -315,19 +322,21 @@ const TEXT_STYLE_OPTIONS: Array<{ key: TextStyleKind; label: string }> = [
   { key: "background", label: "背景" },
   { key: "highlight", label: "高亮" },
 ];
-const TOOL_HOTKEY_MAP: Record<string, ToolKind> = {
-  "1": "select",
-  "2": "line",
-  "3": "rect",
-  "4": "ellipse",
-  "5": "arrow",
-  "6": "pen",
-  "7": "text",
-  "8": "fill",
-  "9": "mosaic",
-  "0": "blur",
-  n: "number",
+const DEFAULT_SCREENSHOT_TOOL_HOTKEYS: OverlayToolHotkeyPreferences = {
+  select: "1",
+  line: "2",
+  rect: "3",
+  ellipse: "4",
+  arrow: "5",
 };
+const FIXED_SCREENSHOT_TOOL_HOTKEYS: Array<[string, ToolKind]> = [
+  ["6", "pen"],
+  ["7", "text"],
+  ["8", "fill"],
+  ["9", "mosaic"],
+  ["0", "blur"],
+  ["n", "number"],
+];
 
 export default function ScreenshotOverlayPage() {
   const { message } = App.useApp();
@@ -346,7 +355,10 @@ export default function ScreenshotOverlayPage() {
   const effectClipboardRef = useRef<EffectClipboardState | null>(null);
   const mixedClipboardRef = useRef<MixedClipboardState | null>(null);
   const objectClipboardKindRef = useRef<ObjectClipboardKind | null>(null);
-  const previewImageRef = useRef<HTMLImageElement | null>(null);
+  const previewRenderableRef = useRef<CanvasImageSource | null>(null);
+  const activeSessionIdRef = useRef<string | null>(null);
+  const sessionLoadingSeenAtRef = useRef<Map<string, number>>(new Map());
+  const firstPaintSessionIdRef = useRef<string | null>(null);
 
   const [session, setSession] = useState<ScreenshotSessionView | null>(null);
   const [selection, setSelection] = useState<SelectionRect | null>(null);
@@ -364,6 +376,8 @@ export default function ScreenshotOverlayPage() {
   const [fillOpacity, setFillOpacity] = useState<number>(24);
   const [mosaicSize, setMosaicSize] = useState<number>(14);
   const [blurRadius, setBlurRadius] = useState<number>(10);
+  const [screenshotToolHotkeys, setScreenshotToolHotkeys] =
+    useState<OverlayToolHotkeyPreferences>(DEFAULT_SCREENSHOT_TOOL_HOTKEYS);
 
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [historyStack, setHistoryStack] = useState<Annotation[][]>([]);
@@ -391,7 +405,12 @@ export default function ScreenshotOverlayPage() {
   const [mixedGroupDrag, setMixedGroupDrag] = useState<MixedGroupDragState | null>(null);
   const [objectSelectionMarquee, setObjectSelectionMarquee] = useState<ObjectSelectionMarqueeState | null>(null);
   const [textDrag, setTextDrag] = useState<TextDragState | null>(null);
+  const [previewSurfaceReady, setPreviewSurfaceReady] = useState(false);
   const [previewImageVersion, setPreviewImageVersion] = useState<number>(0);
+  const toolHotkeyMap = useMemo(
+    () => buildToolHotkeyMap(screenshotToolHotkeys),
+    [screenshotToolHotkeys],
+  );
 
   const activeRect = useMemo<SelectionRect | null>(() => {
     if (dragStart && dragCurrent && tool === "select" && !textDrag && !shapeGroupDrag && !numberGroupDrag && !effectGroupDrag && !mixedGroupDrag && !objectSelectionMarquee) {
@@ -407,6 +426,37 @@ export default function ScreenshotOverlayPage() {
     return normalizeRect(objectSelectionMarquee.startPointer, objectSelectionMarquee.currentPointer);
   }, [objectSelectionMarquee]);
 
+  const previewImageSource = useMemo(() => {
+    if (!session || session.imageStatus !== "ready") {
+      return "";
+    }
+    if (session.previewTransport === "raw_rgba_fast") {
+      return buildPreviewProtocolUrl(`session:${session.sessionId}`);
+    }
+
+    const previewImagePath = session.previewImagePath?.trim();
+    if (previewImagePath) {
+      return buildPreviewProtocolUrl(previewImagePath);
+    }
+
+    return session.imageDataUrl ?? "";
+  }, [session]);
+
+  const previewImageSourceKind = useMemo(() => {
+    if (!session || session.imageStatus !== "ready") {
+      return "";
+    }
+    if (session.previewTransport === "raw_rgba_fast") {
+      return "raw_protocol";
+    }
+    if (session.previewImagePath?.trim()) {
+      return "file";
+    }
+    return "data_url";
+  }, [session]);
+
+  const sessionImageReady = Boolean(session && session.imageStatus === "ready" && previewSurfaceReady);
+
   const displayAnnotations = useMemo(
     () => buildDisplayAnnotations(annotations, textEditor, textDrag, shapeTransform, shapeGroupDrag, penTransform, penGroupDrag, effectTransform, numberDrag, numberGroupDrag, effectGroupDrag, mixedGroupDrag),
     [annotations, effectGroupDrag, effectTransform, mixedGroupDrag, numberDrag, numberGroupDrag, penGroupDrag, penTransform, shapeGroupDrag, shapeTransform, textDrag, textEditor],
@@ -419,6 +469,7 @@ export default function ScreenshotOverlayPage() {
     }
     return next;
   }, [displayAnnotations, draft]);
+  const hasEffectPreview = effectPreviewAnnotations.length > 0;
 
   const selectedTextAnnotations = useMemo(
     () =>
@@ -1052,6 +1103,21 @@ export default function ScreenshotOverlayPage() {
     setObjectSelectionMarquee(null);
     setTextDrag(null);
   }, []);
+
+  const resetSessionInteractionState = useCallback(() => {
+    setSelection(null);
+    setDragStart(null);
+    setDragCurrent(null);
+    textClipboardRef.current = null;
+    shapeClipboardRef.current = null;
+    penClipboardRef.current = null;
+    numberClipboardRef.current = null;
+    effectClipboardRef.current = null;
+    mixedClipboardRef.current = null;
+    objectClipboardKindRef.current = null;
+    resetAnnotations();
+    setTool("select");
+  }, [resetAnnotations]);
 
   const commitAnnotations = useCallback(
     (next: Annotation[]) => {
@@ -3240,42 +3306,79 @@ export default function ScreenshotOverlayPage() {
     return null;
   }, [getSelectedEffectIds, getSelectedNumberIds, getSelectedPenIds, getSelectedShapeIds, getSelectedTextIds, hasMixedFamilySelection]);
 
-  const closeOverlayWindow = useCallback(async () => {
-    if (!runtimeAvailable) return;
-    try {
-      await getCurrentWindow().hide();
-    } catch (error) {
-      console.error("hide overlay failed", error);
-    }
-  }, [runtimeAvailable]);
+  const resetOverlayViewState = useCallback(() => {
+    activeSessionIdRef.current = null;
+    firstPaintSessionIdRef.current = null;
+    previewRenderableRef.current = null;
+    setPreviewSurfaceReady(false);
+    setPreviewImageVersion((current) => current + 1);
+    setSession(null);
+    resetSessionInteractionState();
+  }, [resetSessionInteractionState]);
 
   const loadSession = useCallback(async () => {
     if (!runtimeAvailable) return;
 
+    const fetchStartedAt = performance.now();
     try {
       const value = await getScreenshotSession();
+      const fetchMs = performance.now() - fetchStartedAt;
+      const isSameSession = activeSessionIdRef.current === value.sessionId;
+      activeSessionIdRef.current = value.sessionId;
+      if (!sessionLoadingSeenAtRef.current.has(value.sessionId)) {
+        sessionLoadingSeenAtRef.current.set(value.sessionId, performance.now());
+      }
+      if (!isSameSession) {
+        firstPaintSessionIdRef.current = null;
+      }
+      emitPipelineInfo(
+        `[screenshot][pipeline] load_session_done session_id=${value.sessionId} status=${value.imageStatus} fetch_ms=${fetchMs.toFixed(
+          1,
+        )} image_data_url_bytes=${value.imageDataUrl.length} preview_image_path=${value.previewImagePath ?? ""} preview_transport=${value.previewTransport} preview_pixels=${value.previewPixelWidth}x${value.previewPixelHeight} monitors=${value.monitors.length}`,
+      );
       setSession(value);
-      setSelection(null);
-      setDragStart(null);
-      setDragCurrent(null);
-      textClipboardRef.current = null;
-      shapeClipboardRef.current = null;
-      penClipboardRef.current = null;
-      numberClipboardRef.current = null;
-      effectClipboardRef.current = null;
-      mixedClipboardRef.current = null;
-      objectClipboardKindRef.current = null;
-      resetAnnotations();
-      setTool("select");
+      if (!isSameSession) {
+        resetSessionInteractionState();
+      }
     } catch (error) {
       const summary = getErrorSummary(error);
       if (summary.code === "SCREENSHOT_SESSION_NOT_FOUND") {
-        setSession(null);
+        resetOverlayViewState();
         return;
       }
       message.error(summary.message || "读取截图会话失败");
     }
-  }, [message, resetAnnotations, runtimeAvailable]);
+  }, [message, resetOverlayViewState, runtimeAvailable]);
+
+  useEffect(() => {
+    if (!runtimeAvailable) {
+      setScreenshotToolHotkeys(DEFAULT_SCREENSHOT_TOOL_HOTKEYS);
+      return;
+    }
+
+    let disposed = false;
+    void getAppPreferences()
+      .then((preferences) => {
+        if (disposed) {
+          return;
+        }
+        setScreenshotToolHotkeys(
+          resolveOverlayToolHotkeys(preferences.hotkey.screenshotTools),
+        );
+      })
+      .catch((error) => {
+        if (disposed) {
+          return;
+        }
+        const summary = getErrorSummary(error);
+        console.warn("load screenshot tool hotkeys failed", summary);
+        setScreenshotToolHotkeys(DEFAULT_SCREENSHOT_TOOL_HOTKEYS);
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [runtimeAvailable]);
 
   const buildSelectionInput = useCallback((): ScreenshotSelectionInput | null => {
     if (!selection) return null;
@@ -3287,11 +3390,17 @@ export default function ScreenshotOverlayPage() {
     };
   }, [selection]);
 
-  const buildRenderedImageInput = useCallback(async (): Promise<ScreenshotRenderedImageInput | null> => {
-    if (!session || !selection) return null;
-    const dataUrl = await renderAnnotatedSelectionDataUrl(session, selection, annotationsRef.current);
-    return { dataUrl };
-  }, [selection, session]);
+  const buildRenderedImageInput = useCallback(
+    async (selectionInput: ScreenshotSelectionInput): Promise<ScreenshotRenderedImageInput | null> => {
+      if (!session || !selection || annotationsRef.current.length === 0) {
+        return null;
+      }
+      const render = await getScreenshotSelectionRender(session.sessionId, selectionInput);
+      const dataUrl = await renderAnnotatedSelectionDataUrl(render, selection, annotationsRef.current);
+      return { dataUrl };
+    },
+    [selection, session],
+  );
 
   const handleCancel = useCallback(async () => {
     if (!runtimeAvailable || busyAction) return;
@@ -3300,17 +3409,21 @@ export default function ScreenshotOverlayPage() {
       if (session) {
         await cancelScreenshotSession(session.sessionId);
       }
-      await closeOverlayWindow();
+      resetOverlayViewState();
     } catch (error) {
       const summary = getErrorSummary(error);
       message.error(summary.message || "取消截图失败");
     } finally {
       setBusyAction(null);
     }
-  }, [busyAction, closeOverlayWindow, message, runtimeAvailable, session]);
+  }, [busyAction, message, resetOverlayViewState, runtimeAvailable, session]);
 
   const handleCopy = useCallback(async () => {
     if (!runtimeAvailable || busyAction || !session) return;
+    if (!sessionImageReady) {
+      message.warning("截图底图仍在准备中，请稍候");
+      return;
+    }
     const selectionInput = buildSelectionInput();
     if (!selectionInput) {
       message.warning("请先拖拽选择截图区域");
@@ -3320,19 +3433,23 @@ export default function ScreenshotOverlayPage() {
     setBusyAction("copy");
     try {
       commitTextEditor();
-      const renderedImage = await buildRenderedImageInput();
+      const renderedImage = await buildRenderedImageInput(selectionInput);
       await copyScreenshotSelection(session.sessionId, selectionInput, renderedImage);
-      await closeOverlayWindow();
+      resetOverlayViewState();
     } catch (error) {
       const summary = getErrorSummary(error);
       message.error(summary.message || "复制截图失败");
     } finally {
       setBusyAction(null);
     }
-  }, [buildRenderedImageInput, buildSelectionInput, busyAction, closeOverlayWindow, commitTextEditor, message, runtimeAvailable, session]);
+  }, [buildRenderedImageInput, buildSelectionInput, busyAction, commitTextEditor, message, resetOverlayViewState, runtimeAvailable, session, sessionImageReady]);
 
   const handleSave = useCallback(async () => {
     if (!runtimeAvailable || busyAction || !session) return;
+    if (!sessionImageReady) {
+      message.warning("截图底图仍在准备中，请稍候");
+      return;
+    }
     const selectionInput = buildSelectionInput();
     if (!selectionInput) {
       message.warning("请先拖拽选择截图区域");
@@ -3349,16 +3466,16 @@ export default function ScreenshotOverlayPage() {
       if (typeof filePath !== "string" || !filePath.trim()) return;
 
       commitTextEditor();
-      const renderedImage = await buildRenderedImageInput();
+      const renderedImage = await buildRenderedImageInput(selectionInput);
       await saveScreenshotSelection(session.sessionId, selectionInput, filePath, renderedImage);
-      await closeOverlayWindow();
+      resetOverlayViewState();
     } catch (error) {
       const summary = getErrorSummary(error);
       message.error(summary.message || "保存截图失败");
     } finally {
       setBusyAction(null);
     }
-  }, [buildRenderedImageInput, buildSelectionInput, busyAction, closeOverlayWindow, commitTextEditor, message, runtimeAvailable, session]);
+  }, [buildRenderedImageInput, buildSelectionInput, busyAction, commitTextEditor, message, resetOverlayViewState, runtimeAvailable, session, sessionImageReady]);
 
   const getPointFromClient = useCallback((clientX: number, clientY: number): Point | null => {
     const stage = stageRef.current;
@@ -3373,7 +3490,7 @@ export default function ScreenshotOverlayPage() {
 
   const handleStageDoubleClick = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
-      if (event.button !== 0 || busyAction || !selection || !session) return;
+      if (event.button !== 0 || busyAction || !selection || !session || !sessionImageReady) return;
 
       const point = getPointFromClient(event.clientX, event.clientY);
       if (!point) return;
@@ -3389,12 +3506,12 @@ export default function ScreenshotOverlayPage() {
       setPenGroupDrag(null);
       openTextEditor(hitText.point, hitText);
     },
-    [busyAction, clearEffectSelection, clearNumberSelection, clearPenSelection, clearShapeSelection, getPointFromClient, openTextEditor, selection, session],
+    [busyAction, clearEffectSelection, clearNumberSelection, clearPenSelection, clearShapeSelection, getPointFromClient, openTextEditor, selection, session, sessionImageReady],
   );
 
   const handleStagePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (event.button !== 0 || busyAction || !session) return;
+      if (event.button !== 0 || busyAction || !session || !sessionImageReady) return;
 
       const point = getPointFromClient(event.clientX, event.clientY);
       if (!point) return;
@@ -4683,7 +4800,7 @@ export default function ScreenshotOverlayPage() {
       }
       setDraft(null);
     },
-    [activeTextId, clearEffectSelection, clearNumberSelection, clearPenSelection, clearShapeSelection, clearTextSelection, commitAnnotations, dragStart, draft, effectGroupDrag, effectTransform, getPointFromClient, getSelectedEffectIds, getSelectedNumberIds, getSelectedObjectBuckets, getSelectedPenIds, getSelectedShapeIds, mixedGroupDrag, numberDrag, numberGroupDrag, objectSelectionMarquee, penGroupDrag, penTransform, pushAnnotation, resetAnnotations, restoreObjectSelections, selectEffectAnnotation, selectNumberAnnotation, selectPenAnnotation, selectShapeAnnotation, selectedEffectId, selectedNumberId, selectedPenId, selectedShapeId, selection, setEffectSelection, setNumberSelection, setObjectSelectionMarquee, setPenSelection, setShapeSelection, setTextSelection, shapeGroupDrag, shapeTransform, textDrag, tool],
+    [activeTextId, clearEffectSelection, clearNumberSelection, clearPenSelection, clearShapeSelection, clearTextSelection, commitAnnotations, dragStart, draft, effectGroupDrag, effectTransform, getPointFromClient, getSelectedEffectIds, getSelectedNumberIds, getSelectedObjectBuckets, getSelectedPenIds, getSelectedShapeIds, mixedGroupDrag, numberDrag, numberGroupDrag, objectSelectionMarquee, penGroupDrag, penTransform, pushAnnotation, resetAnnotations, restoreObjectSelections, selectEffectAnnotation, selectNumberAnnotation, selectPenAnnotation, selectShapeAnnotation, selectedEffectId, selectedNumberId, selectedPenId, selectedShapeId, selection, session, sessionImageReady, setEffectSelection, setNumberSelection, setObjectSelectionMarquee, setPenSelection, setShapeSelection, setTextSelection, shapeGroupDrag, shapeTransform, textDrag, tool],
   );
 
   useEffect(() => {
@@ -4697,7 +4814,21 @@ export default function ScreenshotOverlayPage() {
 
     void (async () => {
       try {
-        const detach = await listenToScreenshotSessionUpdatedEvents(() => {
+        const detach = await listenToScreenshotSessionUpdatedEvents((event) => {
+          const isNewSession = activeSessionIdRef.current !== event.sessionId;
+          if (isNewSession) {
+            previewRenderableRef.current = null;
+            setPreviewSurfaceReady(false);
+            setPreviewImageVersion((current) => current + 1);
+            firstPaintSessionIdRef.current = null;
+            sessionLoadingSeenAtRef.current.set(event.sessionId, performance.now());
+            resetSessionInteractionState();
+          }
+          emitPipelineInfo(
+            `[screenshot][pipeline] session_updated_event session_id=${event.sessionId} created_at=${event.createdAt} received_ms=${performance
+              .now()
+              .toFixed(1)}`,
+          );
           void loadSession();
         });
         if (disposed) {
@@ -4714,42 +4845,82 @@ export default function ScreenshotOverlayPage() {
       disposed = true;
       if (unlisten) unlisten();
     };
-  }, [loadSession, runtimeAvailable]);
+  }, [loadSession, resetSessionInteractionState, runtimeAvailable]);
 
   useEffect(() => {
-    previewImageRef.current = null;
+    previewRenderableRef.current = null;
+    setPreviewSurfaceReady(false);
     setPreviewImageVersion((current) => current + 1);
+    firstPaintSessionIdRef.current = null;
 
-    if (!session) {
+    if (!session || session.imageStatus !== "ready") {
       return;
     }
 
+    const sessionId = session.sessionId;
     let disposed = false;
-    void loadImage(session.imageDataUrl)
+    if (!previewImageSource) {
+      return;
+    }
+
+    const imageSourceKind = previewImageSourceKind;
+    const imageSourceSize =
+      imageSourceKind === "data_url" ? session.imageDataUrl.length : previewImageSource.length;
+    const decodeStartedAt = performance.now();
+    emitPipelineInfo(
+      `[screenshot][pipeline] preview_image_decode_start session_id=${sessionId} source_kind=${imageSourceKind} source_size=${imageSourceSize}`,
+    );
+    void loadImage(previewImageSource)
       .then((image) => {
         if (disposed) return;
-        previewImageRef.current = image;
+        const decodeMs = performance.now() - decodeStartedAt;
+        const loadingSeenAt = sessionLoadingSeenAtRef.current.get(sessionId);
+        const fromLoadingSeenMs =
+          typeof loadingSeenAt === "number" ? performance.now() - loadingSeenAt : Number.NaN;
+        emitPipelineInfo(
+          `[screenshot][pipeline] preview_image_decode_done session_id=${sessionId} decode_ms=${decodeMs.toFixed(
+            1,
+          )} from_loading_seen_ms=${
+            Number.isFinite(fromLoadingSeenMs) ? fromLoadingSeenMs.toFixed(1) : "na"
+          } source_kind=${imageSourceKind} source_size=${imageSourceSize} natural=${image.naturalWidth}x${image.naturalHeight}`,
+        );
+        previewRenderableRef.current = image;
+        setPreviewSurfaceReady(true);
+        if (!hasEffectPreview && firstPaintSessionIdRef.current !== sessionId) {
+          firstPaintSessionIdRef.current = sessionId;
+          emitPipelineInfo(
+            `[screenshot][pipeline] preview_first_paint session_id=${sessionId} surface=img from_loading_seen_ms=${
+              Number.isFinite(fromLoadingSeenMs) ? fromLoadingSeenMs.toFixed(1) : "na"
+            } natural=${image.naturalWidth}x${image.naturalHeight}`,
+          );
+        }
         setPreviewImageVersion((current) => current + 1);
       })
       .catch((error) => {
         if (disposed) return;
-        console.error("load preview image failed", error);
+        emitPipelineError("load preview image failed", error);
       });
 
     return () => {
       disposed = true;
     };
-  }, [session?.imageDataUrl]);
+  }, [hasEffectPreview, previewImageSource, previewImageSourceKind, session?.imageStatus, session?.sessionId]);
 
   useEffect(() => {
     const canvas = previewCanvasRef.current;
     if (!canvas) return;
+    if (!hasEffectPreview) {
+      const context = canvas.getContext("2d");
+      context?.clearRect(0, 0, canvas.width || 0, canvas.height || 0);
+      return;
+    }
 
+    const drawStartedAt = performance.now();
     const context = canvas.getContext("2d");
     if (!context) return;
 
-    const image = previewImageRef.current;
-    if (!session || !image) {
+    const image = previewRenderableRef.current;
+    if (!session || session.imageStatus !== "ready" || !image) {
       context.clearRect(0, 0, canvas.width || 0, canvas.height || 0);
       return;
     }
@@ -4757,7 +4928,20 @@ export default function ScreenshotOverlayPage() {
     canvas.width = Math.max(1, Math.round(session.displayWidth));
     canvas.height = Math.max(1, Math.round(session.displayHeight));
     drawEffectPreviewLayer(context, image, canvas.width, canvas.height, effectPreviewAnnotations);
-  }, [effectPreviewAnnotations, previewImageVersion, session]);
+    if (firstPaintSessionIdRef.current !== session.sessionId) {
+      firstPaintSessionIdRef.current = session.sessionId;
+      const loadingSeenAt = sessionLoadingSeenAtRef.current.get(session.sessionId);
+      const fromLoadingSeenMs =
+        typeof loadingSeenAt === "number" ? performance.now() - loadingSeenAt : Number.NaN;
+      emitPipelineInfo(
+        `[screenshot][pipeline] preview_canvas_first_paint session_id=${session.sessionId} draw_ms=${(
+          performance.now() - drawStartedAt
+        ).toFixed(1)} from_loading_seen_ms=${
+          Number.isFinite(fromLoadingSeenMs) ? fromLoadingSeenMs.toFixed(1) : "na"
+        } canvas=${canvas.width}x${canvas.height}`,
+      );
+    }
+  }, [effectPreviewAnnotations, hasEffectPreview, previewImageVersion, session]);
 
   useEffect(() => {
     if (!textEditor) return;
@@ -5074,13 +5258,11 @@ export default function ScreenshotOverlayPage() {
           }
         }
 
-        if (!event.ctrlKey && !event.metaKey && !event.altKey) {
-          const mapped = TOOL_HOTKEY_MAP[event.key.toLowerCase()];
-          if (mapped) {
-            event.preventDefault();
-            setTool(mapped);
-            return;
-          }
+        const mappedTool = resolveToolHotkeyFromKeyboardEvent(event, toolHotkeyMap);
+        if (mappedTool) {
+          event.preventDefault();
+          setTool(mappedTool);
+          return;
         }
 
         if ((event.ctrlKey || event.metaKey) && event.code === "BracketLeft") {
@@ -5355,12 +5537,13 @@ export default function ScreenshotOverlayPage() {
     strokeWidth,
     textDrag,
     tool,
+    toolHotkeyMap,
     undo,
   ]);
 
   if (!runtimeAvailable) {
     return (
-      <div className="flex h-screen items-center justify-center bg-black text-white">
+      <div className="flex h-screen items-center justify-center bg-transparent text-white">
         <Typography.Text className="text-white">截图模式仅支持桌面端运行。</Typography.Text>
       </div>
     );
@@ -5537,7 +5720,7 @@ export default function ScreenshotOverlayPage() {
 
   return (
     <div
-      className="relative h-screen w-screen overflow-hidden bg-black text-white"
+      className="relative h-screen w-screen overflow-hidden bg-transparent text-white"
       ref={stageRef}
       onDoubleClick={handleStageDoubleClick}
       onPointerDown={handleStagePointerDown}
@@ -5546,8 +5729,20 @@ export default function ScreenshotOverlayPage() {
     >
       {session ? (
         <>
-          <img alt="screenshot" className="pointer-events-none absolute inset-0 h-full w-full select-none object-fill" draggable={false} src={session.imageDataUrl} />
-          <canvas ref={previewCanvasRef} className="pointer-events-none absolute inset-0 h-full w-full" />
+          {session.imageStatus === "ready" ? (
+            <>
+              {previewSurfaceReady && previewImageSource ? (
+                <img
+                  key={session.sessionId}
+                  alt="screenshot"
+                  className="pointer-events-none absolute inset-0 h-full w-full select-none object-fill"
+                  draggable={false}
+                  src={previewImageSource}
+                />
+              ) : null}
+              {hasEffectPreview ? <canvas ref={previewCanvasRef} className="pointer-events-none absolute inset-0 h-full w-full" /> : null}
+            </>
+          ) : null}
           {renderMask(activeRect)}
           {activeRect ? <SelectionBorder rect={activeRect} /> : null}
           {objectSelectionRect ? (
@@ -5673,24 +5868,24 @@ export default function ScreenshotOverlayPage() {
               />
             </div>
           ) : null}
-
-          <div className="pointer-events-none absolute left-4 top-3 rounded bg-black/55 px-2 py-1 text-[11px] text-white/90">
-            先框选，再标注。Ctrl/Cmd+点选文字、图形、画笔、编号、效果可跨家族混选；在截图选区内空白处拖框可按当前家族框选文字/图形/画笔/编号/effect，拖框时会实时预览命中家族和数量，Ctrl/Cmd+拖框可增量追加。当前跨家族混选已支持整组拖动、复制/重复/粘贴、删除、层级和全选。文字多选后可直接整组拖动，也可用 Ctrl/Cmd+C/V/D 做整组复制、粘贴、重复。编号和效果多选后可直接整组拖动，也可用 Ctrl/Cmd+C/V/D 做整组复制、粘贴、重复。Ctrl/Cmd+[ / ] 前后移一步，Ctrl/Cmd+Shift+[ / ] 置底/置顶；点中线条/箭头/矩形/圆形后可拖动、拉句柄、改颜色/线宽、Ctrl/Cmd+C/V/D、方向键微调或 Delete 删除；图形多选后可直接整组拖动，也可用 Ctrl/Cmd+C/V/D 做整组复制、粘贴、重复，并支持批量改颜色/线宽、删除、调层级和方向键微调；点中文字后可双击编辑、拖动、改样式/字号/旋转/透明度，文字多选后支持整组拖动、复制/重复、层级调整和方向键微调；点中画笔路径后可拖动、改颜色/线宽、Ctrl/Cmd+C/V/D、方向键微调或 Delete 删除；画笔多选后可直接整组拖动，也可用 Ctrl/Cmd+C/V/D 做整组复制、粘贴、重复；点中编号后可方向键微调、改颜色/字号、拖动或 Delete 删除；点中马赛克/模糊区域后可方向键微调、拖动、缩放、改强度或 Delete 删除，N 切编号
+          <>
+            <div className="pointer-events-none absolute left-4 top-3 rounded bg-black/55 px-2 py-1 text-[11px] text-white/90">
+              先框选，再标注。Ctrl/Cmd+点选文字、图形、画笔、编号、效果可跨家族混选；在截图选区内空白处拖框可按当前家族框选文字/图形/画笔/编号/effect，拖框时会实时预览命中家族和数量，Ctrl/Cmd+拖框可增量追加。当前跨家族混选已支持整组拖动、复制/重复/粘贴、删除、层级和全选。文字多选后可直接整组拖动，也可用 Ctrl/Cmd+C/V/D 做整组复制、粘贴、重复。编号和效果多选后可直接整组拖动，也可用 Ctrl/Cmd+C/V/D 做整组复制、粘贴、重复。Ctrl/Cmd+[ / ] 前后移一步，Ctrl/Cmd+Shift+[ / ] 置底/置顶；点中线条/箭头/矩形/圆形后可拖动、拉句柄、改颜色/线宽、Ctrl/Cmd+C/V/D、方向键微调或 Delete 删除；图形多选后可直接整组拖动，也可用 Ctrl/Cmd+C/V/D 做整组复制、粘贴、重复，并支持批量改颜色/线宽、删除、调层级和方向键微调；点中文字后可双击编辑、拖动、改样式/字号/旋转/透明度，文字多选后支持整组拖动、复制/重复、层级调整和方向键微调；点中画笔路径后可拖动、改颜色/线宽、Ctrl/Cmd+C/V/D、方向键微调或 Delete 删除；画笔多选后可直接整组拖动，也可用 Ctrl/Cmd+C/V/D 做整组复制、粘贴、重复；点中编号后可方向键微调、改颜色/字号、拖动或 Delete 删除；点中马赛克/模糊区域后可方向键微调、拖动、缩放、改强度或 Delete 删除，N 切编号
             </div>
 
-          <div
-            ref={toolbarRef}
-            className="absolute z-40 flex -translate-x-1/2 flex-col gap-2 rounded border border-white/20 bg-black/78 px-3 py-2 backdrop-blur"
-            style={{ left: `${toolbarLeft}px`, top: `${toolbarTop}px` }}
-            onPointerDown={(event) => event.stopPropagation()}
-          >
-            <Space size={6} wrap>
-              {TOOLS.map((item) => (
-                <Button key={item.key} disabled={toolbarDisabled} size="small" type={tool === item.key ? "primary" : "default"} onClick={() => setTool(item.key)}>
-                  {item.label}
-                </Button>
-              ))}
-            </Space>
+            <div
+              ref={toolbarRef}
+              className="absolute z-40 flex -translate-x-1/2 flex-col gap-2 rounded border border-white/20 bg-black/78 px-3 py-2 backdrop-blur"
+              style={{ left: `${toolbarLeft}px`, top: `${toolbarTop}px` }}
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+                <Space size={6} wrap>
+                  {TOOLS.map((item) => (
+                    <Button key={item.key} disabled={toolbarDisabled} size="small" type={tool === item.key ? "primary" : "default"} onClick={() => setTool(item.key)}>
+                      {item.label}
+                    </Button>
+                  ))}
+                </Space>
 
             <Space size={6} wrap>
               {COLORS.map((entry) => (
@@ -5769,11 +5964,10 @@ export default function ScreenshotOverlayPage() {
               <Button disabled={toolbarDisabled} loading={busyAction === "save"} size="small" onClick={() => void handleSave()}>保存</Button>
               <Button danger loading={busyAction === "cancel"} size="small" onClick={() => void handleCancel()}>取消</Button>
             </Space>
-          </div>
+            </div>
+          </>
         </>
-      ) : (
-        <div className="flex h-full w-full items-center justify-center text-sm text-white/90">当前没有可用截图会话，请先按截图热键。</div>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -6536,30 +6730,91 @@ function renderAnnotationSvg(annotation: Annotation, selection: SelectionRect) {
   return <ellipse key={annotation.id} cx={rect.x + rect.width / 2} cy={rect.y + rect.height / 2} fill="none" rx={rect.width / 2} ry={rect.height / 2} stroke={annotation.color} strokeWidth={annotation.strokeWidth} />;
 }
 
-async function renderAnnotatedSelectionDataUrl(session: ScreenshotSessionView, selection: SelectionRect, annotations: Annotation[]) {
-  const image = await loadImage(session.imageDataUrl);
-  const scaleX = session.captureWidth / session.displayWidth;
-  const scaleY = session.captureHeight / session.displayHeight;
-
-  const sx = clampNumber(Math.floor(selection.x * scaleX), 0, image.naturalWidth - 1);
-  const sy = clampNumber(Math.floor(selection.y * scaleY), 0, image.naturalHeight - 1);
-  const sw = clampNumber(Math.ceil(selection.width * scaleX), 1, image.naturalWidth - sx);
-  const sh = clampNumber(Math.ceil(selection.height * scaleY), 1, image.naturalHeight - sy);
-
+async function renderAnnotatedSelectionDataUrl(
+  render: ScreenshotSelectionRenderView,
+  selection: SelectionRect,
+  annotations: Annotation[],
+) {
+  const image = await loadImage(render.imageDataUrl);
   const canvas = document.createElement("canvas");
-  canvas.width = sw;
-  canvas.height = sh;
+  canvas.width = Math.max(1, Math.round(render.width));
+  canvas.height = Math.max(1, Math.round(render.height));
   const context = canvas.getContext("2d");
   if (!context) {
     throw new Error("CANVAS_CONTEXT_UNAVAILABLE");
   }
 
-  context.drawImage(image, sx, sy, sw, sh, 0, 0, sw, sh);
-  drawAnnotationsOnCanvas(context, annotations, selection, scaleX, scaleY, sw, sh);
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  if (annotations.length === 0) {
+    return canvas.toDataURL("image/png");
+  }
+
+  if (render.tiles.length > 0) {
+    drawAnnotationsOnSelectionRender(context, image, render, selection, annotations);
+    return canvas.toDataURL("image/png");
+  }
+
+  const scale = render.scaleFactor > 0 ? render.scaleFactor : 1;
+  drawAnnotationsOnCanvas(context, annotations, selection, scale, scale, canvas.width, canvas.height);
   return canvas.toDataURL("image/png");
 }
 
-function drawEffectPreviewLayer(context: CanvasRenderingContext2D, image: HTMLImageElement, width: number, height: number, annotations: EffectAnnotation[]) {
+function drawAnnotationsOnSelectionRender(
+  context: CanvasRenderingContext2D,
+  baseImage: HTMLImageElement,
+  render: ScreenshotSelectionRenderView,
+  selection: SelectionRect,
+  annotations: Annotation[],
+) {
+  const sortedTiles = [...render.tiles].sort((left, right) => {
+    if (left.outputY !== right.outputY) {
+      return left.outputY - right.outputY;
+    }
+    return left.outputX - right.outputX;
+  });
+
+  for (const tile of sortedTiles) {
+    const outputWidth = Math.max(1, Math.round(tile.outputWidth));
+    const outputHeight = Math.max(1, Math.round(tile.outputHeight));
+    const logicalWidth = Math.max(tile.logicalWidth, 1);
+    const logicalHeight = Math.max(tile.logicalHeight, 1);
+    const tileContext = createCanvasContext(outputWidth, outputHeight);
+    if (!tileContext) {
+      continue;
+    }
+
+    tileContext.drawImage(
+      baseImage,
+      tile.outputX,
+      tile.outputY,
+      outputWidth,
+      outputHeight,
+      0,
+      0,
+      outputWidth,
+      outputHeight,
+    );
+
+    drawAnnotationsOnCanvas(
+      tileContext,
+      annotations,
+      {
+        x: selection.x + tile.logicalX,
+        y: selection.y + tile.logicalY,
+        width: logicalWidth,
+        height: logicalHeight,
+      },
+      outputWidth / logicalWidth,
+      outputHeight / logicalHeight,
+      outputWidth,
+      outputHeight,
+    );
+
+    context.drawImage(tileContext.canvas, tile.outputX, tile.outputY);
+  }
+}
+
+function drawEffectPreviewLayer(context: CanvasRenderingContext2D, image: CanvasImageSource, width: number, height: number, annotations: EffectAnnotation[]) {
   context.clearRect(0, 0, width, height);
   context.drawImage(image, 0, 0, width, height);
   const viewport = { x: 0, y: 0, width, height };
@@ -8671,9 +8926,346 @@ function loadImage(src: string) {
   return new Promise<HTMLImageElement>((resolve, reject) => {
     const image = new Image();
     image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error("IMAGE_LOAD_FAILED"));
+    image.onerror = () => reject(new Error(`IMAGE_LOAD_FAILED:${src}`));
     image.src = src;
   });
+}
+
+async function writeTauriPipelineLog(level: "info" | "error", message: string) {
+  if (!hasDesktopRuntime()) {
+    return;
+  }
+
+  try {
+    tauriLogModulePromise ??= import("@tauri-apps/plugin-log");
+    const logger = await tauriLogModulePromise;
+    if (level === "error") {
+      await logger.error(message);
+      return;
+    }
+    await logger.info(message);
+  } catch {
+    // Logging must never block the screenshot pipeline.
+  }
+}
+
+function emitPipelineInfo(message: string) {
+  console.info(message);
+  void writeTauriPipelineLog("info", message);
+}
+
+function emitPipelineError(message: string, error: unknown) {
+  console.error(message, error);
+  const detail = error instanceof Error ? error.message : String(error);
+  void writeTauriPipelineLog("error", `${message}: ${detail}`);
+}
+
+function buildPreviewProtocolUrl(path: string) {
+  const encoded = encodeUrlSafeBase64Utf8(path);
+  const windowsStyleUrl = `http://bexo-preview.localhost/${encoded}`;
+  const genericUrl = `bexo-preview://localhost/${encoded}`;
+  return navigator.userAgent.includes("Windows") ? windowsStyleUrl : genericUrl;
+}
+
+function encodeUrlSafeBase64Utf8(value: string) {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  const chunkSize = 0x8000;
+
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function resolveOverlayToolHotkeys(
+  input?: Partial<OverlayToolHotkeyPreferences> | null,
+): OverlayToolHotkeyPreferences {
+  return {
+    select: normalizeOverlayShortcutWithFallback(
+      input?.select,
+      DEFAULT_SCREENSHOT_TOOL_HOTKEYS.select,
+    ),
+    line: normalizeOverlayShortcutWithFallback(
+      input?.line,
+      DEFAULT_SCREENSHOT_TOOL_HOTKEYS.line,
+    ),
+    rect: normalizeOverlayShortcutWithFallback(
+      input?.rect,
+      DEFAULT_SCREENSHOT_TOOL_HOTKEYS.rect,
+    ),
+    ellipse: normalizeOverlayShortcutWithFallback(
+      input?.ellipse,
+      DEFAULT_SCREENSHOT_TOOL_HOTKEYS.ellipse,
+    ),
+    arrow: normalizeOverlayShortcutWithFallback(
+      input?.arrow,
+      DEFAULT_SCREENSHOT_TOOL_HOTKEYS.arrow,
+    ),
+  };
+}
+
+function buildToolHotkeyMap(
+  hotkeys: OverlayToolHotkeyPreferences,
+): ReadonlyMap<string, ToolKind> {
+  const map = new Map<string, ToolKind>();
+  const configurable: Array<[ConfigurableToolKind, string]> = [
+    ["select", hotkeys.select],
+    ["line", hotkeys.line],
+    ["rect", hotkeys.rect],
+    ["ellipse", hotkeys.ellipse],
+    ["arrow", hotkeys.arrow],
+  ];
+
+  for (const [tool, shortcut] of configurable) {
+    const normalized = normalizeOverlayShortcut(shortcut);
+    if (!normalized) {
+      continue;
+    }
+    map.set(normalized, tool);
+  }
+
+  for (const [shortcut, tool] of FIXED_SCREENSHOT_TOOL_HOTKEYS) {
+    const normalized = normalizeOverlayShortcut(shortcut);
+    if (!normalized || map.has(normalized)) {
+      continue;
+    }
+    map.set(normalized, tool);
+  }
+
+  return map;
+}
+
+function resolveToolHotkeyFromKeyboardEvent(
+  event: KeyboardEvent,
+  toolHotkeyMap: ReadonlyMap<string, ToolKind>,
+): ToolKind | null {
+  const normalized = normalizeOverlayKeyboardEvent(event);
+  if (!normalized) {
+    return null;
+  }
+
+  return toolHotkeyMap.get(normalized) ?? null;
+}
+
+function normalizeOverlayShortcutWithFallback(
+  value: string | null | undefined,
+  fallback: string,
+) {
+  return (
+    normalizeOverlayShortcut(value ?? "") ??
+    normalizeOverlayShortcut(fallback) ??
+    fallback.trim().toLowerCase()
+  );
+}
+
+function normalizeOverlayShortcut(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const modifiers = new Set<string>();
+  let key: string | null = null;
+
+  for (const part of trimmed.split("+")) {
+    const token = normalizeOverlayShortcutToken(part);
+    if (!token) {
+      return null;
+    }
+
+    if (isOverlayModifierToken(token)) {
+      modifiers.add(token);
+      continue;
+    }
+
+    if (key) {
+      return null;
+    }
+    key = token;
+  }
+
+  if (!key && modifiers.size === 0) {
+    return null;
+  }
+
+  return formatOverlayHotkey(modifiers, key);
+}
+
+function normalizeOverlayKeyboardEvent(event: KeyboardEvent): string | null {
+  const modifiers = new Set<string>();
+  if (event.ctrlKey) {
+    modifiers.add("ctrl");
+  }
+  if (event.altKey) {
+    modifiers.add("alt");
+  }
+  if (event.shiftKey) {
+    modifiers.add("shift");
+  }
+  if (event.metaKey) {
+    modifiers.add("super");
+  }
+
+  const keyToken = normalizeOverlayKeyboardKey(event.key);
+  if (!keyToken) {
+    return null;
+  }
+
+  if (isOverlayModifierToken(keyToken)) {
+    modifiers.add(keyToken);
+    return formatOverlayHotkey(modifiers, null);
+  }
+
+  return formatOverlayHotkey(modifiers, keyToken);
+}
+
+function formatOverlayHotkey(modifiers: ReadonlySet<string>, key: string | null): string {
+  const parts: string[] = [];
+  for (const token of ["ctrl", "alt", "shift", "super"]) {
+    if (modifiers.has(token)) {
+      parts.push(token);
+    }
+  }
+  if (key) {
+    parts.push(key);
+  }
+  return parts.join("+");
+}
+
+function normalizeOverlayKeyboardKey(input: string): string | null {
+  const normalized = input.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  if (/^[a-z0-9]$/.test(normalized)) {
+    return normalized;
+  }
+
+  if (/^f([1-9]|1[0-9]|2[0-4])$/.test(normalized)) {
+    return normalized;
+  }
+
+  switch (normalized) {
+    case "control":
+    case "ctrl":
+      return "ctrl";
+    case "alt":
+    case "altgraph":
+      return "alt";
+    case "shift":
+      return "shift";
+    case "meta":
+    case "super":
+    case "os":
+      return "super";
+    case " ":
+    case "spacebar":
+      return "space";
+    case "tab":
+      return "tab";
+    case "enter":
+    case "return":
+      return "enter";
+    case "backspace":
+      return "backspace";
+    case "delete":
+    case "del":
+      return "delete";
+    case "escape":
+    case "esc":
+      return "escape";
+    case "arrowup":
+    case "arrowdown":
+    case "arrowleft":
+    case "arrowright":
+      return normalized;
+    default:
+      return null;
+  }
+}
+
+function normalizeOverlayShortcutToken(input: string): string | null {
+  const normalized = input.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  if (/^[a-z0-9]$/.test(normalized)) {
+    return normalized;
+  }
+
+  if (/^f([1-9]|1[0-9]|2[0-4])$/.test(normalized)) {
+    return normalized;
+  }
+
+  switch (normalized) {
+    case "ctrl":
+    case "control":
+    case "lctrl":
+    case "leftctrl":
+    case "leftcontrol":
+    case "rctrl":
+    case "rightctrl":
+    case "rightcontrol":
+      return "ctrl";
+    case "alt":
+    case "lalt":
+    case "leftalt":
+    case "ralt":
+    case "rightalt":
+    case "altgraph":
+      return "alt";
+    case "shift":
+    case "lshift":
+    case "leftshift":
+    case "rshift":
+    case "rightshift":
+      return "shift";
+    case "super":
+    case "meta":
+    case "win":
+    case "windows":
+    case "lwin":
+    case "leftwin":
+    case "leftwindows":
+    case "rwin":
+    case "rightwin":
+    case "rightwindows":
+      return "super";
+    case "space":
+      return "space";
+    case "tab":
+      return "tab";
+    case "enter":
+    case "return":
+      return "enter";
+    case "backspace":
+      return "backspace";
+    case "delete":
+    case "del":
+      return "delete";
+    case "escape":
+    case "esc":
+      return "escape";
+    case "arrowup":
+    case "arrowdown":
+    case "arrowleft":
+    case "arrowright":
+      return normalized;
+    default:
+      return null;
+  }
+}
+
+function isOverlayModifierToken(token: string) {
+  return token === "ctrl" || token === "alt" || token === "shift" || token === "super";
 }
 
 function formatNowForFileName() {

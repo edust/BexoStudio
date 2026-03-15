@@ -1,14 +1,26 @@
 mod tray;
 mod window;
 
-use crate::{commands, logging};
-use tauri::Manager;
+use std::{fs, path::PathBuf};
+
+use crate::{commands, domain::SCREENSHOT_OVERLAY_WINDOW_LABEL, logging};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use tauri::{
+    http::{header::CONTENT_TYPE, Response, StatusCode},
+    Manager,
+};
 use tauri_plugin_autostart::MacosLauncher;
 
 pub(crate) use tray::refresh_tray_menu;
 
+const SCREENSHOT_PREVIEW_PROTOCOL: &str = "bexo-preview";
+const SCREENSHOT_PREVIEW_TEMP_DIR_NAME: &str = "bexo-screenshot-preview";
+
 pub fn run() {
     let builder = tauri::Builder::default()
+        .register_uri_scheme_protocol(SCREENSHOT_PREVIEW_PROTOCOL, |context, request| {
+            serve_screenshot_preview(context, request)
+        })
         .plugin(logging::build_plugin())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_drag::init())
@@ -24,7 +36,11 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_store::Builder::default().build())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_denylist(&[SCREENSHOT_OVERLAY_WINDOW_LABEL])
+                .build(),
+        )
         .on_window_event(window::handle_window_event)
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().map_err(|error| {
@@ -43,6 +59,20 @@ pub fn run() {
             let initial_preferences = preferences_service.initialize(&app.handle())?;
             let screenshot_service = crate::services::ScreenshotService::new();
             let hotkey_service = crate::services::HotkeyService::new();
+            if let Err(error) = screenshot_service.prewarm_overlay_window(&app.handle()) {
+                log::warn!(
+                    target: "bexo::app",
+                    "prewarm screenshot overlay failed: {}",
+                    error
+                );
+            }
+            if let Err(error) = screenshot_service.initialize_live_capture(&app.handle()) {
+                log::warn!(
+                    target: "bexo::app",
+                    "initialize live screenshot capture failed: {}",
+                    error
+                );
+            }
             app.manage(screenshot_service);
             if let Err(error) = hotkey_service.initialize(&app.handle(), &initial_preferences) {
                 log::error!(
@@ -144,6 +174,8 @@ pub fn run() {
             commands::snapshot::update_snapshot,
             commands::screenshot::start_screenshot_session,
             commands::screenshot::get_screenshot_session,
+            commands::screenshot::get_screenshot_preview_rgba,
+            commands::screenshot::get_screenshot_selection_render,
             commands::screenshot::copy_screenshot_selection,
             commands::screenshot::save_screenshot_selection,
             commands::screenshot::cancel_screenshot_session,
@@ -163,6 +195,172 @@ pub fn run() {
     builder
         .run(tauri::generate_context!())
         .expect("error while running Bexo Studio application");
+}
+
+fn serve_screenshot_preview<R: tauri::Runtime>(
+    context: tauri::UriSchemeContext<'_, R>,
+    request: tauri::http::Request<Vec<u8>>,
+) -> Response<Vec<u8>> {
+    let app_handle = context.app_handle();
+    let build_error_response = |status: StatusCode, body: &'static str| {
+        Response::builder()
+            .status(status)
+            .header(CONTENT_TYPE, "text/plain; charset=utf-8")
+            .header("Cache-Control", "no-store")
+            .body(body.as_bytes().to_vec())
+            .expect("build preview protocol error response")
+    };
+    let build_image_response = |content_type: &'static str, body: Vec<u8>| {
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, content_type)
+            .header("Cache-Control", "no-store")
+            .body(body)
+            .expect("build preview protocol success response")
+    };
+
+    let encoded_path = request.uri().path().trim_start_matches('/');
+    if encoded_path.is_empty() {
+        return build_error_response(StatusCode::BAD_REQUEST, "missing preview path");
+    }
+
+    let decoded_path = match URL_SAFE_NO_PAD.decode(encoded_path) {
+        Ok(bytes) => match String::from_utf8(bytes) {
+            Ok(path) => path,
+            Err(error) => {
+                log::warn!(
+                    target: "bexo::app",
+                    "preview protocol rejected invalid utf8 payload reason={}",
+                    error
+                );
+                return build_error_response(StatusCode::BAD_REQUEST, "invalid preview path");
+            }
+        },
+        Err(error) => {
+            log::warn!(
+                target: "bexo::app",
+                "preview protocol rejected invalid base64 payload reason={}",
+                error
+            );
+            return build_error_response(StatusCode::BAD_REQUEST, "invalid preview path");
+        }
+    };
+
+    if let Some(session_id) = decoded_path.strip_prefix("session:") {
+        let screenshot_service = app_handle.state::<crate::services::ScreenshotService>();
+        let body = match screenshot_service.get_preview_protocol_bmp(session_id) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                log::warn!(
+                    target: "bexo::app",
+                    "preview protocol raw session failed session_id={} reason={}",
+                    session_id,
+                    error
+                );
+                return build_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "build raw preview image failed",
+                );
+            }
+        };
+
+        log::info!(
+            target: "bexo::app",
+            "preview protocol served raw session session_id={} bytes={} content_type=image/bmp webview={}",
+            session_id,
+            body.len(),
+            context.webview_label()
+        );
+
+        return build_image_response("image/bmp", body);
+    }
+
+    let preview_root = context
+        .app_handle()
+        .path()
+        .temp_dir()
+        .map(|path| path.join(SCREENSHOT_PREVIEW_TEMP_DIR_NAME));
+    let Ok(preview_root) = preview_root else {
+        return build_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "resolve preview temp dir failed",
+        );
+    };
+
+    let requested_path = PathBuf::from(decoded_path);
+    let canonical_root = match fs::canonicalize(&preview_root) {
+        Ok(path) => path,
+        Err(error) => {
+            log::warn!(
+                target: "bexo::app",
+                "preview protocol root missing path={} reason={}",
+                preview_root.display(),
+                error
+            );
+            return build_error_response(StatusCode::NOT_FOUND, "preview root not found");
+        }
+    };
+    let canonical_file = match fs::canonicalize(&requested_path) {
+        Ok(path) => path,
+        Err(error) => {
+            log::warn!(
+                target: "bexo::app",
+                "preview protocol file missing path={} reason={}",
+                requested_path.display(),
+                error
+            );
+            return build_error_response(StatusCode::NOT_FOUND, "preview file not found");
+        }
+    };
+
+    if !canonical_file.starts_with(&canonical_root) {
+        log::warn!(
+            target: "bexo::app",
+            "preview protocol denied out-of-scope file path={} root={}",
+            canonical_file.display(),
+            canonical_root.display()
+        );
+        return build_error_response(StatusCode::FORBIDDEN, "preview file out of scope");
+    }
+
+    let body = match fs::read(&canonical_file) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            log::warn!(
+                target: "bexo::app",
+                "preview protocol read failed path={} reason={}",
+                canonical_file.display(),
+                error
+            );
+            return build_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "read preview file failed",
+            );
+        }
+    };
+
+    let content_type = match canonical_file
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("bmp") => "image/bmp",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        _ => "application/octet-stream",
+    };
+
+    log::info!(
+        target: "bexo::app",
+        "preview protocol served file path={} bytes={} content_type={} webview={}",
+        canonical_file.display(),
+        body.len(),
+        content_type,
+        context.webview_label()
+    );
+
+    build_image_response(content_type, body)
 }
 
 fn focus_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {

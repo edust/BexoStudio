@@ -6,6 +6,22 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0"
     />
+    <script>
+      (function () {
+        var params = new URLSearchParams(window.location.search);
+        if (params.get("overlay") === "screenshot") {
+          document.documentElement.dataset.overlay = "screenshot";
+        }
+      })();
+    </script>
+    <style>
+      html[data-overlay="screenshot"],
+      html[data-overlay="screenshot"] body,
+      html[data-overlay="screenshot"] #root,
+      html[data-overlay="screenshot"] .ant-app {
+        background: transparent !important;
+      }
+    </style>
     <title>Bexo Studio</title>
   </head>
   <body>

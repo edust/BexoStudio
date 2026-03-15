@@ -24,3 +24,5 @@ scripts/
 docs/
 dist/
 target/
+
+*.log

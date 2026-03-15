@@ -25,7 +25,7 @@
       },
       {
         "label": "screenshot_overlay",
-        "title": "Bexo Studio Screenshot",
+        "title": "",
         "url": "index.html?overlay=screenshot",
         "x": 0,
         "y": 0,
@@ -35,7 +35,7 @@
         "minHeight": 360,
         "resizable": false,
         "decorations": false,
-        "transparent": false,
+        "transparent": true,
         "fullscreen": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,

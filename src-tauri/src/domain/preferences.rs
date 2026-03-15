@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
 
+pub const DEFAULT_SCREENSHOT_CAPTURE_HOTKEY: &str = "Ctrl+Shift+X";
+pub const PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY: &str = "Ctrl+Shift+1";
+pub const EARLIER_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY: &str = "Ctrl+Shift+4";
+pub const LEGACY_SCREENSHOT_CAPTURE_HOTKEY: &str = "Ctrl+Alt+A";
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AppPreferences {
@@ -67,7 +72,54 @@ pub struct StartupPreferences {
 }
 
 fn default_screenshot_capture_hotkey() -> String {
-    "Ctrl+Alt+A".to_string()
+    DEFAULT_SCREENSHOT_CAPTURE_HOTKEY.to_string()
+}
+
+fn default_screenshot_tool_select_hotkey() -> String {
+    "1".to_string()
+}
+
+fn default_screenshot_tool_line_hotkey() -> String {
+    "2".to_string()
+}
+
+fn default_screenshot_tool_rect_hotkey() -> String {
+    "3".to_string()
+}
+
+fn default_screenshot_tool_ellipse_hotkey() -> String {
+    "4".to_string()
+}
+
+fn default_screenshot_tool_arrow_hotkey() -> String {
+    "5".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ScreenshotToolHotkeyPreferences {
+    #[serde(default = "default_screenshot_tool_select_hotkey")]
+    pub select: String,
+    #[serde(default = "default_screenshot_tool_line_hotkey")]
+    pub line: String,
+    #[serde(default = "default_screenshot_tool_rect_hotkey")]
+    pub rect: String,
+    #[serde(default = "default_screenshot_tool_ellipse_hotkey")]
+    pub ellipse: String,
+    #[serde(default = "default_screenshot_tool_arrow_hotkey")]
+    pub arrow: String,
+}
+
+impl Default for ScreenshotToolHotkeyPreferences {
+    fn default() -> Self {
+        Self {
+            select: default_screenshot_tool_select_hotkey(),
+            line: default_screenshot_tool_line_hotkey(),
+            rect: default_screenshot_tool_rect_hotkey(),
+            ellipse: default_screenshot_tool_ellipse_hotkey(),
+            arrow: default_screenshot_tool_arrow_hotkey(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +127,8 @@ fn default_screenshot_capture_hotkey() -> String {
 pub struct HotkeyPreferences {
     #[serde(default = "default_screenshot_capture_hotkey")]
     pub screenshot_capture: String,
+    #[serde(default)]
+    pub screenshot_tools: ScreenshotToolHotkeyPreferences,
     pub voice_input_toggle: Option<String>,
     pub voice_input_hold: Option<String>,
 }
@@ -83,6 +137,7 @@ impl Default for HotkeyPreferences {
     fn default() -> Self {
         Self {
             screenshot_capture: default_screenshot_capture_hotkey(),
+            screenshot_tools: ScreenshotToolHotkeyPreferences::default(),
             voice_input_toggle: None,
             voice_input_hold: None,
         }

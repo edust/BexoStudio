@@ -1,3 +1,4 @@
+mod desktop_duplication_capture;
 mod hotkey_service;
 mod planner_service;
 mod preferences_service;
@@ -5,6 +6,8 @@ mod profile_service;
 mod resource_browser_service;
 mod restore_service;
 mod screenshot_service;
+mod wgc_capture;
+mod windows_hook_hotkey;
 mod workspace_service;
 
 pub use hotkey_service::HotkeyService;

@@ -63,9 +63,41 @@ import type {
 type EditorKey = "vscode" | "jetbrains";
 type SettingsSection = "general" | "hotkeys";
 type HotkeyRecorderStatus = "idle" | "recording" | "saving" | "error";
+type ScreenshotToolHotkeyKey = keyof AppPreferences["hotkey"]["screenshotTools"];
 
-const DEFAULT_SCREENSHOT_CAPTURE_HOTKEY = "Ctrl+Alt+A";
-const HOTKEY_MODIFIER_TOKENS = new Set(["Ctrl", "Alt", "Shift", "Super"]);
+const DEFAULT_SCREENSHOT_CAPTURE_HOTKEY = "Ctrl+Shift+X";
+const DEFAULT_SCREENSHOT_TOOL_HOTKEYS: AppPreferences["hotkey"]["screenshotTools"] = {
+  select: "1",
+  line: "2",
+  rect: "3",
+  ellipse: "4",
+  arrow: "5",
+};
+const SCREENSHOT_TOOL_HOTKEY_ITEMS: Array<{
+  key: ScreenshotToolHotkeyKey;
+  label: string;
+  description: string;
+}> = [
+  { key: "select", label: "选区工具", description: "默认 1" },
+  { key: "line", label: "线条工具", description: "默认 2" },
+  { key: "rect", label: "矩形工具", description: "默认 3" },
+  { key: "ellipse", label: "圆形工具", description: "默认 4" },
+  { key: "arrow", label: "箭头工具", description: "默认 5" },
+];
+const HOTKEY_MODIFIER_TOKENS = new Set([
+  "Ctrl",
+  "Alt",
+  "Shift",
+  "Super",
+  "LCtrl",
+  "RCtrl",
+  "LAlt",
+  "RAlt",
+  "LWin",
+  "RWin",
+  "LShift",
+  "RShift",
+]);
 
 export default function SettingsPage() {
   const { section } = useParams<{ section?: string }>();
@@ -80,6 +112,8 @@ export default function SettingsPage() {
     useState<HotkeyRecorderStatus>("idle");
   const [hotkeyRecorderPreview, setHotkeyRecorderPreview] = useState("");
   const [hotkeyRecorderError, setHotkeyRecorderError] = useState<string | null>(null);
+  const [screenshotToolHotkeyDrafts, setScreenshotToolHotkeyDrafts] =
+    useState<AppPreferences["hotkey"]["screenshotTools"]>(DEFAULT_SCREENSHOT_TOOL_HOTKEYS);
   const [isTemplateManagerOpen, setIsTemplateManagerOpen] = useState(false);
   const [isEditorManagerOpen, setIsEditorManagerOpen] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
@@ -127,6 +161,11 @@ export default function SettingsPage() {
   const jetbrainsPath = resolvedPreferences.ide.jetbrainsPath?.trim() ?? "";
   const screenshotCaptureHotkey =
     resolvedPreferences.hotkey.screenshotCapture?.trim() || DEFAULT_SCREENSHOT_CAPTURE_HOTKEY;
+  const screenshotToolHotkeys = useMemo(
+    () => resolveScreenshotToolHotkeys(resolvedPreferences.hotkey.screenshotTools),
+    [resolvedPreferences.hotkey.screenshotTools],
+  );
+  const screenshotHotkeyUsesCtrlAlt = isRiskyCtrlAltHotkey(screenshotCaptureHotkey);
   const configuredEditorCount = Number(Boolean(vscodePath)) + Number(Boolean(jetbrainsPath));
   const codexHomePath = codexHomeQuery.data?.path?.trim() ?? "";
   const codexHomeExists = codexHomeQuery.data?.exists ?? false;
@@ -182,6 +221,14 @@ export default function SettingsPage() {
     resolvedPreferences.ide.customEditors,
     vscodePath,
   ]);
+
+  useEffect(() => {
+    setScreenshotToolHotkeyDrafts((current) =>
+      isSameScreenshotToolHotkeys(current, screenshotToolHotkeys)
+        ? current
+        : screenshotToolHotkeys,
+    );
+  }, [screenshotToolHotkeys]);
 
   const templateForm = useForm<
     TerminalCommandTemplateFormInputValues,
@@ -707,12 +754,17 @@ export default function SettingsPage() {
         setHotkeyRecorderPreview(normalizedShortcut);
         setHotkeyRecorderStatus("idle");
         toast.success(`截图热键已更新为 ${normalizedShortcut}`);
+        if (isRiskyCtrlAltHotkey(normalizedShortcut)) {
+          toast.warning(
+            `Windows 下 Ctrl+Alt 组合更容易与输入法或系统热键环境冲突，建议改用默认 ${DEFAULT_SCREENSHOT_CAPTURE_HOTKEY}。`,
+          );
+        }
       } catch (error) {
         const summary = getErrorSummary(error);
-        setHotkeyInlineError(summary.message);
-        setHotkeyRecorderError(summary.message);
+        const message = formatHotkeyErrorSummary(summary);
+        setHotkeyInlineError(message);
+        setHotkeyRecorderError(null);
         setHotkeyRecorderStatus("error");
-        toast.error(summary.message);
       }
     },
     [
@@ -749,12 +801,110 @@ export default function SettingsPage() {
     await applyRecordedScreenshotHotkey(DEFAULT_SCREENSHOT_CAPTURE_HOTKEY);
   }
 
+  function setScreenshotToolHotkeyDraft(
+    key: ScreenshotToolHotkeyKey,
+    value: string,
+  ) {
+    setScreenshotToolHotkeyDrafts((current) => ({
+      ...current,
+      [key]: value,
+    }));
+  }
+
+  async function saveScreenshotToolHotkeys() {
+    if (
+      !desktopRuntimeAvailable ||
+      updatePreferencesMutation.isPending ||
+      preferencesQuery.isError
+    ) {
+      return;
+    }
+
+    setHotkeyInlineError(null);
+    setHotkeyRecorderError(null);
+
+    const normalized = normalizeScreenshotToolHotkeys(screenshotToolHotkeyDrafts);
+    const duplicate = findDuplicateScreenshotToolHotkey(normalized);
+    if (duplicate) {
+      const message = `截图工具热键冲突：${duplicate.label} 与 ${duplicate.conflictLabel} 不能重复。`;
+      setHotkeyInlineError(message);
+      toast.error(message);
+      return;
+    }
+
+    if (
+      screenshotCaptureHotkey &&
+      isSameHotkeyShortcut(screenshotCaptureHotkey, normalized.select)
+    ) {
+      const message = "截图热键不能与“选区工具”热键重复，请调整后再保存。";
+      setHotkeyInlineError(message);
+      toast.error(message);
+      return;
+    }
+
+    try {
+      const currentPreferences =
+        queryClient.getQueryData<AppPreferences>(appPreferencesQueryKey) ??
+        resolvedPreferences;
+
+      await persistPreferences({
+        ...currentPreferences,
+        hotkey: {
+          ...currentPreferences.hotkey,
+          screenshotTools: normalized,
+        },
+      });
+
+      toast.success("截图工具热键已保存");
+    } catch (error) {
+      const summary = getErrorSummary(error);
+      const message = formatHotkeyErrorSummary(summary);
+      setHotkeyInlineError(message);
+      toast.error(message);
+    }
+  }
+
+  async function resetScreenshotToolHotkeysToDefault() {
+    setScreenshotToolHotkeyDrafts(DEFAULT_SCREENSHOT_TOOL_HOTKEYS);
+    if (
+      !desktopRuntimeAvailable ||
+      updatePreferencesMutation.isPending ||
+      preferencesQuery.isError
+    ) {
+      return;
+    }
+
+    setHotkeyInlineError(null);
+    setHotkeyRecorderError(null);
+
+    try {
+      const currentPreferences =
+        queryClient.getQueryData<AppPreferences>(appPreferencesQueryKey) ??
+        resolvedPreferences;
+      await persistPreferences({
+        ...currentPreferences,
+        hotkey: {
+          ...currentPreferences.hotkey,
+          screenshotTools: DEFAULT_SCREENSHOT_TOOL_HOTKEYS,
+        },
+      });
+      toast.success("截图工具热键已恢复默认");
+    } catch (error) {
+      const summary = getErrorSummary(error);
+      const message = formatHotkeyErrorSummary(summary);
+      setHotkeyInlineError(message);
+      toast.error(message);
+    }
+  }
+
   useEffect(() => {
     if (hotkeyRecorderStatus !== "recording") {
       return;
     }
 
     const activeTokens = new Set<string>();
+    const seenTokens = new Set<string>();
+    let ignoredUnsupportedKey = false;
 
     const finishRecording = (combo: string) => {
       if (!combo) {
@@ -763,7 +913,9 @@ export default function SettingsPage() {
 
       const tokens = combo.split("+").filter(Boolean);
       if (!tokens.some((token) => !isHotkeyModifierToken(token))) {
-        setHotkeyRecorderError("热键至少包含一个非修饰键（例如 A / F1 / 0）");
+        setHotkeyRecorderError(
+          `截图热键至少包含一个非修饰键，建议使用默认 ${DEFAULT_SCREENSHOT_CAPTURE_HOTKEY}。`,
+        );
         setHotkeyRecorderStatus("error");
         return;
       }
@@ -772,6 +924,10 @@ export default function SettingsPage() {
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat) {
+        return;
+      }
+
       if (event.code === "Escape") {
         event.preventDefault();
         event.stopPropagation();
@@ -781,13 +937,23 @@ export default function SettingsPage() {
 
       const token = keyboardEventToHotkeyToken(event);
       if (!token) {
+        ignoredUnsupportedKey = true;
+        setHotkeyRecorderError(
+          `不支持的按键：${event.code}（支持 A-Z、0-9、F1-F24、Space/Tab/Enter/Backspace/Delete 与左右修饰键）。`,
+        );
         return;
       }
 
       event.preventDefault();
       event.stopPropagation();
+      setHotkeyRecorderError(null);
       activeTokens.add(token);
+      seenTokens.add(token);
       setHotkeyRecorderPreview(formatHotkeyTokens(activeTokens));
+
+      if (!isHotkeyModifierToken(token)) {
+        finishRecording(formatHotkeyTokens(activeTokens));
+      }
     };
 
     const handleKeyUp = (event: KeyboardEvent) => {
@@ -799,10 +965,20 @@ export default function SettingsPage() {
       event.preventDefault();
       event.stopPropagation();
 
-      const combo = formatHotkeyTokens(activeTokens);
-      activeTokens.clear();
-      setHotkeyRecorderPreview(combo);
-      finishRecording(combo);
+      activeTokens.delete(token);
+      setHotkeyRecorderPreview(formatHotkeyTokens(activeTokens));
+
+      if (activeTokens.size !== 0 || seenTokens.size === 0) {
+        return;
+      }
+
+      if (ignoredUnsupportedKey) {
+        setHotkeyRecorderError("包含不支持的按键，请重新录制。");
+        setHotkeyRecorderStatus("error");
+        return;
+      }
+
+      finishRecording(formatHotkeyTokens(seenTokens));
     };
 
     window.addEventListener("keydown", handleKeyDown, true);
@@ -1189,30 +1365,21 @@ export default function SettingsPage() {
           </>
         ) : (
           <>
-            {hotkeyInlineError ? (
+            {hotkeyInlineError || hotkeyRecorderError ? (
               <Alert
                 className="mb-4"
                 closable
-                message="保存热键失败"
-                onClose={() => setHotkeyInlineError(null)}
-                showIcon
-                type="error"
-                description={hotkeyInlineError}
-              />
-            ) : null}
-
-            {hotkeyRecorderError && hotkeyRecorderStatus === "error" ? (
-              <Alert
-                className="mb-4"
-                closable
-                message="热键录制失败"
+                message="热键设置失败"
                 onClose={() => {
+                  setHotkeyInlineError(null);
                   setHotkeyRecorderError(null);
-                  setHotkeyRecorderStatus("idle");
+                  if (hotkeyRecorderStatus === "error") {
+                    setHotkeyRecorderStatus("idle");
+                  }
                 }}
                 showIcon
                 type="error"
-                description={hotkeyRecorderError}
+                description={hotkeyRecorderError ?? hotkeyInlineError}
               />
             ) : null}
 
@@ -1242,7 +1409,7 @@ export default function SettingsPage() {
                           ? hotkeyRecorderPreview
                             ? `录制中：${hotkeyRecorderPreview}（松开按键后保存）`
                             : "录制中：请按下新的组合键，按 Esc 取消。"
-                          : `默认 ${DEFAULT_SCREENSHOT_CAPTURE_HOTKEY}，保存后立即生效。`}
+                          : `默认 ${DEFAULT_SCREENSHOT_CAPTURE_HOTKEY}，保存后立即生效。截图热键必须包含一个非修饰键，支持左右修饰键组合。`}
                       </Typography.Text>
                     </div>
 
@@ -1275,6 +1442,80 @@ export default function SettingsPage() {
                         size="small"
                       >
                         恢复默认
+                      </Button>
+                    </div>
+                  </div>
+
+                  {screenshotHotkeyUsesCtrlAlt ? (
+                    <div className="border-t border-[#eef2f6] px-4 py-3">
+                      <Alert
+                        showIcon
+                        type="warning"
+                        message="当前截图热键使用了 Ctrl+Alt 组合"
+                        description={`Windows 下这类组合更容易与输入法或系统热键环境冲突，建议改用默认 ${DEFAULT_SCREENSHOT_CAPTURE_HOTKEY} 或其他不含 Alt 的组合。`}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="rounded-[0] border border-[#eef2f6] bg-white">
+                  <div className="border-b border-[#eef2f6] px-4 py-3">
+                    <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
+                      截图工具热键（截图界面内）
+                    </Typography.Text>
+                    <Typography.Text className="mt-1 block text-[11px] text-[#667085]">
+                      支持单键或组合键（例如 2、Ctrl+Shift+2）。以下热键只在截图 overlay 内生效。
+                    </Typography.Text>
+                  </div>
+
+                  <div className="px-4 py-3">
+                    <div className="grid grid-cols-[repeat(2,minmax(0,1fr))] gap-3">
+                      {SCREENSHOT_TOOL_HOTKEY_ITEMS.map((item) => (
+                        <div className="rounded-[8px] border border-[#e6edf5] bg-[#f8fafc] p-3" key={item.key}>
+                          <Typography.Text className="block text-[11px] font-medium text-[#344054]">
+                            {item.label}
+                          </Typography.Text>
+                          <Typography.Text className="mt-0.5 block text-[10px] text-[#667085]">
+                            {item.description}
+                          </Typography.Text>
+                          <Input
+                            className="mt-2"
+                            disabled={hotkeyActionsDisabled}
+                            onChange={(event) =>
+                              setScreenshotToolHotkeyDraft(item.key, event.target.value)
+                            }
+                            placeholder={item.description}
+                            value={screenshotToolHotkeyDrafts[item.key]}
+                          />
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap justify-end gap-2 border-t border-[#eef2f6] pt-3">
+                      <Button
+                        className="!h-[32px] !px-3 !text-[12px]"
+                        disabled={
+                          hotkeyActionsDisabled ||
+                          updatePreferencesMutation.isPending ||
+                          isSameScreenshotToolHotkeys(
+                            screenshotToolHotkeyDrafts,
+                            DEFAULT_SCREENSHOT_TOOL_HOTKEYS,
+                          )
+                        }
+                        onClick={() => void resetScreenshotToolHotkeysToDefault()}
+                        size="small"
+                      >
+                        恢复默认
+                      </Button>
+                      <Button
+                        className="!h-[32px] !px-3 !text-[12px]"
+                        disabled={hotkeyActionsDisabled}
+                        loading={updatePreferencesMutation.isPending}
+                        onClick={() => void saveScreenshotToolHotkeys()}
+                        size="small"
+                        type="primary"
+                      >
+                        保存工具热键
                       </Button>
                     </div>
                   </div>
@@ -1886,20 +2127,130 @@ function resolveDetectedEditorPath(availability: AdapterAvailability): string | 
   return executablePath ? executablePath : null;
 }
 
+function resolveScreenshotToolHotkeys(
+  input?: Partial<AppPreferences["hotkey"]["screenshotTools"]> | null,
+): AppPreferences["hotkey"]["screenshotTools"] {
+  return normalizeScreenshotToolHotkeys({
+    select: input?.select ?? DEFAULT_SCREENSHOT_TOOL_HOTKEYS.select,
+    line: input?.line ?? DEFAULT_SCREENSHOT_TOOL_HOTKEYS.line,
+    rect: input?.rect ?? DEFAULT_SCREENSHOT_TOOL_HOTKEYS.rect,
+    ellipse: input?.ellipse ?? DEFAULT_SCREENSHOT_TOOL_HOTKEYS.ellipse,
+    arrow: input?.arrow ?? DEFAULT_SCREENSHOT_TOOL_HOTKEYS.arrow,
+  });
+}
+
+function normalizeScreenshotToolHotkeys(
+  input: AppPreferences["hotkey"]["screenshotTools"],
+): AppPreferences["hotkey"]["screenshotTools"] {
+  return {
+    select: normalizeScreenshotToolHotkeyValue(input.select, DEFAULT_SCREENSHOT_TOOL_HOTKEYS.select),
+    line: normalizeScreenshotToolHotkeyValue(input.line, DEFAULT_SCREENSHOT_TOOL_HOTKEYS.line),
+    rect: normalizeScreenshotToolHotkeyValue(input.rect, DEFAULT_SCREENSHOT_TOOL_HOTKEYS.rect),
+    ellipse: normalizeScreenshotToolHotkeyValue(
+      input.ellipse,
+      DEFAULT_SCREENSHOT_TOOL_HOTKEYS.ellipse,
+    ),
+    arrow: normalizeScreenshotToolHotkeyValue(input.arrow, DEFAULT_SCREENSHOT_TOOL_HOTKEYS.arrow),
+  };
+}
+
+function normalizeScreenshotToolHotkeyValue(value: string, fallback: string) {
+  const trimmed = value.trim();
+  return trimmed || fallback;
+}
+
+function isSameScreenshotToolHotkeys(
+  left: AppPreferences["hotkey"]["screenshotTools"],
+  right: AppPreferences["hotkey"]["screenshotTools"],
+) {
+  const normalizedLeft = normalizeScreenshotToolHotkeys(left);
+  const normalizedRight = normalizeScreenshotToolHotkeys(right);
+  return (
+    normalizedLeft.select === normalizedRight.select &&
+    normalizedLeft.line === normalizedRight.line &&
+    normalizedLeft.rect === normalizedRight.rect &&
+    normalizedLeft.ellipse === normalizedRight.ellipse &&
+    normalizedLeft.arrow === normalizedRight.arrow
+  );
+}
+
+function isSameHotkeyShortcut(left: string, right: string) {
+  return left.trim().toLowerCase() === right.trim().toLowerCase();
+}
+
+function findDuplicateScreenshotToolHotkey(
+  input: AppPreferences["hotkey"]["screenshotTools"],
+): { label: string; conflictLabel: string } | null {
+  const seen = new Map<string, string>();
+  for (const item of SCREENSHOT_TOOL_HOTKEY_ITEMS) {
+    const shortcut = input[item.key].trim().toLowerCase();
+    const previous = seen.get(shortcut);
+    if (previous) {
+      return {
+        label: previous,
+        conflictLabel: item.label,
+      };
+    }
+    seen.set(shortcut, item.label);
+  }
+
+  return null;
+}
+
+function formatHotkeyErrorSummary(summary: ReturnType<typeof getErrorSummary>) {
+  const shortcut = summary.details?.shortcut?.trim();
+  const reason = summary.details?.reason?.trim();
+  const normalizedReason = reason?.toLowerCase() ?? "";
+
+  if (normalizedReason.includes("already registered")) {
+    return shortcut
+      ? `热键已被占用，请更换组合键：${shortcut}`
+      : "热键已被占用，请更换组合键。";
+  }
+
+  if (shortcut && reason) {
+    return `${summary.message}：${shortcut}（${reason}）`;
+  }
+
+  if (shortcut) {
+    return `${summary.message}：${shortcut}`;
+  }
+
+  if (reason && reason !== summary.message) {
+    return `${summary.message}：${reason}`;
+  }
+
+  return summary.message;
+}
+
 function keyboardEventToHotkeyToken(event: KeyboardEvent): string | null {
   switch (event.code) {
     case "ControlLeft":
+      return "LCtrl";
     case "ControlRight":
-      return "Ctrl";
+      return "RCtrl";
     case "AltLeft":
+      return "LAlt";
     case "AltRight":
-      return "Alt";
+      return "RAlt";
     case "ShiftLeft":
+      return "LShift";
     case "ShiftRight":
-      return "Shift";
+      return "RShift";
     case "MetaLeft":
+      return "LWin";
     case "MetaRight":
-      return "Super";
+      return "RWin";
+    case "Space":
+      return "Space";
+    case "Tab":
+      return "Tab";
+    case "Enter":
+      return "Enter";
+    case "Backspace":
+      return "Backspace";
+    case "Delete":
+      return "Delete";
     default:
       break;
   }
@@ -1923,9 +2274,22 @@ function keyboardEventToHotkeyToken(event: KeyboardEvent): string | null {
 function hotkeyTokenOrder(token: string) {
   const fixedOrder: Record<string, number> = {
     Ctrl: 10,
+    LCtrl: 11,
+    RCtrl: 12,
     Alt: 20,
+    LAlt: 21,
+    RAlt: 22,
     Shift: 30,
+    LShift: 31,
+    RShift: 32,
     Super: 40,
+    LWin: 41,
+    RWin: 42,
+    Space: 100,
+    Tab: 101,
+    Enter: 102,
+    Backspace: 103,
+    Delete: 104,
   };
 
   const fixed = fixedOrder[token];
@@ -1957,6 +2321,40 @@ function formatHotkeyTokens(tokens: Iterable<string>) {
 
 function isHotkeyModifierToken(token: string) {
   return HOTKEY_MODIFIER_TOKENS.has(token);
+}
+
+function normalizeHotkeyModifierToken(token: string) {
+  const normalized = token.trim().toLowerCase();
+  switch (normalized) {
+    case "lctrl":
+    case "rctrl":
+      return "ctrl";
+    case "lalt":
+    case "ralt":
+      return "alt";
+    case "lshift":
+    case "rshift":
+      return "shift";
+    case "lwin":
+    case "rwin":
+      return "super";
+    default:
+      return normalized;
+  }
+}
+
+function isRiskyCtrlAltHotkey(shortcut: string) {
+  const tokens = shortcut
+    .split("+")
+    .map((token) => token.trim())
+    .filter(Boolean);
+
+  const normalized = new Set(tokens.map((token) => normalizeHotkeyModifierToken(token)));
+  return (
+    normalized.has("ctrl") &&
+    normalized.has("alt") &&
+    tokens.some((token) => !isHotkeyModifierToken(token))
+  );
 }
 
 function createCustomEditorId() {

@@ -373,8 +373,17 @@ export type StartupPreferences = {
   startSilently: boolean;
 };
 
+export type ScreenshotToolHotkeyPreferences = {
+  select: string;
+  line: string;
+  rect: string;
+  ellipse: string;
+  arrow: string;
+};
+
 export type HotkeyPreferences = {
   screenshotCapture: string;
+  screenshotTools: ScreenshotToolHotkeyPreferences;
   voiceInputToggle?: string | null;
   voiceInputHold?: string | null;
 };
@@ -461,6 +470,25 @@ export type ScreenshotRenderedImageInput = {
   dataUrl: string;
 };
 
+export type ScreenshotImageStatus = "loading" | "ready" | "failed";
+
+export type ScreenshotPreviewTransport = "file" | "raw_rgba_fast";
+
+export type ScreenshotSelectionRenderMode = "native" | "logical_fallback";
+
+export type ScreenshotMonitorView = {
+  displayId: number;
+  displayX: number;
+  displayY: number;
+  relativeX: number;
+  relativeY: number;
+  displayWidth: number;
+  displayHeight: number;
+  captureWidth: number;
+  captureHeight: number;
+  scaleFactor: number;
+};
+
 export type ScreenshotSessionView = {
   sessionId: string;
   createdAt: string;
@@ -471,7 +499,37 @@ export type ScreenshotSessionView = {
   scaleFactor: number;
   captureWidth: number;
   captureHeight: number;
+  imageStatus: ScreenshotImageStatus;
+  imageError?: string | null;
   imageDataUrl: string;
+  previewImagePath?: string | null;
+  previewTransport: ScreenshotPreviewTransport;
+  previewPixelWidth: number;
+  previewPixelHeight: number;
+  monitors: ScreenshotMonitorView[];
+};
+
+export type ScreenshotSelectionRenderTile = {
+  displayId: number;
+  scaleFactor: number;
+  logicalX: number;
+  logicalY: number;
+  logicalWidth: number;
+  logicalHeight: number;
+  outputX: number;
+  outputY: number;
+  outputWidth: number;
+  outputHeight: number;
+};
+
+export type ScreenshotSelectionRenderView = {
+  sessionId: string;
+  width: number;
+  height: number;
+  scaleFactor: number;
+  renderMode: ScreenshotSelectionRenderMode;
+  imageDataUrl: string;
+  tiles: ScreenshotSelectionRenderTile[];
 };
 
 export type StartScreenshotSessionResult = {

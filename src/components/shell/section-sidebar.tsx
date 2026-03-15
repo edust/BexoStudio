@@ -1194,7 +1194,7 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
         </>
       ) : filteredItems.length ? (
         <div className="min-h-0 px-2 pb-[5px] pt-2">
-          <div className="space-y-[5px]">
+          <div className="space-y-[7px]">
             {filteredItems.map((item) => {
               const itemActive = item.href ? isSidebarRouteActive(location.pathname, item.href) : false;
               const inner = (
@@ -1203,7 +1203,9 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
                     "rounded-[12px] border px-3 py-2.5 transition-colors",
                     itemActive
                       ? "border-[#8fd4ec] bg-[#f4fbfe]"
-                      : "border-transparent bg-transparent hover:border-[#d9e2ec] hover:bg-[#f8fafc]",
+                      : themeMode === "dark"
+                        ? "border-transparent bg-transparent hover:border-[#3c3c3c] hover:bg-[#2a2d2e]"
+                        : "border-transparent bg-transparent hover:border-[#d9e2ec] hover:bg-[#f8fafc]",
                   )}
                 >
                   <div className="flex items-center gap-2">
@@ -1222,7 +1224,7 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
 
               if (item.href) {
                 return (
-                  <Link key={item.key} to={item.href}>
+                  <Link className="block w-full" key={item.key} to={item.href}>
                     {inner}
                   </Link>
                 );
