@@ -16,6 +16,12 @@ import type {
   EditorPathDetectionResult,
   HotkeyTriggerEvent,
   LaunchTaskRecord,
+  NativeInteractionExclusionRect,
+  NativeInteractionMode,
+  NativeInteractionShapeAnnotationCommittedEvent,
+  NativeInteractionSelectionRect,
+  NativeInteractionStateView,
+  NativeInteractionStateUpdatedEvent,
   OpenLogDirectoryResult,
   OpenWorkspaceInEditorResult,
   OpenWorkspaceTerminalResult,
@@ -242,6 +248,35 @@ export function getScreenshotSession() {
   return invokeCommand<ScreenshotSessionView>("get_screenshot_session");
 }
 
+export function getNativeInteractionState() {
+  return invokeCommand<NativeInteractionStateView>("get_native_interaction_state");
+}
+
+export function updateNativeInteractionRuntime(
+  sessionId: string,
+  visible: boolean,
+  exclusionRects: NativeInteractionExclusionRect[],
+  mode: NativeInteractionMode,
+  selection?: NativeInteractionSelectionRect | null,
+  annotationColor?: string | null,
+  annotationStrokeWidth?: number | null,
+) {
+  return invokeCommand<NativeInteractionStateView>("update_native_interaction_runtime", {
+    input: {
+      sessionId,
+      visible,
+      exclusionRects,
+      mode,
+      selection: selection ?? null,
+      annotationColor: annotationColor?.trim() ? annotationColor.trim() : null,
+      annotationStrokeWidth:
+        typeof annotationStrokeWidth === "number" && Number.isFinite(annotationStrokeWidth)
+          ? annotationStrokeWidth
+          : null,
+    },
+  });
+}
+
 export async function getScreenshotPreviewRgba(sessionId: string) {
   if (!isTauri()) {
     desktopRuntimeRequired();
@@ -378,4 +413,31 @@ export async function listenToScreenshotSessionUpdatedEvents(
   return listen<ScreenshotSessionUpdatedEvent>("screenshot://session-updated", (event) => {
     handler(event.payload);
   });
+}
+
+export async function listenToNativeInteractionStateUpdatedEvents(
+  handler: (event: NativeInteractionStateUpdatedEvent) => void,
+): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    desktopRuntimeRequired();
+  }
+
+  return listen<NativeInteractionStateUpdatedEvent>("native_interaction://state-updated", (event) => {
+    handler(event.payload);
+  });
+}
+
+export async function listenToNativeInteractionShapeAnnotationCommittedEvents(
+  handler: (event: NativeInteractionShapeAnnotationCommittedEvent) => void,
+): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    desktopRuntimeRequired();
+  }
+
+  return listen<NativeInteractionShapeAnnotationCommittedEvent>(
+    "native_interaction://shape-annotation-committed",
+    (event) => {
+      handler(event.payload);
+    },
+  );
 }

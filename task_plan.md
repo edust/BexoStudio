@@ -1082,3 +1082,292 @@
 - 调整：当 `realign_overlay_window_if_needed()` 仍探测到小范围位置漂移（当前限制为尺寸对齐且 `|delta_x|/|delta_y| <= 4`）时，更新补偿缓存，后续激活直接复用。
 - 调整：`overlay_activation_profile` 日志新增 `focus_compensation=(x,y)`，用于确认补偿是否命中。
 - 验证：`cargo fmt --manifest-path "src-tauri/Cargo.toml"`，`cargo check --manifest-path "src-tauri/Cargo.toml"`，`npm run web:build`。
+
+## 2026-03-16 Native Preview Layer 蓝图与分阶段改造方案
+- 目标：
+  - 停止继续深挖单个全屏 WebView screenshot overlay。
+  - 形成 Windows-first 的 `native preview layer` 蓝图，明确底图显示、交互层和 Tauri 壳层的职责边界。
+  - 给下一轮 `Phase B: Native Bottom Layer MVP` 提供稳定施工依据。
+- 范围：
+  - `scripts/work/2026-03-16-native-preview-layer-blueprint/*`
+  - `docs/technical-architecture.md`
+  - `docs/implementation-roadmap.md`
+  - `task_plan.md`
+  - `findings.md`
+  - `progress.md`
+- 方案：
+  - 保留 `Desktop Duplication` 作为最近帧源。
+  - 新增 `NativePreviewWindow`（Win32 + D3D11 + DXGI swap chain + DirectComposition）承担冻结底图显示。
+  - 最终将选区、高频交互与小工具栏也下沉到 Native。
+  - `Tauri/WebView` 最终只保留截图配置与低频诊断页面。
+  - 分阶段推进：
+    - Phase B 先替换底图
+    - Phase C 再原生化选区/句柄/高频输入
+    - Phase D 再原生化小工具栏
+    - Phase E 让 WebView 退出截图运行时主链路
+- 验证：
+  - 产出蓝图文档、风险分析、回滚策略与手工验证步骤
+  - 暂不写应用代码
+- 状态：进行中（2026-03-16）。
+
+## 2026-03-16 Phase B: Native Bottom Layer MVP 实施计划与代码骨架
+- 目标：
+  - 开始 `NativePreviewWindow` 路线的实际工程落地。
+  - 先交付一个可编译、可注入、边界清晰的 `NativePreviewService` 骨架。
+  - 明确应用启动期初始化、状态机、session 规格和 Windows backend 入口。
+- 范围：
+  - `src-tauri/src/services/native_preview_service.rs`
+  - `src-tauri/src/services/mod.rs`
+  - `src-tauri/src/app/mod.rs`
+  - `scripts/work/2026-03-16-native-preview-layer-phase-b-mvp/*`
+- 方案：
+  - 新增 `NativePreviewService`
+  - 新增 `NativePreviewLifecycleState / NativePreviewSessionSpec / NativePreviewSourceKind`
+  - 启动期初始化 NativePreviewService，但不接管现有截图链路
+  - Windows 下实际完成 `D3D11 device + DXGI factory` bootstrap，并由 NativePreviewService 持有 backend 资源
+  - 若初始化失败，仅记录日志，不影响当前截图功能
+- 验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - 启动期日志确认 native preview service 初始化结果
+- 状态：已完成代码骨架与静态验证（2026-03-16）。
+
+## 2026-03-16 Phase B: NativePreviewWindow + SwapChain + DirectComposition 基础设施
+- 目标：
+  - 继续推进 `Phase B`，把 native preview 从“服务骨架”推进到“真实原生渲染基础设施”。
+  - 在不切换现有截图运行路径的前提下，完成：
+    - 隐藏 Win32 preview window
+    - `D3D11 device/context`
+    - `IDXGIFactory2`
+    - composition `IDXGISwapChain1`
+    - `IDCompositionDevice / Target / Visual`
+    - 一次最小透明 present 验证
+- 范围：
+  - `src-tauri/Cargo.toml`
+  - `src-tauri/src/services/native_preview_backend_windows.rs`
+  - `src-tauri/src/services/native_preview_service.rs`
+  - `scripts/work/2026-03-16-native-preview-layer-phase-b-mvp/*`
+  - 根级 `task_plan.md / findings.md / progress.md`
+- 方案：
+  - 新增 `windows` crate 的 `Win32_Graphics_DirectComposition / Win32_UI_WindowsAndMessaging / Win32_System_LibraryLoader` feature
+  - Windows backend 真实创建隐藏预览窗口和 DComp 组合树
+  - 通过 opaque backend handle 规避 `tauri::Manager::manage()` 的 `Send + Sync` 限制，不把 COM/`HWND` 直接暴露到共享状态
+  - 初始化失败仅记录日志，不影响当前截图链路
+- 验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+- 状态：已完成基础设施落地与静态验证（2026-03-16）。
+
+## 2026-03-16 Phase B: Native Preview Runtime Path
+- 目标：
+  - 把 `Desktop Duplication` 最近帧真正提交到 native swap chain
+  - 打通 native preview 的 `prepare/show/hide/resize`
+  - 在 `ScreenshotService` 生命周期里做最小接入，但不回头修旧 WebView 底图链路
+- 范围：
+  - `src-tauri/src/services/native_preview_backend_windows.rs`
+  - `src-tauri/src/services/native_preview_service.rs`
+  - `src-tauri/src/services/screenshot_service.rs`
+  - `scripts/work/2026-03-16-native-preview-layer-phase-b-mvp/*`
+- 方案：
+  - Windows backend 支持按会话几何更新窗口与 swap chain，并把 BGRA 帧提交到 back buffer
+  - `NativePreviewService` 暴露真实 runtime API，并记录结构化耗时日志
+  - `ScreenshotService::start_session()` 对单屏 live cache 路径优先提交 native preview
+  - copy/save/cancel 路径统一隐藏并清理 native preview
+- 验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - 手工截图一次，确认 native preview 运行时日志出现且无新回归
+- 状态：进行中（2026-03-16）。
+
+## 2026-03-16 Phase B: Native Preview Foreground Layer & Parallel Display
+- 目标：
+  - 让 native preview 真正进入截图显示链路的前台可见层级
+  - 建立 native preview 与透明 overlay 的并行显示关系
+  - 让 WebView 不再承担截图底图的屏幕渲染职责
+- 范围：
+  - `src-tauri/src/domain/screenshot.rs`
+  - `src-tauri/src/services/screenshot_service.rs`
+  - `src-tauri/src/commands/screenshot.rs`
+  - `src/pages/screenshot-overlay-page.tsx`
+  - `src/types/backend.ts`
+- 方案：
+  - 新增 `ScreenshotSessionView.nativePreviewActive`
+  - native preview 显示成功后，截图会话明确标记原生底图已接管
+  - overlay 页面继续在后台 decode 图片对象，但不再把 WebView `<img>` 当底图渲染
+  - 交互就绪判断对 `nativePreviewActive` 放宽，不再强制等待 WebView 底图可见
+- 验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`
+  - 手工截图时确认日志出现 `native_preview_active=true`
+- 状态：进行中（2026-03-16）。
+
+## 2026-03-16 Phase B: Native Preview Z-Order 稳定化
+- 目标：
+  - 让 native preview 与 overlay 不再只是“都在 topmost 带里”，而是明确形成“native preview 在下，overlay 在上”的稳定层级关系
+  - 收紧截图会话 show/hide 时序，避免相对层级受焦点切换影响
+- 范围：
+  - `src-tauri/src/services/native_preview_backend_windows.rs`
+  - `src-tauri/src/services/native_preview_service.rs`
+  - `src-tauri/src/services/screenshot_service.rs`
+  - `scripts/work/2026-03-16-native-preview-layer-phase-b-mvp/*`
+- 方案：
+  - Windows backend 暴露 `show_below_window / sync_z_order_below_window`
+  - screenshot 热路径改为先准备隐藏 overlay，再用 overlay HWND 作为锚点显示 native preview，overlay 激活后再做一次相对层级矫正
+  - 通过结构化日志记录 anchor HWND、首次 show 和 post-focus sync 的耗时
+- 验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - 手工截图时确认日志出现 `native_preview_window_shown anchor=overlay` 与 `native_preview_z_order_synced`
+- 状态：进行中（2026-03-16）。
+
+## 2026-03-16 Phase C: Native Interaction Window Skeleton
+- 目标：
+  - 启动 `NativeInteractionWindow` 第一轮骨架，为后续原生化选区、拖拽、句柄与命中测试提供服务边界和 Windows backend 入口
+  - 当前不接管现有 WebView 高频交互链路
+- 范围：
+  - `src-tauri/src/services/native_interaction_service.rs`
+  - `src-tauri/src/services/native_interaction_backend_windows.rs`
+  - `src-tauri/src/services/mod.rs`
+  - `src-tauri/src/app/mod.rs`
+  - `scripts/work/2026-03-16-native-interaction-window-phase-c/*`
+- 方案：
+  - 新增 `NativeInteractionService`
+  - 新增 `NativeInteractionLifecycleState / NativeInteractionSessionSpec`
+  - Windows 下创建隐藏的透明 `NativeInteractionWindow` 骨架并提供最小 show/hide/resize API
+  - 启动期初始化 service，失败只记录日志，不影响现有截图链路
+- 验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - 启动应用时确认日志出现 `native_interaction_service_initialized` 或明确失败原因
+- 状态：进行中（2026-03-16）。
+
+## 2026-03-16 Phase C: Native Basic Selection MVP
+- 目标：
+  - 把 `NativeInteractionWindow` 从骨架推进到“基础选区高频交互 MVP”
+  - 承接透明遮罩、选区矩形、8 向句柄 hit test 和拖拽捕获
+  - 开始把基础选区交互从 WebView 往 Native 下沉
+- 范围：
+  - `src-tauri/src/services/native_interaction_service.rs`
+  - `src-tauri/src/services/native_interaction_backend_windows.rs`
+  - `src-tauri/src/services/screenshot_service.rs`
+  - `src-tauri/src/commands/screenshot.rs`
+  - `src-tauri/src/domain/screenshot.rs`
+  - `src/types/backend.ts`
+  - `scripts/work/2026-03-16-native-interaction-window-phase-c/*`
+- 方案：
+  - 使用 `WS_EX_LAYERED` 顶层窗口 + `UpdateLayeredWindow` 绘制全屏半透明遮罩
+  - Native backend 维护基础选区状态、句柄命中结果和拖拽状态机
+  - 使用 `WM_LBUTTONDOWN / WM_MOUSEMOVE / WM_LBUTTONUP` 与 `SetCapture / ReleaseCapture` 完成创建、移动和 resize
+  - 先把基础选区交互接入截图 show/hide 生命周期，不迁移复杂标注
+- 验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - 手工截图并拖出选区，确认日志出现 `native_interaction_drag_started / native_interaction_selection_updated / native_interaction_drag_committed`
+- 状态：进行中（2026-03-16）。
+
+## 2026-03-16 Phase C: Native Basic Selection MVP 实施进展
+- 已完成：
+  - `NativeInteractionWindow` 透明 layered 绘制层
+  - 原生基础选区矩形
+  - 8 向句柄 hit test
+  - 创建 / 移动 / resize 拖拽捕获
+  - `NativeInteraction` 状态查询命令和前端类型
+- 仍待完成：
+  - 接入截图运行时 show/hide
+  - 在基础框选模式下把 pointer 输入从 WebView 切到 NativeInteractionWindow
+
+## 2026-03-16 Phase C: Native Base Selection Runtime Wiring
+- 目标：
+  - 把 `NativeInteractionWindow` 接入截图会话生命周期
+  - 在 `select` 工具下让基础框选由 Native 承接
+  - 保持工具栏继续在 WebView 中工作
+- 范围：
+  - `src-tauri/src/services/native_interaction_service.rs`
+  - `src-tauri/src/services/native_interaction_backend_windows.rs`
+  - `src-tauri/src/services/screenshot_service.rs`
+  - `src-tauri/src/commands/native_interaction.rs`
+  - `src-tauri/src/commands/screenshot.rs`
+  - `src/lib/command-client.ts`
+  - `src/types/backend.ts`
+  - `src/pages/screenshot-overlay-page.tsx`
+  - `scripts/work/2026-03-16-native-interaction-window-phase-c/*`
+- 方案：
+  - NativeInteraction 新增 runtime update API：
+    - `visible`
+    - `exclusion_rects`
+  - layered window 上 toolbar / text editor 区域打成 alpha=0，点击透传回 WebView
+  - `ScreenshotService.start_session()` 先 prepare native interaction
+  - copy/save/cancel 后统一 hide + clear native interaction
+  - WebView 在 `tool === select && annotations.length === 0` 时轮询 native selection 状态，并停止自身基础框选 pointer 处理
+- 验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`
+  - 手工截图时确认：
+    - native interaction 选区可用
+    - toolbar 可点击
+    - 基础框选不再由 WebView 处理
+- 状态：进行中（2026-03-16）。
+
+## 2026-03-16 Phase C: Native Interaction Render Hot Path Optimization
+- 目标：
+  - 解决基础框选拖拽卡顿
+  - 保持现有 `Desktop Duplication + NativePreviewWindow` 成果不回退
+- 范围：
+  - `src-tauri/src/services/native_interaction_backend_windows.rs`
+  - `src-tauri/src/services/native_interaction_service.rs`
+  - `scripts/work/2026-03-16-native-interaction-window-phase-c/*`
+- 方案：
+  - 把 `UpdateLayeredWindow` 所需的 screen DC / memory DC / DIBSection 改为按窗口尺寸复用
+  - 仅在尺寸变化时重建 GDI surface
+  - 为 native interaction present 链路增加阶段耗时日志
+- 验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - 手工拖拽选区，确认：
+    - `native_interaction_session_prepared present_ms` 明显下降
+    - 拖拽过程主观卡顿显著缓解
+- 状态：进行中（2026-03-16）。
+
+## 2026-03-16 Phase C: Native Interaction Event Sync + Cursor + Rect Annotation
+- 目标：
+  - 将 `NativeInteractionState` 从轮询同步改为事件化同步
+  - 将基础 hover / cursor 提示完整下沉到 NativeInteractionWindow
+  - 交付矩形标注原生创建第一版
+- 范围：
+  - `src-tauri/src/domain/mod.rs`
+  - `src-tauri/src/domain/native_interaction.rs`
+  - `src-tauri/src/services/native_interaction_service.rs`
+  - `src-tauri/src/services/native_interaction_backend_windows.rs`
+  - `src-tauri/src/commands/native_interaction.rs`
+  - `src/lib/command-client.ts`
+  - `src/types/backend.ts`
+  - `src/pages/screenshot-overlay-page.tsx`
+  - `scripts/work/2026-03-16-native-interaction-window-phase-c/*`
+- 方案：
+  - 新增 `native_interaction://state-updated`
+  - 新增 `native_interaction://rect-annotation-committed`
+  - `select` 工具完全用事件驱动同步 native 选区
+  - `rect` 工具由 native 创建草稿并在鼠标抬起后提交到现有 annotation store
+- 验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`
+  - 手工验证基础框选与矩形标注均不再依赖轮询
+- 状态：进行中（2026-03-16）。
+
+## 2026-03-16 NativeInteraction Event Sync + Rect MVP
+- Completed backend event path for native interaction: selection/hover changes now emit `native_interaction://state-updated`; rect tool draft/commit now emit `native_interaction://rect-annotation-committed`.
+- Removed WebView 40ms polling loop for native interaction state in screenshot overlay; switched to one-shot runtime update response plus event listeners.
+- Added native interaction runtime mode selection (`selection` / `rect_annotation`) and passed current selection, annotation color, and stroke width to Rust runtime update.
+- Added first native rect annotation MVP: native interaction layer now draws rect draft and commits rect annotations back into existing `ShapeAnnotation` pipeline.
+- Verified with `cargo check` and `npm run web:build`.
+
+## 2026-03-16 NativeInteraction event tightening + ellipse MVP
+- Tightened native interaction synchronization to reduce feedback-loop jitter:
+  - WebView no longer sends selection back to backend while in `selection` mode.
+  - Frontend native interaction state updates are now equality-checked before triggering React state updates.
+- Generalized native annotation commit from rect-only to shape commit event (`shape_annotation_committed`) with `kind=rect|ellipse`.
+- Added `ellipse_annotation` native runtime mode and first native ellipse draft/commit path.
+- Verified with `cargo check` and `npm run web:build`.

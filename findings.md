@@ -314,3 +314,70 @@
 - 最新日志已证明当前剩余主成本稳定落在 `focus_ms + realign_ms`，而且 `overlay_geometry_drift_detected trigger=post_focus_activation current_logical=...@-2,0` 在同一台机器上反复一致。
 - 这说明问题已经不是随机抖动，而是“窗口激活后有稳定的逻辑坐标偏移”。继续每次事后回正，只会把这 170~200ms 永久留在热路径里。
 - 对这种稳定偏移，最有效的做法不是继续扩大容差，而是记录一次补偿值，在下次激活前直接预补偿；若设备环境变化，再根据新的 probe 自我修正。
+- 2026-03-16 当前截图链路已经证明：继续优化 `capture_ms` 和图片协议都不是主方向。`Desktop Duplication` 让采集端接近 0 成本后，剩余上限主要受限于：
+  - 全屏 Tauri/WebView overlay 的窗口激活/焦点模型
+  - WebView 首帧底图显示模型
+- 这意味着“无感实时”的正确方向不是继续抠单 WebView overlay，而是分层：
+  - `Desktop Duplication` 继续作为最近帧来源
+  - `NativePreviewWindow` 负责底图显示
+  - `NativeInteractionWindow` 负责选区和高频交互
+  - `NativeToolbarWindow` 负责截图运行时小工具栏
+  - `Tauri/WebView` 只保留非高频配置 UI
+- 若直接一步把全部交互都改成 native，风险过大；更稳的路径是：
+  - 先原生化底图
+  - 再逐步下沉高频交互和工具栏
+- 2026-03-16 Phase B 第一轮不应该直接把 runtime path 切过去；更稳的落地方式是先引入 `NativePreviewService` 骨架，把：
+  - 生命周期状态
+  - session 规格
+  - Windows backend 类型入口
+  - app setup 注入点
+  先固定下来。
+- 这样下一轮实现真正的 `NativePreviewWindow` 时，不需要再一边搭模块边界，一边改截图热路径，能显著降低回归风险。
+- 2026-03-16 在不新增 DirectComposition feature 的前提下，Phase B 仍然可以先把底层图形上下文打通：
+  - `ID3D11Device`
+  - `ID3D11DeviceContext`
+  - `IDXGIFactory2`
+- 这意味着下一轮真正接 `NativePreviewWindow` 时，只需继续补：
+  - window creation
+  - swap chain
+  - composition tree
+  不需要再回头重做 bootstrap。
+- 2026-03-16 `NativePreviewService` 如果直接把 `HWND` 和 `windows` crate COM 接口放进 `tauri::Manager::manage()` 的共享状态，会因为 `Send + Sync` 约束直接编译失败。
+- Phase B 当前合理做法是把 backend 资源放到堆上，用 opaque handle 挂在状态层；这样服务边界和生命周期先固定下来，后续再根据 render thread 模型决定是否进一步正规化。
+- 2026-03-16 `CreateSwapChainForComposition` + `CreateTargetForHwnd` + `SetContent` + `Commit` 这条链路已经能在当前项目中完成静态编译并通过 `cargo check`，说明 `NativePreviewWindow` 所需的最小 Windows 图形基础设施已经可用。
+- 2026-03-16 Phase B 当前最合理的最小运行时接入，不是立即切掉 WebView 底图，而是先把 single-monitor BGRA frame 提交到 native swap chain，并把 show/hide/resize 路径跑通。这样能先验证 native runtime 生命周期，而不把底图、交互、工具栏三层同时重构。
+- 2026-03-16 `Desktop Duplication` live cache 产出的 `bgra_top_down` 已经足够直接喂给 `IDXGISwapChain1` back buffer；当前 one-shot `wgc/gdi` fast preview 路径生成的是 `RgbaImage`，不适合作为本轮 native preview 的首批接入对象。
+- 2026-03-16 `NativePreviewService` 需要有比“准备 session”更低层的 runtime API：必须显式区分 `prepare_session_frame` 与 `show/hide/clear`，否则 service 层仍然只是状态机，无法验证真正的 native runtime path。
+- 2026-03-16 当 native preview 进入截图显示链路后，不能简单把 WebView 底图逻辑整段删掉。更稳妥的 Phase B 方案是：让 WebView 继续在后台 decode 同一张截图，只是不再把 `<img>` 作为底图渲染到屏幕上；这样效果预览和现有交互状态机还能继续工作。
+- 2026-03-16 因此需要一个明确的运行时契约位：`ScreenshotSessionView.nativePreviewActive`。没有这个标志，前端无法区分“旧底图链路仍在显示”与“原生底图已经接管，只需保留交互层”。
+- 2026-03-16 只要 `nativePreviewActive=true`，overlay 的交互就绪判断也不应再强制等待 `previewSurfaceReady`；否则原生底图虽然已经可见，WebView 仍会因为等待图片 decode 而人为延迟交互。
+- 2026-03-16 当前 Phase B 的下一个真实问题不是“有没有原生底图”，而是“native preview 与 overlay 只是同时位于 topmost 带里，没有稳定的相对顺序”。仅靠两个窗口都 `TOPMOST`，在 show/focus 之后仍会被 Windows 重排。
+- 2026-03-16 对这个问题，正确修复点不是继续调 overlay 几何，而是把 overlay HWND 作为 native preview 的显式锚点：首次显示时 `show_below_window(anchor_hwnd)`，overlay 激活完成后再 `sync_z_order_below_window(anchor_hwnd)`，这样“底图在下、交互层在上”的关系才是确定的。
+- 2026-03-16 原生预览若已显示，而 `replace_active_session()` 等中途步骤失败，必须立即执行 `hide_and_clear_native_preview()`，否则会留下孤立的原生顶层窗口。这类失败清理必须在 Phase B 早期补齐。
+- 2026-03-16 当 `Phase B` 已经把底图稳定交给原生层后，下一阶段最合理的推进方式不是继续让 WebView 承担高频交互，而是先建立 `NativeInteractionWindow` 的服务骨架和 Windows backend 入口。
+- 2026-03-16 `NativeInteractionWindow` 第一轮骨架的目标不是马上替换现有选区逻辑，而是先固定：隐藏透明窗口、生命周期状态机、最小 show/hide/resize API，以及启动期注入点。这样后续原生化 hit test / drag / handle 时不会再一边改架构一边改交互热路径。
+- 2026-03-16 最新手动控制台日志表明 `native_preview_window_shown`、`native_preview_z_order_synced`、`capture_strategy=desktop_duplication_live_cache` 都稳定出现，说明 Phase B 足够稳定，可以开始迁移高频交互而不是再回头修底图。
+- 2026-03-16 对 Windows 交互层来说，`WS_EX_LAYERED + UpdateLayeredWindow` 是本轮最合适的 MVP 路径：它允许原生全屏半透明遮罩、透明开洞显示底图，并且窗口本身能直接处理鼠标消息和拖拽捕获。
+- 2026-03-16 Phase C MVP 应只承接基础选区交互：新建选区、移动选区、8 向句柄 resize、鼠标捕获；复杂标注和工具栏继续留在 WebView，可以显著降低切换风险。
+- 2026-03-16 对 `NativeInteractionWindow` 的第一轮运行时接线，最稳妥的模式不是“一刀切抢走全部输入”，而是只在 `tool === select && annotations.length === 0` 时启用 native base selection；一旦进入复杂标注阶段，仍回落到现有 WebView 交互。
+- 2026-03-16 Microsoft 官方文档确认：使用 `UpdateLayeredWindow` 的 layered window 上，alpha 为 0 的区域会把鼠标消息透传到下面窗口。因此 toolbar / text editor 与 native interaction 并行的正确做法是 exclusion rect，而不是继续拆更多窗口。
+- 2026-03-16 由于前端需要持续读取原生选区状态，`get_native_interaction_state` 这类轮询命令不能继续保留 `info` 级别日志，否则会快速刷爆控制台和固定日志；当前已降为 `debug`。
+- 2026-03-16 用户最新日志已证明：截图启动和底图显示没问题，基础框选卡顿时 `capture_ms=0~25ms`，但 `native_interaction_session_prepared present_ms=349~367ms`，并且拖拽期间 `NativeInteractionWindow` 处于高频 `WM_MOUSEMOVE` 热路径。
+- 2026-03-16 `native_interaction_backend_windows.rs` 在优化前每次 `present` 都重建整套 GDI 资源：`GetDC -> CreateCompatibleDC -> CreateDIBSection -> SelectObject -> UpdateLayeredWindow -> DeleteObject/DeleteDC/ReleaseDC`。这条链位于鼠标移动热循环内，是基础框选卡顿的首要工程问题。
+- 2026-03-16 当前最稳妥的修复方式不是继续改截图采集或 WebView 轮询，而是让 `NativeInteractionWindow` 复用 GDI surface：screen DC、memory DC、DIBSection 只在窗口尺寸变化时重建，拖拽帧只做 buffer copy + `UpdateLayeredWindow`。
+- 2026-03-16 全屏遮罩渲染同样有确定性 CPU 成本。将每帧整屏 `for pixel` 填充改为预生成 `base_mask_buffer` 后直接 `copy_from_slice`，可以在不改变绘制语义的前提下降低 4K 全屏遮罩的 CPU 写入开销。
+- 2026-03-16 最新日志显示上述热路径优化已经生效：`native_interaction_drag_committed ... avg_present_ms=6~7 max_present_ms=11~15`，说明拖拽渲染本身已不再是主瓶颈。
+- 2026-03-16 在渲染均值降到个位毫秒后，用户仍感到轻微卡顿，说明剩余延迟来自“状态同步和反馈链”，不是 `UpdateLayeredWindow`。当前最可疑的点是 WebView 每 `40ms` 轮询 `get_native_interaction_state()`。
+- 2026-03-16 轮询模型还有一个明确副作用：截图结束后，前端 effect 清理与后端 `clear()` 之间会打架，导致 `update_native_interaction_runtime failed ... SESSION_NOT_PREPARED` 噪声日志。
+- 2026-03-16 对高频交互来说，cursor 也必须跟 hit test 一起在 Native 侧决定；如果 hover 命中与 cursor 反馈分离，用户会直接感觉“拖拽手感黏滞”。这类问题继续留在 WebView 侧只会增加同步成本。
+- 2026-03-16 下一类最值得下沉的复杂标注不是文字、马赛克或画笔，而是 `rect`。矩形和当前原生选区共享几何模型，能以最小代价验证“Native 创建草稿，WebView 只接收提交结果”的模式。
+
+## 2026-03-16 Findings: Native interaction residual lag
+- After persistent GDI surface reuse, selection drag present cost dropped to low single-digit milliseconds; remaining lag was no longer raster cost but state synchronization overhead.
+- The remaining mixed-mode latency came from WebView polling `get_native_interaction_state()` every 40ms and from cursor/hover still being split between WebView and Native.
+- Correct next step is event-driven state sync plus native hover/cursor ownership, followed by migrating the simplest high-frequency annotation family (`rect`) to Native first.
+
+## 2026-03-16 Findings: State jitter and second shape migration
+- After event sync landed, the remaining small interaction jitter came from a feedback loop: native selection updates changed React `selection`, which retriggered `update_native_interaction_runtime` even in selection mode.
+- Breaking that loop requires treating Native as the sole owner of selection state while `interactionMode=selection`; the frontend should only consume events, not echo the same selection back.
+- For the second native annotation family, `ellipse` is the safest next step because it reuses the same bounding-box interaction model as `rect` while still validating that the shape-commit protocol can support more than one annotation kind.

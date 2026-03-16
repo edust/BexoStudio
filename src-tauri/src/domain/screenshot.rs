@@ -54,6 +54,7 @@ pub struct ScreenshotSessionView {
     pub capture_height: u32,
     pub image_status: ScreenshotImageStatus,
     pub image_error: Option<String>,
+    pub native_preview_active: bool,
     pub image_data_url: String,
     pub preview_image_path: Option<String>,
     pub preview_transport: ScreenshotPreviewTransport,

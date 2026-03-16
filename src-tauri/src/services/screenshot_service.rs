@@ -50,7 +50,12 @@ use crate::{
         SCREENSHOT_SESSION_UPDATED_EVENT_NAME,
     },
     error::{AppError, AppResult},
-    services::{desktop_duplication_capture, wgc_capture},
+    services::{
+        desktop_duplication_capture,
+        native_interaction_service::NativeInteractionSessionSpec,
+        native_preview_service::{NativePreviewSessionSpec, NativePreviewSourceKind},
+        wgc_capture,
+    },
 };
 
 const SCREENSHOT_OVERLAY_URL: &str = "index.html?overlay=screenshot";
@@ -146,6 +151,7 @@ struct ActiveScreenshotSession {
     capture_height: u32,
     image_status: ScreenshotImageStatus,
     image_error: Option<String>,
+    native_preview_active: bool,
     image_data_url: Arc<String>,
     preview_image_path: Option<Arc<String>>,
     preview_protocol_bytes: Option<Arc<Vec<u8>>>,
@@ -2001,6 +2007,7 @@ fn build_overlay_prewarm_session<R: Runtime>(app: &AppHandle<R>) -> ActiveScreen
         capture_height: monitor.physical_height.max(1),
         image_status: ScreenshotImageStatus::Loading,
         image_error: None,
+        native_preview_active: false,
         image_data_url: Arc::new(String::new()),
         preview_image_path: None,
         preview_protocol_bytes: None,
@@ -2557,6 +2564,30 @@ fn lock_overlay_native_window_style<R: Runtime>(
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
+fn overlay_window_handle_raw<R: Runtime>(window: &tauri::WebviewWindow<R>) -> AppResult<isize> {
+    let hwnd = window.hwnd().map_err(|error| {
+        AppError::new("SCREENSHOT_OVERLAY_HANDLE_FAILED", "读取截图窗口句柄失败")
+            .with_detail("reason", error.to_string())
+    })?;
+    let hwnd_raw = hwnd.0 as isize;
+    if hwnd_raw == 0 {
+        return Err(AppError::new(
+            "SCREENSHOT_OVERLAY_HANDLE_FAILED",
+            "截图窗口句柄无效",
+        ));
+    }
+    Ok(hwnd_raw)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn overlay_window_handle_raw<R: Runtime>(_window: &tauri::WebviewWindow<R>) -> AppResult<isize> {
+    Err(AppError::new(
+        "SCREENSHOT_OVERLAY_HANDLE_UNSUPPORTED",
+        "读取截图窗口句柄仅支持 Windows",
+    ))
+}
+
 fn probe_overlay_geometry<R: Runtime>(
     window: &tauri::WebviewWindow<R>,
     session: &ActiveScreenshotSession,
@@ -2647,6 +2678,7 @@ fn session_to_view(session: &ActiveScreenshotSession) -> ScreenshotSessionView {
         capture_height: session.capture_height,
         image_status: session.image_status,
         image_error: session.image_error.clone(),
+        native_preview_active: session.native_preview_active,
         image_data_url: session.image_data_url.as_ref().clone(),
         preview_image_path: session
             .preview_image_path
@@ -3341,6 +3373,8 @@ impl ScreenshotService {
     pub fn restore_overlay_hot_state<R: Runtime>(&self, app: &AppHandle<R>) -> AppResult<()> {
         let session = build_overlay_prewarm_session(app);
         let started_at = Instant::now();
+        hide_and_clear_native_preview(app)?;
+        hide_and_clear_native_interaction(app)?;
         self.suppress_overlay_window_events(Duration::from_millis(OVERLAY_EVENT_SUPPRESS_MS))?;
         let window = prepare_overlay_window(app, &session)?;
         restore_overlay_window_hot_state(&window, &session)?;
@@ -3357,6 +3391,13 @@ impl ScreenshotService {
         );
 
         Ok(())
+    }
+
+    pub fn hide_and_clear_native_interaction<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+    ) -> AppResult<()> {
+        hide_and_clear_native_interaction(app)
     }
 
     #[cfg(target_os = "windows")]
@@ -3502,6 +3543,20 @@ impl ScreenshotService {
         app: &AppHandle<R>,
     ) -> AppResult<StartScreenshotSessionResult> {
         let started_at = Instant::now();
+        if let Err(error) = hide_and_clear_native_preview(app) {
+            log::warn!(
+                target: "bexo::service::screenshot",
+                "native_preview_reset_failed reason={}",
+                error
+            );
+        }
+        if let Err(error) = hide_and_clear_native_interaction(app) {
+            log::warn!(
+                target: "bexo::service::screenshot",
+                "native_interaction_reset_failed reason={}",
+                error
+            );
+        }
         let hide_overlay_started_at = Instant::now();
         let had_active_session = self.get_active_session_optional()?.is_some();
         if had_active_session {
@@ -3548,6 +3603,8 @@ impl ScreenshotService {
         } else {
             capture_single_monitor_fast_preview(app)?
         };
+        let live_cache_hit = live_cache_capture.is_some();
+        let fast_preview_available = fast_preview_capture.is_some();
         let (
             captured,
             preview_transport,
@@ -3606,8 +3663,16 @@ impl ScreenshotService {
             captured.desktop.height,
         );
 
+        let native_preview_source_kind = if live_cache_hit {
+            Some(NativePreviewSourceKind::DesktopDuplicationCache)
+        } else if fast_preview_available {
+            Some(NativePreviewSourceKind::ScreenshotSessionFrame)
+        } else {
+            None
+        };
+
         let session_build_started_at = Instant::now();
-        let session = ActiveScreenshotSession {
+        let mut session = ActiveScreenshotSession {
             id: uuid::Uuid::new_v4().to_string(),
             created_at: Utc::now().to_rfc3339(),
             display_x: captured.desktop.x,
@@ -3622,6 +3687,7 @@ impl ScreenshotService {
                 ScreenshotPreviewTransport::File => ScreenshotImageStatus::Loading,
             },
             image_error: None,
+            native_preview_active: false,
             image_data_url: Arc::new(String::new()),
             preview_image_path: None,
             preview_protocol_bytes: preview_protocol_bytes.map(Arc::new),
@@ -3641,28 +3707,103 @@ impl ScreenshotService {
             })
             .sum::<u64>();
 
-        let state_store_started_at = Instant::now();
-        self.replace_active_session(session.clone())?;
-        let state_store_ms = state_store_started_at.elapsed().as_millis();
         let overlay_prewarmed = self.is_overlay_prewarmed()?;
         let overlay_focus_drift_compensation =
             self.get_overlay_focus_drift_compensation(&session)?;
+        let overlay_window = match prepare_overlay_window(app, &session) {
+            Ok(window) => window,
+            Err(error) => {
+                return Err(error);
+            }
+        };
+
+        let overlay_anchor_hwnd_raw = overlay_window_handle_raw(&overlay_window).ok();
+        let native_preview_started_at = Instant::now();
+        let native_preview_status = match native_preview_source_kind {
+            Some(source_kind) => {
+                match prepare_and_show_native_preview(
+                    app,
+                    &session,
+                    source_kind,
+                    overlay_anchor_hwnd_raw,
+                ) {
+                    Ok(Some(())) => "shown",
+                    Ok(None) => "skipped",
+                    Err(error) => {
+                        log::warn!(
+                            target: "bexo::service::screenshot",
+                            "native_preview_prepare_failed session_id={} reason={}",
+                            session.id,
+                            error
+                        );
+                        "failed"
+                    }
+                }
+            }
+            None => "skipped",
+        };
+        let native_preview_ms = native_preview_started_at.elapsed().as_millis();
+        session.native_preview_active = native_preview_status == "shown";
+
+        let state_store_started_at = Instant::now();
+        if let Err(error) = self.replace_active_session(session.clone()) {
+            if native_preview_status == "shown" {
+                let _ = hide_and_clear_native_preview(app);
+            }
+            return Err(error);
+        }
+        let state_store_ms = state_store_started_at.elapsed().as_millis();
+
+        let native_interaction_started_at = Instant::now();
+        let native_interaction_status = match prepare_native_interaction_session(app, &session) {
+            Ok(true) => "prepared",
+            Ok(false) => "skipped",
+            Err(error) => {
+                log::warn!(
+                    target: "bexo::service::screenshot",
+                    "native_interaction_prepare_failed session_id={} reason={}",
+                    session.id,
+                    error
+                );
+                "failed"
+            }
+        };
+        let native_interaction_ms = native_interaction_started_at.elapsed().as_millis();
 
         let emit_loading_started_at = Instant::now();
-        let overlay_window = prepare_overlay_window(app, &session)?;
         emit_session_updated(app, &session);
         let emit_loading_ms = emit_loading_started_at.elapsed().as_millis();
 
         let overlay_started_at = Instant::now();
         self.suppress_overlay_window_events(Duration::from_millis(OVERLAY_EVENT_SUPPRESS_MS))?;
-        let overlay_activation = move_and_focus_overlay_window(
+        let overlay_activation = match move_and_focus_overlay_window(
             &overlay_window,
             &session,
             overlay_prewarmed,
             overlay_focus_drift_compensation,
-        )?;
+        ) {
+            Ok(activation) => activation,
+            Err(error) => {
+                if native_preview_status == "shown" {
+                    let _ = hide_and_clear_native_preview(app);
+                }
+                return Err(error);
+            }
+        };
         if let Some(probe) = overlay_activation.observed_focus_drift {
             self.update_overlay_focus_drift_compensation(&session, &probe)?;
+        }
+        if session.native_preview_active {
+            if let Some(anchor_hwnd_raw) = overlay_anchor_hwnd_raw {
+                if let Err(error) = sync_native_preview_below_overlay(app, anchor_hwnd_raw) {
+                    log::warn!(
+                        target: "bexo::service::screenshot",
+                        "native_preview_z_order_sync_failed session_id={} reason={}",
+                        session.id,
+                        error
+                    );
+                }
+            }
         }
         let overlay_ready_ms = overlay_started_at.elapsed().as_millis();
 
@@ -3677,7 +3818,7 @@ impl ScreenshotService {
 
         log::info!(
             target: "bexo::service::screenshot",
-            "start_session_completed session_id={} monitors={} hide_overlay_ms={} capture_ms={} capture_strategy={} live_capture_available={} frame_age_ms={} live_capture_sequence={} session_build_ms={} state_store_ms={} overlay_ready_ms={} overlay_prewarmed={} emit_loading_ms={} preview_spawn_ms={} total_ms={} display={}x{} display_origin=({}, {}) display_unit=logical_px legacy_capture={}x{} legacy_scale_factor={} raw_rgba_bytes={} preview_transport={:?} preview_pixels={}x{} overlay_show={}",
+            "start_session_completed session_id={} monitors={} hide_overlay_ms={} capture_ms={} capture_strategy={} live_capture_available={} frame_age_ms={} live_capture_sequence={} session_build_ms={} state_store_ms={} native_preview_status={} native_preview_ms={} native_interaction_status={} native_interaction_ms={} overlay_ready_ms={} overlay_prewarmed={} emit_loading_ms={} preview_spawn_ms={} total_ms={} display={}x{} display_origin=({}, {}) display_unit=logical_px legacy_capture={}x{} legacy_scale_factor={} raw_rgba_bytes={} preview_transport={:?} preview_pixels={}x{} overlay_show={}",
             session.id,
             session.monitors.len(),
             hide_overlay_ms,
@@ -3692,6 +3833,10 @@ impl ScreenshotService {
                 .unwrap_or_else(|| "na".to_string()),
             session_build_ms,
             state_store_ms,
+            native_preview_status,
+            native_preview_ms,
+            native_interaction_status,
+            native_interaction_ms,
             overlay_ready_ms,
             overlay_prewarmed,
             emit_loading_ms,
@@ -3731,9 +3876,10 @@ impl ScreenshotService {
         let preview_transport = view.preview_transport;
         log::info!(
             target: "bexo::service::screenshot",
-            "get_active_session_completed session_id={} image_status={:?} image_data_url_bytes={} preview_image_path={} preview_transport={:?} preview_pixels={}x{} monitors={} view_build_ms={} total_ms={}",
+            "get_active_session_completed session_id={} image_status={:?} native_preview_active={} image_data_url_bytes={} preview_image_path={} preview_transport={:?} preview_pixels={}x{} monitors={} view_build_ms={} total_ms={}",
             view.session_id,
             view.image_status,
+            view.native_preview_active,
             image_data_url_bytes,
             preview_image_path,
             preview_transport,
@@ -4519,6 +4665,106 @@ impl ScreenshotService {
 
         Ok(())
     }
+}
+
+fn prepare_and_show_native_preview<R: Runtime>(
+    app: &AppHandle<R>,
+    session: &ActiveScreenshotSession,
+    source_kind: NativePreviewSourceKind,
+    overlay_anchor_hwnd_raw: Option<isize>,
+) -> AppResult<Option<()>> {
+    let Some((spec, bgra_top_down)) = build_native_preview_runtime_inputs(session, source_kind)?
+    else {
+        return Ok(None);
+    };
+    let native_preview_service = app.state::<crate::services::NativePreviewService>();
+    native_preview_service.prepare_session_frame(spec, bgra_top_down.as_slice())?;
+    if let Some(anchor_hwnd_raw) = overlay_anchor_hwnd_raw {
+        native_preview_service.show_prepared_session_below_window(anchor_hwnd_raw)?;
+    } else {
+        native_preview_service.show_prepared_session()?;
+    }
+    Ok(Some(()))
+}
+
+fn hide_and_clear_native_preview<R: Runtime>(app: &AppHandle<R>) -> AppResult<()> {
+    let native_preview_service = app.state::<crate::services::NativePreviewService>();
+    native_preview_service.hide()?;
+    native_preview_service.clear()?;
+    Ok(())
+}
+
+fn prepare_native_interaction_session<R: Runtime>(
+    app: &AppHandle<R>,
+    session: &ActiveScreenshotSession,
+) -> AppResult<bool> {
+    if session.monitors.len() != 1 {
+        return Ok(false);
+    }
+
+    let native_interaction_service = app.state::<crate::services::NativeInteractionService>();
+    native_interaction_service.prepare_session(NativeInteractionSessionSpec {
+        session_id: session.id.clone(),
+        display_x: session.display_x,
+        display_y: session.display_y,
+        display_width: session.display_width,
+        display_height: session.display_height,
+        scale_factor: session.scale_factor,
+    })?;
+    Ok(true)
+}
+
+fn hide_and_clear_native_interaction<R: Runtime>(app: &AppHandle<R>) -> AppResult<()> {
+    let native_interaction_service = app.state::<crate::services::NativeInteractionService>();
+    native_interaction_service.hide()?;
+    native_interaction_service.clear()?;
+    Ok(())
+}
+
+fn sync_native_preview_below_overlay<R: Runtime>(
+    app: &AppHandle<R>,
+    overlay_anchor_hwnd_raw: isize,
+) -> AppResult<()> {
+    let native_preview_service = app.state::<crate::services::NativePreviewService>();
+    native_preview_service.sync_z_order_below_window(overlay_anchor_hwnd_raw)?;
+    Ok(())
+}
+
+fn build_native_preview_runtime_inputs(
+    session: &ActiveScreenshotSession,
+    source_kind: NativePreviewSourceKind,
+) -> AppResult<Option<(NativePreviewSessionSpec, Arc<Vec<u8>>)>> {
+    if session.monitors.len() != 1 {
+        return Ok(None);
+    }
+    let monitor = session
+        .monitors
+        .first()
+        .ok_or_else(|| AppError::new("SCREENSHOT_MONITOR_NOT_FOUND", "未找到截图显示器"))?;
+    let Some(bgra_top_down) = monitor.bgra_top_down.clone() else {
+        return Ok(None);
+    };
+    if monitor.capture_width == 0 || monitor.capture_height == 0 {
+        return Ok(None);
+    }
+
+    Ok(Some((
+        NativePreviewSessionSpec {
+            session_id: session.id.clone(),
+            display_id: monitor.display_id,
+            display_x: monitor.display_x,
+            display_y: monitor.display_y,
+            display_width: monitor.display_width.max(1),
+            display_height: monitor.display_height.max(1),
+            capture_width: monitor.capture_width.max(1),
+            capture_height: monitor.capture_height.max(1),
+            scale_factor: monitor.scale_factor,
+            preview_width: session.preview_pixel_width.max(1),
+            preview_height: session.preview_pixel_height.max(1),
+            source_kind,
+        },
+        bgra_top_down,
+    )))
 }
 
 #[cfg(test)]

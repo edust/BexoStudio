@@ -1,5 +1,11 @@
 mod desktop_duplication_capture;
 mod hotkey_service;
+#[cfg(target_os = "windows")]
+mod native_interaction_backend_windows;
+mod native_interaction_service;
+#[cfg(target_os = "windows")]
+mod native_preview_backend_windows;
+mod native_preview_service;
 mod planner_service;
 mod preferences_service;
 mod profile_service;
@@ -11,6 +17,12 @@ mod windows_hook_hotkey;
 mod workspace_service;
 
 pub use hotkey_service::HotkeyService;
+pub use native_interaction_service::{
+    NativeInteractionBackendKind, NativeInteractionExclusionRect, NativeInteractionMode,
+    NativeInteractionRuntimeUpdateInput, NativeInteractionSelectionRect,
+    NativeInteractionService, NativeInteractionStateUpdatedEvent, NativeInteractionStateView,
+};
+pub use native_preview_service::NativePreviewService;
 pub use planner_service::PlannerService;
 pub use preferences_service::PreferencesService;
 pub use profile_service::ProfileService;

@@ -501,6 +501,7 @@ export type ScreenshotSessionView = {
   captureHeight: number;
   imageStatus: ScreenshotImageStatus;
   imageError?: string | null;
+  nativePreviewActive: boolean;
   imageDataUrl: string;
   previewImagePath?: string | null;
   previewTransport: ScreenshotPreviewTransport;
@@ -558,6 +559,65 @@ export type CancelScreenshotSessionResult = {
 export type ScreenshotSessionUpdatedEvent = {
   sessionId: string;
   createdAt: string;
+};
+
+export type NativeInteractionBackendKind = "windows_layered_selection_mvp";
+
+export type NativeInteractionSelectionRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type NativeInteractionSelectionPoint = {
+  x: number;
+  y: number;
+};
+
+export type NativeInteractionMode = "selection" | "rect_annotation" | "ellipse_annotation";
+
+export type NativeInteractionShapeAnnotationKind = "rect" | "ellipse";
+
+export type NativeInteractionExclusionRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type NativeInteractionStateView = {
+  backendKind?: NativeInteractionBackendKind | null;
+  lifecycleState: string;
+  hasActiveSession: boolean;
+  selection?: NativeInteractionSelectionRect | null;
+  hoveredHitRegion: string;
+  dragMode?: string | null;
+  selectionRevision: number;
+  interactionMode: NativeInteractionMode;
+  rectDraft?: NativeInteractionSelectionRect | null;
+};
+
+export type NativeInteractionStateUpdatedEvent = {
+  sessionId?: string | null;
+  backendKind?: NativeInteractionBackendKind | null;
+  lifecycleState: string;
+  hasActiveSession: boolean;
+  selection?: NativeInteractionSelectionRect | null;
+  hoveredHitRegion: string;
+  dragMode?: string | null;
+  selectionRevision: number;
+  interactionMode: NativeInteractionMode;
+  rectDraft?: NativeInteractionSelectionRect | null;
+};
+
+export type NativeInteractionShapeAnnotationCommittedEvent = {
+  sessionId: string;
+  kind: NativeInteractionShapeAnnotationKind;
+  color: string;
+  strokeWidth: number;
+  start: NativeInteractionSelectionPoint;
+  end: NativeInteractionSelectionPoint;
 };
 
 export type DeleteResult = {

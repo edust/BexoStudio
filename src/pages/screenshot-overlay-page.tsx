@@ -18,11 +18,17 @@ import {
   getScreenshotSelectionRender,
   getScreenshotSession,
   hasDesktopRuntime,
+  listenToNativeInteractionShapeAnnotationCommittedEvents,
+  listenToNativeInteractionStateUpdatedEvents,
   listenToScreenshotSessionUpdatedEvents,
   saveScreenshotSelection,
+  updateNativeInteractionRuntime,
 } from "@/lib/command-client";
 import type {
   AppPreferences,
+  NativeInteractionExclusionRect,
+  NativeInteractionMode,
+  NativeInteractionStateView,
   ScreenshotRenderedImageInput,
   ScreenshotSelectionInput,
   ScreenshotSelectionRenderView,
@@ -407,6 +413,7 @@ export default function ScreenshotOverlayPage() {
   const [textDrag, setTextDrag] = useState<TextDragState | null>(null);
   const [previewSurfaceReady, setPreviewSurfaceReady] = useState(false);
   const [previewImageVersion, setPreviewImageVersion] = useState<number>(0);
+  const [nativeInteractionState, setNativeInteractionState] = useState<NativeInteractionStateView | null>(null);
   const toolHotkeyMap = useMemo(
     () => buildToolHotkeyMap(screenshotToolHotkeys),
     [screenshotToolHotkeys],
@@ -455,7 +462,77 @@ export default function ScreenshotOverlayPage() {
     return "data_url";
   }, [session]);
 
-  const sessionImageReady = Boolean(session && session.imageStatus === "ready" && previewSurfaceReady);
+  const renderWebviewPreviewSurface = Boolean(session && !session.nativePreviewActive);
+
+  const sessionImageReady = Boolean(
+    session &&
+      session.imageStatus === "ready" &&
+      (session.nativePreviewActive || previewSurfaceReady),
+  );
+
+  const nativeBaseSelectionEligible = Boolean(
+    runtimeAvailable &&
+      session &&
+      session.nativePreviewActive &&
+      tool === "select" &&
+      annotations.length === 0 &&
+      !textEditor &&
+      !draft &&
+      !busyAction,
+  );
+
+  const nativeShapeAnnotationEligible = Boolean(
+    runtimeAvailable &&
+      session &&
+      session.nativePreviewActive &&
+      selection &&
+      (tool === "rect" || tool === "ellipse") &&
+      !textEditor &&
+      !busyAction &&
+      !draft &&
+      !dragStart &&
+      !dragCurrent &&
+      !shapeTransform &&
+      !shapeGroupDrag &&
+      !penTransform &&
+      !penGroupDrag &&
+      !effectTransform &&
+      !effectGroupDrag &&
+      !numberDrag &&
+      !numberGroupDrag &&
+      !mixedGroupDrag &&
+      !objectSelectionMarquee &&
+      !textDrag,
+  );
+
+  const nativeInteractionRuntimeVisible = nativeBaseSelectionEligible || nativeShapeAnnotationEligible;
+  const nativeInteractionRuntimeMode: NativeInteractionMode =
+    tool === "ellipse" && nativeShapeAnnotationEligible
+      ? "ellipse_annotation"
+      : tool === "rect" && nativeShapeAnnotationEligible
+        ? "rect_annotation"
+        : "selection";
+  const nativeInteractionRuntimeSelection =
+    nativeInteractionRuntimeMode === "selection" ? null : selection;
+
+  const nativeBaseSelectionActive = Boolean(
+    nativeBaseSelectionEligible &&
+      nativeInteractionState?.hasActiveSession &&
+      (nativeInteractionState.lifecycleState === "visible" ||
+        nativeInteractionState.lifecycleState === "prepared"),
+  );
+
+  const nativeShapeAnnotationActive = Boolean(
+    nativeShapeAnnotationEligible &&
+      nativeInteractionState?.hasActiveSession &&
+      (nativeInteractionState.interactionMode === "rect_annotation" ||
+        nativeInteractionState.interactionMode === "ellipse_annotation") &&
+      (nativeInteractionState.lifecycleState === "visible" ||
+        nativeInteractionState.lifecycleState === "prepared"),
+  );
+
+  const nativeInteractionVisualsActive = nativeBaseSelectionActive || nativeShapeAnnotationActive;
+  const nativeInteractionPointerOwned = nativeBaseSelectionEligible || nativeShapeAnnotationEligible;
 
   const displayAnnotations = useMemo(
     () => buildDisplayAnnotations(annotations, textEditor, textDrag, shapeTransform, shapeGroupDrag, penTransform, penGroupDrag, effectTransform, numberDrag, numberGroupDrag, effectGroupDrag, mixedGroupDrag),
@@ -1108,6 +1185,7 @@ export default function ScreenshotOverlayPage() {
     setSelection(null);
     setDragStart(null);
     setDragCurrent(null);
+    setNativeInteractionState(null);
     textClipboardRef.current = null;
     shapeClipboardRef.current = null;
     penClipboardRef.current = null;
@@ -3334,7 +3412,7 @@ export default function ScreenshotOverlayPage() {
       emitPipelineInfo(
         `[screenshot][pipeline] load_session_done session_id=${value.sessionId} status=${value.imageStatus} fetch_ms=${fetchMs.toFixed(
           1,
-        )} image_data_url_bytes=${value.imageDataUrl.length} preview_image_path=${value.previewImagePath ?? ""} preview_transport=${value.previewTransport} preview_pixels=${value.previewPixelWidth}x${value.previewPixelHeight} monitors=${value.monitors.length}`,
+        )} image_data_url_bytes=${value.imageDataUrl.length} preview_image_path=${value.previewImagePath ?? ""} preview_transport=${value.previewTransport} native_preview_active=${value.nativePreviewActive} preview_pixels=${value.previewPixelWidth}x${value.previewPixelHeight} monitors=${value.monitors.length}`,
       );
       setSession(value);
       if (!isSameSession) {
@@ -3349,6 +3427,35 @@ export default function ScreenshotOverlayPage() {
       message.error(summary.message || "读取截图会话失败");
     }
   }, [message, resetOverlayViewState, runtimeAvailable]);
+
+  const buildNativeInteractionExclusionRects = useCallback((): NativeInteractionExclusionRect[] => {
+    const stage = stageRef.current;
+    if (!stage) {
+      return [];
+    }
+
+    const rects: NativeInteractionExclusionRect[] = [];
+    const stageBounds = stage.getBoundingClientRect();
+    const collectRect = (element: HTMLElement | null) => {
+      if (!element) {
+        return;
+      }
+      const bounds = element.getBoundingClientRect();
+      if (bounds.width <= 0 || bounds.height <= 0) {
+        return;
+      }
+      rects.push({
+        x: clamp(bounds.left - stageBounds.left, 0, stageBounds.width),
+        y: clamp(bounds.top - stageBounds.top, 0, stageBounds.height),
+        width: clamp(bounds.width, 0, stageBounds.width),
+        height: clamp(bounds.height, 0, stageBounds.height),
+      });
+    };
+
+    collectRect(toolbarRef.current);
+    collectRect(textEditorRef.current);
+    return rects;
+  }, []);
 
   useEffect(() => {
     if (!runtimeAvailable) {
@@ -3379,6 +3486,145 @@ export default function ScreenshotOverlayPage() {
       disposed = true;
     };
   }, [runtimeAvailable]);
+
+  useEffect(() => {
+    if (!runtimeAvailable || !session) {
+      return;
+    }
+
+    let cancelled = false;
+    const visible = nativeInteractionRuntimeVisible;
+    const exclusionRects = visible ? buildNativeInteractionExclusionRects() : [];
+    void updateNativeInteractionRuntime(
+      session.sessionId,
+      visible,
+      exclusionRects,
+      nativeInteractionRuntimeMode,
+      nativeInteractionRuntimeSelection,
+      color,
+      strokeWidth,
+    )
+      .then((value) => {
+        if (!cancelled) {
+          setNativeInteractionState(value);
+        }
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+        const summary = getErrorSummary(error);
+        console.warn("update native interaction runtime failed", summary);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    buildNativeInteractionExclusionRects,
+    busyAction,
+    color,
+    nativeInteractionRuntimeMode,
+    nativeInteractionRuntimeSelection,
+    nativeInteractionRuntimeVisible,
+    session,
+    strokeWidth,
+    textEditor,
+    dragCurrent,
+    dragStart,
+    draft,
+    effectGroupDrag,
+    effectTransform,
+    mixedGroupDrag,
+    numberDrag,
+    numberGroupDrag,
+    objectSelectionMarquee,
+    penGroupDrag,
+    penTransform,
+    shapeGroupDrag,
+    shapeTransform,
+    textDrag,
+  ]);
+
+  useEffect(() => {
+    if (!runtimeAvailable) {
+      return;
+    }
+
+    let disposed = false;
+    let unlistenState: (() => void) | null = null;
+    let unlistenRectCommitted: (() => void) | null = null;
+
+    void (async () => {
+      try {
+        const [detachState, detachRectCommitted] = await Promise.all([
+          listenToNativeInteractionStateUpdatedEvents((event) => {
+            if (disposed) {
+              return;
+            }
+            if (session && event.sessionId && event.sessionId !== session.sessionId) {
+              return;
+            }
+            setNativeInteractionState((current) =>
+              areNativeInteractionStatesEqual(current, event) ? current : event,
+            );
+          }),
+          listenToNativeInteractionShapeAnnotationCommittedEvents((event) => {
+            if (disposed) {
+              return;
+            }
+            if (!session || event.sessionId !== session.sessionId) {
+              return;
+            }
+            const annotation: ShapeAnnotation = {
+              id: crypto.randomUUID(),
+              kind: event.kind,
+              color: event.color,
+              strokeWidth: event.strokeWidth,
+              start: event.start,
+              end: event.end,
+            };
+            pushAnnotation(annotation);
+          }),
+        ]);
+        if (disposed) {
+          detachState();
+          detachRectCommitted();
+          return;
+        }
+        unlistenState = detachState;
+        unlistenRectCommitted = detachRectCommitted;
+      } catch (error) {
+        console.warn("listen native interaction events failed", getErrorSummary(error));
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      if (unlistenState) {
+        unlistenState();
+      }
+      if (unlistenRectCommitted) {
+        unlistenRectCommitted();
+      }
+    };
+  }, [pushAnnotation, runtimeAvailable, session]);
+
+  useEffect(() => {
+    if (!nativeInteractionRuntimeVisible) {
+      return;
+    }
+    setDragStart(null);
+    setDragCurrent(null);
+    setDraft(null);
+    if (nativeInteractionState?.selection !== undefined) {
+      setSelection((current) =>
+        areSelectionRectsEqual(current, nativeInteractionState.selection ?? null)
+          ? current
+          : (nativeInteractionState.selection ?? null),
+      );
+    }
+  }, [nativeInteractionRuntimeVisible, nativeInteractionState]);
 
   const buildSelectionInput = useCallback((): ScreenshotSelectionInput | null => {
     if (!selection) return null;
@@ -3490,6 +3736,7 @@ export default function ScreenshotOverlayPage() {
 
   const handleStageDoubleClick = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
+      if (nativeInteractionPointerOwned) return;
       if (event.button !== 0 || busyAction || !selection || !session || !sessionImageReady) return;
 
       const point = getPointFromClient(event.clientX, event.clientY);
@@ -3506,11 +3753,12 @@ export default function ScreenshotOverlayPage() {
       setPenGroupDrag(null);
       openTextEditor(hitText.point, hitText);
     },
-    [busyAction, clearEffectSelection, clearNumberSelection, clearPenSelection, clearShapeSelection, getPointFromClient, openTextEditor, selection, session, sessionImageReady],
+    [busyAction, clearEffectSelection, clearNumberSelection, clearPenSelection, clearShapeSelection, getPointFromClient, nativeInteractionPointerOwned, openTextEditor, selection, session, sessionImageReady],
   );
 
   const handleStagePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (nativeInteractionPointerOwned) return;
       if (event.button !== 0 || busyAction || !session || !sessionImageReady) return;
 
       const point = getPointFromClient(event.clientX, event.clientY);
@@ -4111,11 +4359,13 @@ export default function ScreenshotOverlayPage() {
       session,
       strokeWidth,
       tool,
+      nativeInteractionPointerOwned,
     ],
   );
 
   const handleStagePointerMove = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (nativeInteractionPointerOwned) return;
       const point = getPointFromClient(event.clientX, event.clientY);
       if (!point) return;
 
@@ -4358,11 +4608,12 @@ export default function ScreenshotOverlayPage() {
         return { ...current, end: clamped };
       });
     },
-    [dragStart, draft, effectGroupDrag, effectTransform, getPointFromClient, mixedGroupDrag, numberDrag, numberGroupDrag, objectSelectionMarquee, penGroupDrag, penTransform, selection, setObjectSelectionMarquee, shapeGroupDrag, shapeTransform, textDrag, tool],
+    [dragStart, draft, effectGroupDrag, effectTransform, getPointFromClient, mixedGroupDrag, nativeInteractionPointerOwned, numberDrag, numberGroupDrag, objectSelectionMarquee, penGroupDrag, penTransform, selection, setObjectSelectionMarquee, shapeGroupDrag, shapeTransform, textDrag, tool],
   );
 
   const handleStagePointerUp = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (nativeInteractionPointerOwned) return;
       const point = getPointFromClient(event.clientX, event.clientY);
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
@@ -4800,7 +5051,7 @@ export default function ScreenshotOverlayPage() {
       }
       setDraft(null);
     },
-    [activeTextId, clearEffectSelection, clearNumberSelection, clearPenSelection, clearShapeSelection, clearTextSelection, commitAnnotations, dragStart, draft, effectGroupDrag, effectTransform, getPointFromClient, getSelectedEffectIds, getSelectedNumberIds, getSelectedObjectBuckets, getSelectedPenIds, getSelectedShapeIds, mixedGroupDrag, numberDrag, numberGroupDrag, objectSelectionMarquee, penGroupDrag, penTransform, pushAnnotation, resetAnnotations, restoreObjectSelections, selectEffectAnnotation, selectNumberAnnotation, selectPenAnnotation, selectShapeAnnotation, selectedEffectId, selectedNumberId, selectedPenId, selectedShapeId, selection, session, sessionImageReady, setEffectSelection, setNumberSelection, setObjectSelectionMarquee, setPenSelection, setShapeSelection, setTextSelection, shapeGroupDrag, shapeTransform, textDrag, tool],
+    [activeTextId, clearEffectSelection, clearNumberSelection, clearPenSelection, clearShapeSelection, clearTextSelection, commitAnnotations, dragStart, draft, effectGroupDrag, effectTransform, getPointFromClient, getSelectedEffectIds, getSelectedNumberIds, getSelectedObjectBuckets, getSelectedPenIds, getSelectedShapeIds, mixedGroupDrag, nativeInteractionPointerOwned, numberDrag, numberGroupDrag, objectSelectionMarquee, penGroupDrag, penTransform, pushAnnotation, resetAnnotations, restoreObjectSelections, selectEffectAnnotation, selectNumberAnnotation, selectPenAnnotation, selectShapeAnnotation, selectedEffectId, selectedNumberId, selectedPenId, selectedShapeId, selection, session, sessionImageReady, setEffectSelection, setNumberSelection, setObjectSelectionMarquee, setPenSelection, setShapeSelection, setTextSelection, shapeGroupDrag, shapeTransform, textDrag, tool],
   );
 
   useEffect(() => {
@@ -4886,7 +5137,7 @@ export default function ScreenshotOverlayPage() {
         );
         previewRenderableRef.current = image;
         setPreviewSurfaceReady(true);
-        if (!hasEffectPreview && firstPaintSessionIdRef.current !== sessionId) {
+        if (!hasEffectPreview && !session.nativePreviewActive && firstPaintSessionIdRef.current !== sessionId) {
           firstPaintSessionIdRef.current = sessionId;
           emitPipelineInfo(
             `[screenshot][pipeline] preview_first_paint session_id=${sessionId} surface=img from_loading_seen_ms=${
@@ -4904,7 +5155,7 @@ export default function ScreenshotOverlayPage() {
     return () => {
       disposed = true;
     };
-  }, [hasEffectPreview, previewImageSource, previewImageSourceKind, session?.imageStatus, session?.sessionId]);
+  }, [hasEffectPreview, previewImageSource, previewImageSourceKind, session?.imageStatus, session?.nativePreviewActive, session?.sessionId]);
 
   useEffect(() => {
     const canvas = previewCanvasRef.current;
@@ -5731,7 +5982,7 @@ export default function ScreenshotOverlayPage() {
         <>
           {session.imageStatus === "ready" ? (
             <>
-              {previewSurfaceReady && previewImageSource ? (
+              {renderWebviewPreviewSurface && previewSurfaceReady && previewImageSource ? (
                 <img
                   key={session.sessionId}
                   alt="screenshot"
@@ -5743,8 +5994,8 @@ export default function ScreenshotOverlayPage() {
               {hasEffectPreview ? <canvas ref={previewCanvasRef} className="pointer-events-none absolute inset-0 h-full w-full" /> : null}
             </>
           ) : null}
-          {renderMask(activeRect)}
-          {activeRect ? <SelectionBorder rect={activeRect} /> : null}
+          {nativeInteractionVisualsActive ? null : renderMask(activeRect)}
+          {nativeInteractionVisualsActive ? null : activeRect ? <SelectionBorder rect={activeRect} /> : null}
           {objectSelectionRect ? (
             <ObjectSelectionMarqueeOverlay
               additive={objectSelectionMarquee?.additive ?? false}
@@ -8543,7 +8794,16 @@ function arePointsEqual(left: Point, right: Point) {
   return Math.abs(left.x - right.x) < 0.001 && Math.abs(left.y - right.y) < 0.001;
 }
 
-function areSelectionRectsEqual(left: SelectionRect, right: SelectionRect) {
+function areSelectionRectsEqual(
+  left: SelectionRect | null | undefined,
+  right: SelectionRect | null | undefined,
+) {
+  if (!left && !right) {
+    return true;
+  }
+  if (!left || !right) {
+    return false;
+  }
   return (
     Math.abs(left.x - right.x) < 0.001 &&
     Math.abs(left.y - right.y) < 0.001 &&
@@ -9277,4 +9537,27 @@ function formatNowForFileName() {
   const minutes = `${now.getMinutes()}`.padStart(2, "0");
   const seconds = `${now.getSeconds()}`.padStart(2, "0");
   return `${year}${month}${day}-${hours}${minutes}${seconds}`;
+}
+
+function areNativeInteractionStatesEqual(
+  left: NativeInteractionStateView | null,
+  right: NativeInteractionStateView | null,
+) {
+  if (!left && !right) {
+    return true;
+  }
+  if (!left || !right) {
+    return false;
+  }
+  return (
+    left.backendKind === right.backendKind &&
+    left.lifecycleState === right.lifecycleState &&
+    left.hasActiveSession === right.hasActiveSession &&
+    left.hoveredHitRegion === right.hoveredHitRegion &&
+    left.dragMode === right.dragMode &&
+    left.selectionRevision === right.selectionRevision &&
+    left.interactionMode === right.interactionMode &&
+    areSelectionRectsEqual(left.selection ?? null, right.selection ?? null) &&
+    areSelectionRectsEqual(left.rectDraft ?? null, right.rectDraft ?? null)
+  );
 }

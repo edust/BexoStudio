@@ -2,6 +2,7 @@ mod adapter;
 mod codex_profile;
 mod hotkey;
 mod launch_task;
+mod native_interaction;
 mod preferences;
 mod project;
 mod resource_browser;
@@ -27,6 +28,10 @@ pub use launch_task::{
     validate_launch_task_retry_policy, validate_launch_task_timeout, validate_launch_task_type,
     validate_launch_task_working_dir, LaunchTaskRecord, LaunchTaskRetryPolicy,
     SnapshotLaunchTaskPayload, UpsertLaunchTaskInput,
+};
+pub use native_interaction::{
+    NATIVE_INTERACTION_SHAPE_ANNOTATION_COMMITTED_EVENT_NAME,
+    NATIVE_INTERACTION_STATE_UPDATED_EVENT_NAME,
 };
 #[allow(unused_imports)]
 pub use preferences::{

@@ -57,6 +57,24 @@ pub fn run() {
                 crate::logging::RestoreLogStore::new(app_data_dir.join("restore-runs"));
             let preferences_service = crate::services::PreferencesService::new();
             let initial_preferences = preferences_service.initialize(&app.handle())?;
+            let native_preview_service = crate::services::NativePreviewService::new();
+            if let Err(error) = native_preview_service.initialize(&app.handle()) {
+                log::warn!(
+                    target: "bexo::app",
+                    "initialize native preview service failed: {}",
+                    error
+                );
+                native_preview_service.mark_initialization_failed(error);
+            }
+            let native_interaction_service = crate::services::NativeInteractionService::new();
+            if let Err(error) = native_interaction_service.initialize(&app.handle()) {
+                log::warn!(
+                    target: "bexo::app",
+                    "initialize native interaction service failed: {}",
+                    error
+                );
+                native_interaction_service.mark_initialization_failed(error);
+            }
             let screenshot_service = crate::services::ScreenshotService::new();
             let hotkey_service = crate::services::HotkeyService::new();
             if let Err(error) = screenshot_service.prewarm_overlay_window(&app.handle()) {
@@ -73,6 +91,8 @@ pub fn run() {
                     error
                 );
             }
+            app.manage(native_preview_service);
+            app.manage(native_interaction_service);
             app.manage(screenshot_service);
             if let Err(error) = hotkey_service.initialize(&app.handle(), &initial_preferences) {
                 log::error!(
@@ -146,6 +166,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap::get_bootstrap_state,
+            commands::native_interaction::get_native_interaction_state,
+            commands::native_interaction::update_native_interaction_runtime,
             commands::preferences::get_app_preferences,
             commands::preferences::update_app_preferences,
             commands::preferences::get_codex_home_directory,

@@ -967,3 +967,299 @@
   - `cargo check --manifest-path "src-tauri/Cargo.toml"`
   - `npm run web:build`
 - 说明：这一轮的目标不是继续改抓屏，而是把稳定出现的 `post_focus_activation @-2,0` 从热路径中拿掉。
+
+## 2026-03-16 Native Preview Layer 蓝图与分阶段改造方案
+- 新增目录
+  - `scripts/work/2026-03-16-native-preview-layer-blueprint/`
+- 新增文件
+  - `task_plan.md`
+  - `notes.md`
+  - `deliverable.md`
+- 同步文档
+  - `docs/technical-architecture.md`
+  - `docs/implementation-roadmap.md`
+  - 根级 `task_plan.md / findings.md / progress.md`
+- 结论
+  - 不再继续深挖“单个全屏 WebView overlay 同时承担底图与交互”的路线
+  - 下一阶段改为：
+    - `Desktop Duplication`
+    - `NativePreviewWindow`
+    - `NativeInteractionWindow`
+    - `NativeToolbarWindow`
+    - WebView 仅保留配置/诊断 UI
+- 验证
+  - 本轮为架构蓝图产出，不涉及应用代码编译验证
+
+## 2026-03-16 Phase B: Native Bottom Layer MVP 代码骨架
+- 新增目录
+  - `scripts/work/2026-03-16-native-preview-layer-phase-b-mvp/`
+- 新增文件
+  - `task_plan.md`
+  - `notes.md`
+  - `deliverable.md`
+- 新增代码
+  - [native_preview_service.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/services/native_preview_service.rs)
+    - `NativePreviewService`
+    - `NativePreviewLifecycleState`
+    - `NativePreviewSessionSpec`
+    - `NativePreviewSourceKind`
+    - 启动期 skeleton backend bootstrap
+  - [native_preview_backend_windows.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/services/native_preview_backend_windows.rs)
+    - 实际完成 `D3D11 device + DXGI factory` bootstrap
+    - backend 资源已由 `NativePreviewService` 持有
+- 修改
+  - [services/mod.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/services/mod.rs)
+  - [app/mod.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/app/mod.rs)
+- 验证
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - 结果：通过
+- 说明
+  - 本轮只交付 NativePreview 子系统骨架，不改变现有截图运行路径
+
+## 2026-03-16 Phase B: NativePreviewWindow + SwapChain + DirectComposition 基础设施
+- 修改 `src-tauri/Cargo.toml`
+  - 为 `windows` crate 增加：
+    - `Win32_Graphics_DirectComposition`
+    - `Win32_UI_WindowsAndMessaging`
+    - `Win32_System_LibraryLoader`
+- 修改 [native_preview_backend_windows.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/services/native_preview_backend_windows.rs)
+  - 真实创建隐藏 Win32 preview window
+  - 真实创建 `D3D11 device/context`
+  - 真实创建 `IDXGIDevice / IDXGIFactory2`
+  - 真实创建 composition `IDXGISwapChain1`
+  - 真实创建 `IDCompositionDevice / Target / Visual`
+  - 做一次透明首帧 present 验证
+  - 实现 backend `Drop`，在进程退出时销毁隐藏窗口
+- 修改 [native_preview_service.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/services/native_preview_service.rs)
+  - backend handle 改为 opaque handle，避免 COM / `HWND` 直接进入 `tauri::manage()` 的共享状态
+  - 初始化日志新增：
+    - `window_create_ms`
+    - `swap_chain_create_ms`
+    - `composition_create_ms`
+    - `prime_present_ms`
+- 修改 Phase B work files
+  - [task_plan.md](/D:/Desktop/rust/BexoStudio/scripts/work/2026-03-16-native-preview-layer-phase-b-mvp/task_plan.md)
+  - [notes.md](/D:/Desktop/rust/BexoStudio/scripts/work/2026-03-16-native-preview-layer-phase-b-mvp/notes.md)
+  - [deliverable.md](/D:/Desktop/rust/BexoStudio/scripts/work/2026-03-16-native-preview-layer-phase-b-mvp/deliverable.md)
+- 验证
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - 结果：通过
+- 说明
+  - 这轮仍不切换现有截图 runtime path
+  - 当前只是把 NativePreviewWindow 所需的 Win32 + DXGI + DComp 基础设施真正落下
+
+## 2026-03-16 Phase B: Native Preview Runtime Path
+- 修改 [native_preview_backend_windows.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/services/native_preview_backend_windows.rs)
+  - 新增 `prepare_session / show / hide / resize_window_and_swap_chain / submit_bgra_frame`
+  - 新增窗口物理几何解析 `resolve_window_geometry`
+  - 运行时支持按会话尺寸 `ResizeBuffers` 并把 BGRA top-down 帧提交到 swap chain
+- 修改 [native_preview_service.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/services/native_preview_service.rs)
+  - 新增 `prepare_session_frame`
+  - `show_prepared_session / hide` 改为真正调用 Windows backend
+  - 增加运行时日志：
+    - `native_preview_frame_committed`
+    - `native_preview_window_shown`
+    - `native_preview_window_hidden`
+- 修改 [screenshot_service.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/services/screenshot_service.rs)
+  - `start_session()` 接入 native preview 最小运行时路径
+  - 对 single-monitor + BGRA frame 的会话，优先提交 native preview 并显示
+  - `restore_overlay_hot_state()` 与新会话开始前统一隐藏并清理 native preview
+  - `start_session_completed` 新增：
+    - `native_preview_status`
+    - `native_preview_ms`
+- 同步 Phase B work files
+  - [task_plan.md](/D:/Desktop/rust/BexoStudio/scripts/work/2026-03-16-native-preview-layer-phase-b-mvp/task_plan.md)
+  - [notes.md](/D:/Desktop/rust/BexoStudio/scripts/work/2026-03-16-native-preview-layer-phase-b-mvp/notes.md)
+  - [deliverable.md](/D:/Desktop/rust/BexoStudio/scripts/work/2026-03-16-native-preview-layer-phase-b-mvp/deliverable.md)
+- 验证
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - 结果：通过
+
+## 2026-03-16 Phase B: Native Preview Foreground Layer & Parallel Display
+- 修改 [screenshot.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/domain/screenshot.rs)
+  - `ScreenshotSessionView` 新增 `native_preview_active`
+- 修改 [backend.ts](/D:/Desktop/rust/BexoStudio/src/types/backend.ts)
+  - 前端类型同步新增 `nativePreviewActive`
+- 修改 [screenshot_service.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/services/screenshot_service.rs)
+  - `ActiveScreenshotSession` 新增 `native_preview_active`
+  - native preview 显示成功后，把该标志写入会话
+  - `get_active_session_completed` 日志同步输出 `native_preview_active`
+- 修改 [commands/screenshot.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/commands/screenshot.rs)
+  - `get_screenshot_session` 日志同步输出 `native_preview_active`
+- 修改 [screenshot-overlay-page.tsx](/D:/Desktop/rust/BexoStudio/src/pages/screenshot-overlay-page.tsx)
+  - `load_session_done` 日志增加 `native_preview_active`
+  - 当 `nativePreviewActive=true` 时，不再把 WebView `<img>` 作为底图渲染
+  - 交互就绪判断放宽为：`native preview active` 或 `previewSurfaceReady`
+- 同步 Phase B work files
+  - [task_plan.md](/D:/Desktop/rust/BexoStudio/scripts/work/2026-03-16-native-preview-layer-phase-b-mvp/task_plan.md)
+  - [notes.md](/D:/Desktop/rust/BexoStudio/scripts/work/2026-03-16-native-preview-layer-phase-b-mvp/notes.md)
+  - [deliverable.md](/D:/Desktop/rust/BexoStudio/scripts/work/2026-03-16-native-preview-layer-phase-b-mvp/deliverable.md)
+- 验证
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`
+  - 结果：通过
+
+## 2026-03-16 Phase B: Native Preview Z-Order 稳定化
+- 修改 [native_preview_backend_windows.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/services/native_preview_backend_windows.rs)
+  - 新增 `show_below_window`
+  - 新增 `sync_z_order_below_window`
+  - 通过 overlay HWND 显式锚定 native preview 在 overlay 之下
+- 修改 [native_preview_service.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/services/native_preview_service.rs)
+  - 新增 `show_prepared_session_below_window`
+  - 新增 `sync_z_order_below_window`
+  - 新增日志：
+    - `native_preview_window_shown ... anchor=overlay`
+    - `native_preview_z_order_synced ... anchor=overlay`
+- 修改 [screenshot_service.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/services/screenshot_service.rs)
+  - 启动截图会话时先准备隐藏 overlay，提取 overlay HWND 作为 native preview 锚点
+  - native preview show 改为优先锚定 overlay
+  - overlay 激活完成后追加一次 native preview 相对层级同步
+  - 补齐 `replace_active_session()` 失败时的 native preview 清理
+- 同步
+  - [Phase B 计划](/D:/Desktop/rust/BexoStudio/scripts/work/2026-03-16-native-preview-layer-phase-b-mvp/task_plan.md)
+  - [Phase B 说明](/D:/Desktop/rust/BexoStudio/scripts/work/2026-03-16-native-preview-layer-phase-b-mvp/notes.md)
+  - [Phase B 验收](/D:/Desktop/rust/BexoStudio/scripts/work/2026-03-16-native-preview-layer-phase-b-mvp/deliverable.md)
+- 验证
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - 结果：通过
+
+## 2026-03-16 Phase C: Native Interaction Window Skeleton
+- 新增 [native_interaction_backend_windows.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/services/native_interaction_backend_windows.rs)
+  - 创建隐藏的 `NativeInteractionWindow`
+  - 暴露最小 `prepare_session / show / hide`
+  - 维护基础 HWND 与窗口几何
+- 新增 [native_interaction_service.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/services/native_interaction_service.rs)
+  - 引入 `NativeInteractionService`
+  - 引入 `NativeInteractionLifecycleState`
+  - 引入 `NativeInteractionSessionSpec`
+  - 提供 `initialize / prepare_session / show_prepared_session / hide / clear / snapshot_state`
+  - 使用 opaque backend handle 管理 Windows 原生资源
+- 修改 [services/mod.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/services/mod.rs)
+  - 导出 `NativeInteractionService`
+- 修改 [app/mod.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/app/mod.rs)
+  - 启动期初始化并 `manage` `NativeInteractionService`
+  - 初始化失败只记录日志，不影响当前截图链路
+- 新增工作目录
+  - [task_plan.md](/D:/Desktop/rust/BexoStudio/scripts/work/2026-03-16-native-interaction-window-phase-c/task_plan.md)
+  - [notes.md](/D:/Desktop/rust/BexoStudio/scripts/work/2026-03-16-native-interaction-window-phase-c/notes.md)
+  - [deliverable.md](/D:/Desktop/rust/BexoStudio/scripts/work/2026-03-16-native-interaction-window-phase-c/deliverable.md)
+- 验证
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - 结果：通过
+
+## 2026-03-16 Phase C: Native Basic Selection MVP
+- 查看最新手动控制台日志，确认 Phase B 运行时稳定：
+  - `native_preview_window_shown`
+  - `native_preview_z_order_synced`
+  - `capture_strategy=desktop_duplication_live_cache`
+- 更新 [task_plan.md](/D:/Desktop/rust/BexoStudio/scripts/work/2026-03-16-native-interaction-window-phase-c/task_plan.md)
+  - 把本轮目标细化到透明绘制层、原生选区矩形、8 向句柄 hit test、拖拽捕获
+- 更新 [notes.md](/D:/Desktop/rust/BexoStudio/scripts/work/2026-03-16-native-interaction-window-phase-c/notes.md)
+  - 明确本轮技术路线采用 `WS_EX_LAYERED + UpdateLayeredWindow`
+- 更新 [deliverable.md](/D:/Desktop/rust/BexoStudio/scripts/work/2026-03-16-native-interaction-window-phase-c/deliverable.md)
+  - 增补 Native 基础选区 MVP 的验证项
+- 同步根级 [task_plan.md](/D:/Desktop/rust/BexoStudio/task_plan.md) 与 [findings.md](/D:/Desktop/rust/BexoStudio/findings.md)
+
+## 2026-03-16 Phase C: Native Base Selection Runtime Wiring
+- 修改 [native_interaction_service.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/services/native_interaction_service.rs)
+  - 新增 `NativeInteractionExclusionRect`
+  - 新增 `NativeInteractionRuntimeUpdateInput`
+  - 新增 `update_runtime()`
+  - 新增 backend exclusion rect 更新入口
+- 修改 [native_interaction_backend_windows.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/services/native_interaction_backend_windows.rs)
+  - 增加 `exclusion_rects_physical`
+  - 增加 `update_exclusion_rects()`
+  - 渲染时把 exclusion rect 区域清成 alpha=0，实现 toolbar / text editor 点击透传
+- 修改 [commands/native_interaction.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/commands/native_interaction.rs)
+  - 新增 `update_native_interaction_runtime`
+  - 将高频轮询命令日志从 `info` 降到 `debug`
+- 修改 [app/mod.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/app/mod.rs)
+  - 注册 `update_native_interaction_runtime`
+- 修改 [screenshot_service.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/services/screenshot_service.rs)
+  - `start_session()` 开始时先 reset native interaction
+  - 新会话写入后 prepare native interaction session
+  - 新增 `hide_and_clear_native_interaction()` helper 与 service method
+  - `restore_overlay_hot_state()` 同时清理 native interaction
+- 修改 [commands/screenshot.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/commands/screenshot.rs)
+  - copy/save/cancel 后统一 hide + clear native interaction
+- 修改 [command-client.ts](/D:/Desktop/rust/BexoStudio/src/lib/command-client.ts) 与 [backend.ts](/D:/Desktop/rust/BexoStudio/src/types/backend.ts)
+  - 前端新增 runtime update wrapper 和 exclusion rect 类型
+- 修改 [screenshot-overlay-page.tsx](/D:/Desktop/rust/BexoStudio/src/pages/screenshot-overlay-page.tsx)
+  - 增加 `nativeInteractionState`
+  - 在基础框选模式下调用 `updateNativeInteractionRuntime()`
+  - 轮询 `getNativeInteractionState()`
+  - 以 native selection 驱动 `selection`
+  - 停止 WebView 自己处理基础框选 pointer 事件
+  - 当 native base selection 激活时，不再渲染 WebView 的 mask / selection border
+- 同步 [task_plan.md](/D:/Desktop/rust/BexoStudio/task_plan.md)、[findings.md](/D:/Desktop/rust/BexoStudio/findings.md)、[Phase C work files](/D:/Desktop/rust/BexoStudio/scripts/work/2026-03-16-native-interaction-window-phase-c/task_plan.md)
+- 验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`
+  - 结果：通过
+
+## 2026-03-16 Phase C: Native Interaction Render Hot Path Optimization
+- 查看用户手动复制的 [log.log](/D:/Desktop/rust/BexoStudio/log.log)
+  - 结论：
+    - 截图与原生底图显示正常
+    - 基础框选卡顿主要落在 `NativeInteractionWindow` 的 `present` 热路径
+    - 关键证据：
+      - `native_interaction_session_prepared ... present_ms=349~367`
+      - `native_interaction_drag_committed ... total_ms` 长时间拖拽下体感卡顿明显
+- 更新 [Phase C 计划](/D:/Desktop/rust/BexoStudio/scripts/work/2026-03-16-native-interaction-window-phase-c/task_plan.md)
+  - 新增 `Render Hot Path Optimization` 章节
+- 更新 [Phase C 说明](/D:/Desktop/rust/BexoStudio/scripts/work/2026-03-16-native-interaction-window-phase-c/notes.md)
+  - 明确问题是每帧 GDI surface 重建，不是截图采集或 WebView 底图
+- 修改 [native_interaction_backend_windows.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/services/native_interaction_backend_windows.rs)
+  - 新增持久 `LayeredWindowSurface`
+  - 复用 screen DC / memory DC / DIBSection
+  - 仅在窗口尺寸变化时重建 GDI surface
+  - 新增拖拽阶段 `present_samples / avg_present_ms / max_present_ms` 统计
+  - 将全屏遮罩基础层改为 `base_mask_buffer` 预生成后按帧拷贝
+- 修改 [native_interaction_service.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/services/native_interaction_service.rs)
+  - `native_interaction_session_prepared` 日志新增：
+    - `copy_ms`
+    - `update_ms`
+    - `surface_recreated`
+- 同步根级 [task_plan.md](/D:/Desktop/rust/BexoStudio/task_plan.md) 与 [findings.md](/D:/Desktop/rust/BexoStudio/findings.md)
+- 验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - 结果：通过
+
+## 2026-03-16 Phase C: Event Sync + Native Cursor + Rect Annotation Planning
+- 查看用户最新手动日志：
+  - 结论：
+    - 截图与显示链路无异常
+    - 基础框选拖拽卡顿已明显减轻
+    - 但剩余卡顿不再来自 `present` 热路径，而更像状态同步/反馈链问题
+- 更新 [Phase C 计划](/D:/Desktop/rust/BexoStudio/scripts/work/2026-03-16-native-interaction-window-phase-c/task_plan.md)
+  - 新增 `Event Sync + Native Cursor + Rect Annotation MVP` 章节
+- 更新 [Phase C 说明](/D:/Desktop/rust/BexoStudio/scripts/work/2026-03-16-native-interaction-window-phase-c/notes.md)
+  - 记录轮询同步、cursor 分离和 `rect` 作为首个复杂标注下沉对象的技术判断
+- 更新 [Phase C 验收](/D:/Desktop/rust/BexoStudio/scripts/work/2026-03-16-native-interaction-window-phase-c/deliverable.md)
+  - 增加事件同步、原生 cursor、矩形标注提交验证项
+- 同步根级 [task_plan.md](/D:/Desktop/rust/BexoStudio/task_plan.md) 与 [findings.md](/D:/Desktop/rust/BexoStudio/findings.md)
+
+## 2026-03-16 Progress: NativeInteraction event sync + rect annotation MVP
+- Extended Rust native interaction service/backend contracts with event payloads, runtime mode, selection passthrough, annotation color, and stroke width.
+- Implemented backend state event emission and rect annotation commit emission from Win32 mouse handling.
+- Replaced screenshot overlay polling with event subscriptions and routed native rect commits into existing `pushAnnotation` flow.
+- Validation:
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`
+
+## 2026-03-16 Progress: NativeInteraction jitter tightening + ellipse annotation MVP
+- Generalized native committed-annotation protocol from rect-only to shape-based payloads.
+- Added native `ellipse` draft rendering and commit path in Win32 backend.
+- Removed remaining selection-mode feedback loop by stopping frontend runtime updates from echoing selection back to backend.
+- Added frontend equality guards to avoid redundant `setNativeInteractionState` / `setSelection` rerenders on unchanged payloads.
+- Validation:
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`

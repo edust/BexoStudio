@@ -49,9 +49,10 @@ pub async fn get_screenshot_session(
         Ok(data) => {
             log::info!(
                 target: "bexo::command::screenshot",
-                "get_screenshot_session completed session_id={} image_status={:?} image_data_url_bytes={} preview_image_path={} preview_transport={:?} preview_pixels={}x{} monitors={} total_ms={}",
+                "get_screenshot_session completed session_id={} image_status={:?} native_preview_active={} image_data_url_bytes={} preview_image_path={} preview_transport={:?} preview_pixels={}x{} monitors={} total_ms={}",
                 data.session_id,
                 data.image_status,
+                data.native_preview_active,
                 data.image_data_url.len(),
                 data.preview_image_path.as_deref().unwrap_or(""),
                 data.preview_transport,
@@ -148,6 +149,13 @@ pub async fn copy_screenshot_selection(
 ) -> Result<CommandResponse<CopyScreenshotSelectionResult>, AppError> {
     match screenshot_service.copy_selection(&session_id, selection, rendered_image) {
         Ok(data) => {
+            if let Err(error) = screenshot_service.hide_and_clear_native_interaction(&app_handle) {
+                log::warn!(
+                    target: "bexo::command::screenshot",
+                    "hide native interaction window after copy failed: {}",
+                    error
+                );
+            }
             if let Err(error) = screenshot_service.restore_overlay_hot_state(&app_handle) {
                 log::warn!(
                     target: "bexo::command::screenshot",
@@ -185,6 +193,13 @@ pub async fn save_screenshot_selection(
         rendered_image,
     ) {
         Ok(data) => {
+            if let Err(error) = screenshot_service.hide_and_clear_native_interaction(&app_handle) {
+                log::warn!(
+                    target: "bexo::command::screenshot",
+                    "hide native interaction window after save failed: {}",
+                    error
+                );
+            }
             if let Err(error) = screenshot_service.restore_overlay_hot_state(&app_handle) {
                 log::warn!(
                     target: "bexo::command::screenshot",
@@ -213,6 +228,13 @@ pub async fn cancel_screenshot_session(
 ) -> Result<CommandResponse<CancelScreenshotSessionResult>, AppError> {
     match screenshot_service.cancel_session(&session_id) {
         Ok(data) => {
+            if let Err(error) = screenshot_service.hide_and_clear_native_interaction(&app_handle) {
+                log::warn!(
+                    target: "bexo::command::screenshot",
+                    "hide native interaction window after cancel failed: {}",
+                    error
+                );
+            }
             if let Err(error) = screenshot_service.restore_overlay_hot_state(&app_handle) {
                 log::warn!(
                     target: "bexo::command::screenshot",
