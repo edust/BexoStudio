@@ -1,5 +1,17 @@
 # task_plan
 
+## 2026-03-18 截图热键触发后挂起修复
+- 目标：修复按下截图热键后应用进入截图态并很快出现“程序未响应”的问题，保持 Native/WebView 边界不回退。
+- 范围：
+  - `src-tauri/src/services/screenshot_service.rs`
+  - `src/pages/screenshot-overlay-page.tsx`
+  - 根级 planning 文件与 `scripts/work/2026-03-18-screenshot-hotkey-freeze-fix/`
+- 验证：
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `npm run web:build`
+  - 手工验证热键触发、`Esc` 取消、连续触发稳定性
+- 状态：已完成代码修复与静态验证，待用户本机回归（2026-03-18）。
+
 ## 2026-03-15 Desktop Duplication 常驻最近帧原型
 - 目标：用 `Desktop Duplication API` 替换当前启动期常驻 `WGC live capture`，实现“无黄边 + 接近实时”的单显示器最近帧缓存原型。
 - 范围：
@@ -1371,3 +1383,201 @@
 - Generalized native annotation commit from rect-only to shape commit event (`shape_annotation_committed`) with `kind=rect|ellipse`.
 - Added `ellipse_annotation` native runtime mode and first native ellipse draft/commit path.
 - Verified with `cargo check` and `npm run web:build`.
+
+## 2026-03-16 Screenshot Overlay UX Tightening
+- 目标：修复截图态顶部说明条遮挡和全量大工具栏默认弹出的问题，收敛为“先选区，再出现紧凑工具栏”的业务流。
+- 范围：
+  - `src/pages/screenshot-overlay-page.tsx`
+  - `scripts/work/2026-03-16-native-interaction-window-phase-c/*`
+- 方案：
+  - 去掉截图态顶部常驻长说明条
+  - 仅在形成有效选区后显示浮动工具栏
+  - 工具栏改为紧凑模式：默认仅保留工具、颜色、基础动作；高级控制仅在对应对象/工具上下文中显示
+- 验证：
+  - `npm run web:build`
+  - 手工截图，确认：
+    - 进入截图时不再有顶部大遮挡条
+    - 未形成有效选区前不显示工具栏
+    - 形成选区后只显示紧凑工具栏
+
+## 2026-03-16 Screenshot Cancel + White Flash Stabilization
+- 目标：修复截图态偶发退回 WebView 底图导致的白闪，以及 NativeInteractionWindow 抢焦点后 `Esc` 无法取消截图的问题。
+- 范围：
+  - `src-tauri/src/services/screenshot_service.rs`
+  - `src-tauri/src/domain/native_interaction.rs`
+  - `src-tauri/src/services/native_interaction_service.rs`
+  - `src-tauri/src/services/native_interaction_backend_windows.rs`
+  - `src/lib/command-client.ts`
+  - `src/types/backend.ts`
+  - `src/pages/screenshot-overlay-page.tsx`
+- 方案：
+  - `wgc_single_monitor` 分支补齐 native preview 输入，避免 fallback 时 `native_preview_status=skipped`
+  - NativeInteractionWindow 直接发出 `cancel-requested` 事件，前端收到后走现有 `handleCancel()`
+- 验证：
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`
+  - 手工截图确认：
+    - 即使未命中 live cache，也不再闪白回退到 WebView 底图
+    - 按 `Esc` 能直接取消截图
+
+## 2026-03-16 - Native interaction cancel + fallback native preview
+- 目标：修复截图阶段的白闪和 Esc 取消失效。
+- 范围：`src-tauri/src/services/screenshot_service.rs`
+- 实施：
+  - `wgc_single_monitor/gdi_single_monitor_dual_capture` 回退路径允许从 `RgbaImage` 派生 `BGRA top-down`，继续驱动 native preview。
+  - 截图会话期间注册独立的 `Esc` 低级键盘 hook，直接在 Rust 完成取消、清会话、清原生窗口、收起 overlay。
+- 验证：`cargo check --manifest-path src-tauri/Cargo.toml`、`npm run web:build`。
+
+- 2026-03-17: Esc 取消从 screenshot 专用 WindowsHookHotkeyManager 切到 NativeInteractionWindow 的 RegisterHotKey(WM_HOTKEY) 路径，避免第二条 hook 线程和前台焦点不确定性。
+- 2026-03-17：继续收口 Phase C 原生交互体验问题。已确认“区域外无法重新划选”并非交互状态机错误，而是 `NativeInteractionWindow` 未处理 `WM_SETCURSOR` 导致的错误光标反馈；本轮将改为在窗口过程里强制回写 Native cursor。
+- 2026-03-17：根据最新手工日志和用户澄清，Phase C 业务规则收紧为“首次框选后锁定区域外重建”，并放弃 `RegisterHotKey(Esc)`，统一切到低级键盘 hook 的取消路径。
+- 2026-03-17：根据最新日志，Esc 取消链路进一步上移到 ScreenshotService 会话级，避免再依赖 NativeInteractionWindow 的局部 show/focus 时序。
+- 2026-03-17：继续收口截图态 Esc 取消链路，移除 NativeInteraction 内部重复 hook，只保留 ScreenshotService 会话级取消路径。
+
+- 2026-03-17: 为截图态 Esc 取消改成系统级临时 global shortcut 主路径，Windows hook 仅作回退，目标是消除当前焦点/时序依赖。
+
+- 2026-03-17: 进入 Phase D，开始 NativeToolbarWindow 与 arrow 原生化。新增阶段计划目录 scripts/work/2026-03-17-native-toolbar-arrow-phase-d/。
+
+## 2026-03-17 NativeToolbarWindow 与 arrow 原生化第一版
+- 目标：在不回退现有实时截图链路的前提下，开始 Phase D：新增 NativeToolbarWindow 生命周期骨架，并把 `arrow` 下沉到 NativeInteraction。
+- 范围：
+  - `src-tauri/src/services/native_toolbar_service.rs`
+  - `src-tauri/src/services/native_toolbar_backend_windows.rs`
+  - `src-tauri/src/services/native_interaction_service.rs`
+  - `src-tauri/src/services/native_interaction_backend_windows.rs`
+  - `src-tauri/src/services/screenshot_service.rs`
+  - `src-tauri/src/services/mod.rs`
+  - `src-tauri/src/app/mod.rs`
+  - `src/pages/screenshot-overlay-page.tsx`
+  - `src/types/backend.ts`
+- 方案：
+  - `arrow` 继续复用 `shape-annotation-committed` 提交协议
+  - `NativeToolbarWindow` 先只实现 hidden tool window 骨架和会话生命周期，不抢当前 WebView toolbar 运行路径
+- 验证：
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`
+- 状态：已完成第一轮代码落地与编译验证（2026-03-17）。
+
+## 2026-03-17 Phase D Runtime Toolbar Cutover
+- 目标：让 `NativeToolbarWindow` 接管截图运行时主工具栏，并停止依赖 WebView 主工具栏命中链路。
+- 范围：
+  - `src-tauri/src/commands/native_toolbar.rs`
+  - `src-tauri/src/commands/mod.rs`
+  - `src-tauri/src/app/mod.rs`
+  - `src-tauri/src/services/native_toolbar_service.rs`
+  - `src-tauri/src/services/native_toolbar_backend_windows.rs`
+  - `src-tauri/src/services/mod.rs`
+  - `src/pages/screenshot-overlay-page.tsx`
+  - `src/lib/command-client.ts`
+  - `src/types/backend.ts`
+- 方案：
+  - Rust 新增 `get/update_native_toolbar_runtime` 命令。
+  - `NativeToolbarWindow` 使用 Win32 按钮窗口承载最小运行时工具栏：工具切换、颜色、复制/保存/取消。
+  - WebView 只在 Native toolbar 已激活时保留高级控制区，不再承担主工具/颜色/复制保存取消。
+- 验证：
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`
+  - 手工验证：截图后 Native toolbar 可切换工具与颜色，`copy/save/cancel` 正常。
+
+## 2026-03-17 Phase D Native line MVP
+- 目标：在 `rect/ellipse/arrow` 之后，把 `line` 下沉到 NativeInteraction。
+- 范围：
+  - `src-tauri/src/services/native_interaction_service.rs`
+  - `src-tauri/src/services/native_interaction_backend_windows.rs`
+  - `src/types/backend.ts`
+  - `src/pages/screenshot-overlay-page.tsx`
+- 方案：
+  - 增加 `line_annotation / line_creating / line`。
+  - Native backend 维护线段草稿并在 mouse-up 提交 `shape-annotation-committed(kind=line)`。
+  - 前端继续复用现有 `ShapeAnnotation` 流程。
+- 验证：
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`
+  - 手工验证：切到 `line` 后，草稿跟手、抬起后进入现有可编辑图形流。
+
+## 2026-03-17 Phase D Native toolbar click freeze fix
+- 目标：修复点击 NativeToolbarWindow 的工具按钮后 UI 卡死/未响应。
+- 范围：
+  - `src-tauri/src/services/native_toolbar_service.rs`
+  - `src/pages/screenshot-overlay-page.tsx`
+- 方案：
+  - 将 native toolbar 动作事件从同步发射改为异步线程派发，避免 Win32 `WM_COMMAND` 处理栈内同步触发 WebView/Invoke 回写造成重入阻塞。
+  - 给 `NativeToolbarRuntimeUpdateInput` 增加等值比较，并在 Rust 侧对未变化的 runtime 更新做 no-op 短路。
+  - 前端收到 native toolbar `set_tool / set_color` 时，如果值未变化则直接忽略，避免无意义的状态回写。
+- 验证：
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`
+
+## 2026-03-17 Phase E Native runtime toolbar expansion
+- 目标：继续压缩截图运行时对 WebView 的依赖，先让 NativeToolbarWindow 接管更多主操作。
+- 范围：
+  - `src-tauri/src/services/native_toolbar_service.rs`
+  - `src-tauri/src/services/native_toolbar_backend_windows.rs`
+  - `src-tauri/src/commands/native_toolbar.rs`
+  - `src/lib/command-client.ts`
+  - `src/types/backend.ts`
+  - `src/pages/screenshot-overlay-page.tsx`
+- 本轮实现：
+  - Native toolbar 新增 `undo / redo / decrease_stroke_width / increase_stroke_width` 动作。
+  - runtime update contract 新增 `stroke_width / can_undo / can_redo / can_adjust_stroke`。
+  - WebView 在 native toolbar 激活时隐藏撤销/重做/线宽行，仅保留高级区。
+- 下一步：
+  - 进入 `line/rect/ellipse/arrow` 编辑态 Native 化。
+- 验证：
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`
+
+- 2026-03-17: 进入 Phase E Step 2，开始把单对象 line/rect/ellipse/arrow 编辑态下沉到 Native interaction。
+
+- 2026-03-17: Phase E 单对象 shape Native 编辑态回归发现‘无法选中对象’。先修前端对象首击选中入口：放宽 ect/ellipse 点击命中到边框或内部，避免误落入 marquee / 重新框选。
+
+- 2026-03-17: Phase E 回归新增两个收口点：1) 已选 shape 状态从原始 nnotations 派生，避免 Native 隐藏显示副本后前端误判未选中；2) 主工具栏仅在 
+ativeToolbarActive 时才隐藏 WebView 主行，避免多次截图后工具整块消失。
+
+- 2026-03-17: 继续 Phase E，开始修复 shape 工具模式下的智能命中与 native toolbar 多轮截图可见性回退问题。计划：1) 给 NativeInteraction runtime 增加 shape candidates；2) backend 在 shape tool 模式下优先命中已有对象再进入编辑；3) 前端用 native active shape 反向同步 selected shape；4) 验证 native toolbar 在重复截图后仍能重显。
+- 2026-03-17 20:15 Step 2 补充：切回 `select` 后，shape 选中态与 selection resize 必须解耦。实现策略：切回 `select` 时清空旧 shape 选中；selection drag 期间暂停 shape candidate 回写；Native `activeShape` 只在真正进入 shape 拖拽/句柄编辑时再同步到前端。
+- 2026-03-17 20:26 Step 2 再补充一条 Native 约束：selection 拖拽期不动态改窗口输入 region。拖拽中已由 `SetCapture` 保证鼠标输入归属，window region 同步只保留在起始与提交阶段。
+- 2026-03-17 21:55 Step 2 收口顺序调整：先解决 `NativeInteractionRuntime` 的跨 session 回写竞争，再继续深挖拖拽/工具切换问题。当前新增目标：
+  1. 在前端对 `session_updated_event -> loadSession -> updateNativeInteractionRuntime` 建立明确的 session 闸门，禁止旧 session 在新 session 启动窗口期间继续回写。
+  2. 补齐前后端埋点，精确记录：
+     - 前端 runtime update 的发送/跳过/完成/失败
+     - Native state event 的应用/丢弃
+     - Rust 侧 `SESSION_NOT_PREPARED / SESSION_MISMATCH` 的请求 session / 活动 session / lifecycle state
+  3. 下一轮根据这些日志再决定是继续切断工具切换重入，还是下沉更多编辑态入口。
+- 2026-03-17 22:20 Step 2 新增并行诊断目标：给 `NativeToolbarWindow` 复制同等级别的 session gate 与 show/hide 埋点。原因是最新日志已确认二次截图时 toolbar 只到 `prepared`，没有进入 `window_shown`。必须先区分：
+  1. 前端是否发出了 `visible=true`
+  2. Rust service 是否收到了并实际 `show`
+  3. 是否只是状态回写/Z-order 让前端继续回退到 WebView toolbar
+## 2026-03-17 Native Toolbar Runtime Hardening
+
+- 修复 NativeToolbar 运行时命令契约，确保浮点 `strokeWidth` 不再触发命令反序列化失败。
+- 移除截图运行时的旧 WebView 主 toolbar 主行，避免 NativeToolbar 失败时发生双 toolbar 或错误回退。
+- 为 NativeToolbar runtime 增加前端 payload 去重，减少重复 `update_native_toolbar_runtime` 调用。
+
+## 2026-03-18 Screenshot Toolbar WebView Boundary Rollback
+- 目标：按最新确认边界回改截图架构。
+  - Native：`preview`、`selection`、高频 shape interaction、system input / focus / windowing
+  - WebView：`toolbar`、属性面板、对象操作面板、复杂配置 UI
+- 范围：
+  - `src/pages/screenshot-overlay-page.tsx`
+  - `src/lib/command-client.ts`
+  - `src/types/backend.ts`
+  - `src-tauri/src/services/screenshot_service.rs`
+  - `src-tauri/src/app/mod.rs`
+  - `src-tauri/src/commands/mod.rs`
+  - `src-tauri/src/services/mod.rs`
+  - `src-tauri/src/commands/native_toolbar.rs`
+  - `src-tauri/src/services/native_toolbar_service.rs`
+  - `src-tauri/src/services/native_toolbar_backend_windows.rs`
+  - `docs/technical-architecture.md`
+  - `docs/implementation-roadmap.md`
+- 方案：
+  - 恢复 WebView 运行时主工具栏与主操作入口。
+  - 移除 Native toolbar runtime update / event 主路径。
+  - 保留 Native preview 与 Native interaction，不回退实时截图和高频交互收益。
+  - 若清理后无残余引用，删除 Native toolbar command/service/backend 注册与模块。
+- 验证：
+  - `npm run web:build`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - 手工截图验证 WebView toolbar、多轮截图、Esc/copy/save/cancel、shape Native 交互。
+- 状态：已完成

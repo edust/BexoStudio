@@ -6,10 +6,11 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::domain::{
     NATIVE_INTERACTION_SHAPE_ANNOTATION_COMMITTED_EVENT_NAME,
+    NATIVE_INTERACTION_SHAPE_ANNOTATION_UPDATED_EVENT_NAME,
     NATIVE_INTERACTION_STATE_UPDATED_EVENT_NAME,
 };
 use crate::error::{AppError, AppResult};
@@ -118,6 +119,10 @@ pub enum NativeInteractionHitRegion {
     None,
     SelectionBody,
     Handle(NativeInteractionSelectionHandle),
+    ShapeBody,
+    ShapeStart,
+    ShapeEnd,
+    ShapeHandle(NativeInteractionSelectionHandle),
 }
 
 impl NativeInteractionHitRegion {
@@ -126,6 +131,19 @@ impl NativeInteractionHitRegion {
             Self::None => "none",
             Self::SelectionBody => "selection_body",
             Self::Handle(handle) => handle.as_str(),
+            Self::ShapeBody => "shape_body",
+            Self::ShapeStart => "shape_start",
+            Self::ShapeEnd => "shape_end",
+            Self::ShapeHandle(handle) => match handle {
+                NativeInteractionSelectionHandle::Nw => "shape_nw",
+                NativeInteractionSelectionHandle::N => "shape_n",
+                NativeInteractionSelectionHandle::Ne => "shape_ne",
+                NativeInteractionSelectionHandle::E => "shape_e",
+                NativeInteractionSelectionHandle::Se => "shape_se",
+                NativeInteractionSelectionHandle::S => "shape_s",
+                NativeInteractionSelectionHandle::Sw => "shape_sw",
+                NativeInteractionSelectionHandle::W => "shape_w",
+            },
         }
     }
 }
@@ -135,8 +153,14 @@ pub enum NativeInteractionDragMode {
     Creating,
     Moving,
     Resizing(NativeInteractionSelectionHandle),
+    LineCreating,
     RectCreating,
     EllipseCreating,
+    ArrowCreating,
+    ShapeMoving,
+    ShapeStartMoving,
+    ShapeEndMoving,
+    ShapeResizing(NativeInteractionSelectionHandle),
 }
 
 impl NativeInteractionDragMode {
@@ -145,8 +169,14 @@ impl NativeInteractionDragMode {
             Self::Creating => "creating",
             Self::Moving => "moving",
             Self::Resizing(_) => "resizing",
+            Self::LineCreating => "line_creating",
             Self::RectCreating => "rect_creating",
             Self::EllipseCreating => "ellipse_creating",
+            Self::ArrowCreating => "arrow_creating",
+            Self::ShapeMoving => "shape_moving",
+            Self::ShapeStartMoving => "shape_start_moving",
+            Self::ShapeEndMoving => "shape_end_moving",
+            Self::ShapeResizing(_) => "shape_resizing",
         }
     }
 }
@@ -155,16 +185,20 @@ impl NativeInteractionDragMode {
 #[serde(rename_all = "snake_case")]
 pub enum NativeInteractionMode {
     Selection,
+    LineAnnotation,
     RectAnnotation,
     EllipseAnnotation,
+    ArrowAnnotation,
 }
 
 impl NativeInteractionMode {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Selection => "selection",
+            Self::LineAnnotation => "line_annotation",
             Self::RectAnnotation => "rect_annotation",
             Self::EllipseAnnotation => "ellipse_annotation",
+            Self::ArrowAnnotation => "arrow_annotation",
         }
     }
 }
@@ -172,8 +206,10 @@ impl NativeInteractionMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NativeInteractionShapeAnnotationKind {
+    Line,
     Rect,
     Ellipse,
+    Arrow,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -193,9 +229,12 @@ pub struct NativeInteractionStateView {
     pub lifecycle_state: &'static str,
     pub has_active_session: bool,
     pub selection: Option<NativeInteractionSelectionRect>,
+    pub active_shape: Option<NativeInteractionEditableShape>,
+    pub active_shape_draft: Option<NativeInteractionEditableShape>,
     pub hovered_hit_region: &'static str,
     pub drag_mode: Option<&'static str>,
     pub selection_revision: u64,
+    pub active_shape_revision: u64,
     pub interaction_mode: &'static str,
     pub rect_draft: Option<NativeInteractionSelectionRect>,
 }
@@ -207,6 +246,8 @@ pub struct NativeInteractionRuntimeUpdateInput {
     pub exclusion_rects: Vec<NativeInteractionExclusionRect>,
     pub mode: NativeInteractionMode,
     pub selection: Option<NativeInteractionSelectionRect>,
+    pub active_shape: Option<NativeInteractionEditableShape>,
+    pub shape_candidates: Vec<NativeInteractionEditableShape>,
     pub annotation_color: Option<String>,
     pub annotation_stroke_width: Option<f64>,
 }
@@ -235,9 +276,12 @@ struct NativeInteractionPrepareMetrics {
 #[derive(Debug, Clone)]
 pub struct NativeInteractionSelectionSnapshot {
     pub selection: Option<NativeInteractionSelectionRect>,
+    pub active_shape: Option<NativeInteractionEditableShape>,
+    pub active_shape_draft: Option<NativeInteractionEditableShape>,
     pub hovered_hit_region: NativeInteractionHitRegion,
     pub drag_mode: Option<NativeInteractionDragMode>,
     pub selection_revision: u64,
+    pub active_shape_revision: u64,
     pub interaction_mode: NativeInteractionMode,
     pub rect_draft: Option<NativeInteractionSelectionRect>,
 }
@@ -250,9 +294,12 @@ pub struct NativeInteractionStateUpdatedEvent {
     pub lifecycle_state: String,
     pub has_active_session: bool,
     pub selection: Option<NativeInteractionSelectionRect>,
+    pub active_shape: Option<NativeInteractionEditableShape>,
+    pub active_shape_draft: Option<NativeInteractionEditableShape>,
     pub hovered_hit_region: String,
     pub drag_mode: Option<String>,
     pub selection_revision: u64,
+    pub active_shape_revision: u64,
     pub interaction_mode: String,
     pub rect_draft: Option<NativeInteractionSelectionRect>,
 }
@@ -268,20 +315,49 @@ pub struct NativeInteractionShapeAnnotationCommittedEvent {
     pub end: NativeInteractionSelectionPoint,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeInteractionShapeAnnotationUpdatedEvent {
+    pub session_id: String,
+    pub id: String,
+    pub kind: NativeInteractionShapeAnnotationKind,
+    pub color: String,
+    pub stroke_width: f64,
+    pub start: NativeInteractionSelectionPoint,
+    pub end: NativeInteractionSelectionPoint,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeInteractionSelectionPoint {
     pub x: f64,
     pub y: f64,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeInteractionEditableShape {
+    pub id: String,
+    pub kind: NativeInteractionShapeAnnotationKind,
+    pub color: String,
+    pub stroke_width: f64,
+    pub start: NativeInteractionSelectionPoint,
+    pub end: NativeInteractionSelectionPoint,
+}
+
 #[derive(Clone)]
 pub(crate) enum NativeInteractionBackendEvent {
     StateUpdated(NativeInteractionStateUpdatedEvent),
     ShapeAnnotationCommitted(NativeInteractionShapeAnnotationCommittedEvent),
+    ShapeAnnotationUpdated(NativeInteractionShapeAnnotationUpdatedEvent),
+    CancelRequested {
+        session_id: String,
+        shortcut: String,
+    },
 }
 
-pub(crate) type NativeInteractionEventSink = Arc<dyn Fn(NativeInteractionBackendEvent) + Send + Sync>;
+pub(crate) type NativeInteractionEventSink =
+    Arc<dyn Fn(NativeInteractionBackendEvent) + Send + Sync>;
 
 #[derive(Debug)]
 struct NativeInteractionBackendHandle {
@@ -436,7 +512,10 @@ impl NativeInteractionService {
             prepare.window_y
         );
 
-        emit_native_interaction_backend_event(&state, NativeInteractionBackendEvent::StateUpdated(event));
+        emit_native_interaction_backend_event(
+            &state,
+            NativeInteractionBackendEvent::StateUpdated(event),
+        );
 
         Ok(())
     }
@@ -488,7 +567,10 @@ impl NativeInteractionService {
                 .unwrap_or("unknown"),
             started_at.elapsed().as_millis()
         );
-        emit_native_interaction_backend_event(&state, NativeInteractionBackendEvent::StateUpdated(event));
+        emit_native_interaction_backend_event(
+            &state,
+            NativeInteractionBackendEvent::StateUpdated(event),
+        );
 
         Ok(())
     }
@@ -520,7 +602,10 @@ impl NativeInteractionService {
             state.active_session.is_some(),
             started_at.elapsed().as_millis()
         );
-        emit_native_interaction_backend_event(&state, NativeInteractionBackendEvent::StateUpdated(event));
+        emit_native_interaction_backend_event(
+            &state,
+            NativeInteractionBackendEvent::StateUpdated(event),
+        );
         Ok(())
     }
 
@@ -551,7 +636,10 @@ impl NativeInteractionService {
                 .map(NativeInteractionBackendKind::as_str)
                 .unwrap_or("unknown")
         );
-        emit_native_interaction_backend_event(&state, NativeInteractionBackendEvent::StateUpdated(event));
+        emit_native_interaction_backend_event(
+            &state,
+            NativeInteractionBackendEvent::StateUpdated(event),
+        );
         Ok(())
     }
 
@@ -595,14 +683,34 @@ impl NativeInteractionService {
             )
         })?;
 
-        let active_session = state.active_session.as_ref().ok_or_else(|| {
-            AppError::new(
-                "NATIVE_INTERACTION_SESSION_NOT_PREPARED",
-                "native interaction 未准备可显示会话",
-            )
-        })?;
+        let active_session = match state.active_session.as_ref() {
+            Some(value) => value,
+            None => {
+                log::warn!(
+                    target: "bexo::service::native_interaction",
+                    "native_interaction_runtime_rejected reason=session_not_prepared requested_session_id={} visible={} mode={} lifecycle_state={}",
+                    input.session_id,
+                    input.visible,
+                    input.mode.as_str(),
+                    state.lifecycle_state.as_str()
+                );
+                return Err(AppError::new(
+                    "NATIVE_INTERACTION_SESSION_NOT_PREPARED",
+                    "native interaction 未准备可显示会话",
+                ));
+            }
+        };
         let active_session_id = active_session.session_id.clone();
         if active_session_id != input.session_id {
+            log::warn!(
+                target: "bexo::service::native_interaction",
+                "native_interaction_runtime_rejected reason=session_mismatch requested_session_id={} active_session_id={} visible={} mode={} lifecycle_state={}",
+                input.session_id,
+                active_session_id,
+                input.visible,
+                input.mode.as_str(),
+                state.lifecycle_state.as_str()
+            );
             return Err(AppError::new(
                 "NATIVE_INTERACTION_SESSION_MISMATCH",
                 "native interaction 会话不匹配",
@@ -634,7 +742,10 @@ impl NativeInteractionService {
             started_at.elapsed().as_millis()
         );
 
-        emit_native_interaction_backend_event(&state, NativeInteractionBackendEvent::StateUpdated(event));
+        emit_native_interaction_backend_event(
+            &state,
+            NativeInteractionBackendEvent::StateUpdated(event),
+        );
 
         Ok(view)
     }
@@ -656,9 +767,12 @@ fn build_state_view(
         lifecycle_state: state.lifecycle_state.as_str(),
         has_active_session: state.active_session.is_some(),
         selection: snapshot.selection,
+        active_shape: snapshot.active_shape.clone(),
+        active_shape_draft: snapshot.active_shape_draft.clone(),
         hovered_hit_region: snapshot.hovered_hit_region.as_str(),
         drag_mode: snapshot.drag_mode.map(NativeInteractionDragMode::as_str),
         selection_revision: snapshot.selection_revision,
+        active_shape_revision: snapshot.active_shape_revision,
         interaction_mode: snapshot.interaction_mode.as_str(),
         rect_draft: snapshot.rect_draft,
     }
@@ -677,12 +791,15 @@ fn build_state_updated_event(
         lifecycle_state: state.lifecycle_state.as_str().to_string(),
         has_active_session: state.active_session.is_some(),
         selection: snapshot.selection,
+        active_shape: snapshot.active_shape.clone(),
+        active_shape_draft: snapshot.active_shape_draft.clone(),
         hovered_hit_region: snapshot.hovered_hit_region.as_str().to_string(),
         drag_mode: snapshot
             .drag_mode
             .map(NativeInteractionDragMode::as_str)
             .map(str::to_string),
         selection_revision: snapshot.selection_revision,
+        active_shape_revision: snapshot.active_shape_revision,
         interaction_mode: snapshot.interaction_mode.as_str().to_string(),
         rect_draft: snapshot.rect_draft,
     }
@@ -704,10 +821,9 @@ fn build_native_interaction_event_sink<R: tauri::Runtime>(
     let app_handle = app_handle.clone();
     Arc::new(move |event| match event {
         NativeInteractionBackendEvent::StateUpdated(payload) => {
-            if let Err(error) = app_handle.emit(
-                NATIVE_INTERACTION_STATE_UPDATED_EVENT_NAME,
-                payload.clone(),
-            ) {
+            if let Err(error) =
+                app_handle.emit(NATIVE_INTERACTION_STATE_UPDATED_EVENT_NAME, payload.clone())
+            {
                 log::warn!(
                     target: "bexo::service::native_interaction",
                     "emit native interaction state updated event failed: {}",
@@ -740,8 +856,10 @@ fn build_native_interaction_event_sink<R: tauri::Runtime>(
                     "native_interaction_shape_annotation_committed session_id={} kind={} color={} stroke_width={} start=({:.1},{:.1}) end=({:.1},{:.1})",
                     payload.session_id,
                     match payload.kind {
+                        NativeInteractionShapeAnnotationKind::Line => "line",
                         NativeInteractionShapeAnnotationKind::Rect => "rect",
                         NativeInteractionShapeAnnotationKind::Ellipse => "ellipse",
+                        NativeInteractionShapeAnnotationKind::Arrow => "arrow",
                     },
                     payload.color,
                     payload.stroke_width,
@@ -751,6 +869,74 @@ fn build_native_interaction_event_sink<R: tauri::Runtime>(
                     payload.end.y
                 );
             }
+        }
+        NativeInteractionBackendEvent::ShapeAnnotationUpdated(payload) => {
+            if let Err(error) = app_handle.emit(
+                NATIVE_INTERACTION_SHAPE_ANNOTATION_UPDATED_EVENT_NAME,
+                payload.clone(),
+            ) {
+                log::warn!(
+                    target: "bexo::service::native_interaction",
+                    "emit native interaction shape annotation updated event failed: {}",
+                    error
+                );
+            } else {
+                log::info!(
+                    target: "bexo::service::native_interaction",
+                    "native_interaction_shape_annotation_updated session_id={} id={} kind={} color={} stroke_width={} start=({:.1},{:.1}) end=({:.1},{:.1})",
+                    payload.session_id,
+                    payload.id,
+                    match payload.kind {
+                        NativeInteractionShapeAnnotationKind::Line => "line",
+                        NativeInteractionShapeAnnotationKind::Rect => "rect",
+                        NativeInteractionShapeAnnotationKind::Ellipse => "ellipse",
+                        NativeInteractionShapeAnnotationKind::Arrow => "arrow",
+                    },
+                    payload.color,
+                    payload.stroke_width,
+                    payload.start.x,
+                    payload.start.y,
+                    payload.end.x,
+                    payload.end.y
+                );
+            }
+        }
+        NativeInteractionBackendEvent::CancelRequested {
+            session_id,
+            shortcut,
+        } => {
+            let app_handle = app_handle.clone();
+            std::thread::spawn(move || {
+                let screenshot_service = app_handle.state::<crate::services::ScreenshotService>();
+                match screenshot_service.cancel_active_session_from_escape(&app_handle) {
+                    Ok(Some(cancelled_session_id)) => {
+                        log::info!(
+                            target: "bexo::service::native_interaction",
+                            "native_interaction_cancel_requested session_id={} shortcut={} cancelled_session_id={}",
+                            session_id,
+                            shortcut,
+                            cancelled_session_id
+                        );
+                    }
+                    Ok(None) => {
+                        log::debug!(
+                            target: "bexo::service::native_interaction",
+                            "native_interaction_cancel_requested_ignored session_id={} shortcut={} reason=no_active_session",
+                            session_id,
+                            shortcut
+                        );
+                    }
+                    Err(error) => {
+                        log::warn!(
+                            target: "bexo::service::native_interaction",
+                            "native_interaction_cancel_requested_failed session_id={} shortcut={} reason={}",
+                            session_id,
+                            shortcut,
+                            error
+                        );
+                    }
+                }
+            });
         }
     })
 }

@@ -147,7 +147,7 @@ pub async fn copy_screenshot_selection(
     selection: ScreenshotSelectionInput,
     rendered_image: Option<ScreenshotRenderedImageInput>,
 ) -> Result<CommandResponse<CopyScreenshotSelectionResult>, AppError> {
-    match screenshot_service.copy_selection(&session_id, selection, rendered_image) {
+    match screenshot_service.copy_selection(&app_handle, &session_id, selection, rendered_image) {
         Ok(data) => {
             if let Err(error) = screenshot_service.hide_and_clear_native_interaction(&app_handle) {
                 log::warn!(
@@ -226,7 +226,7 @@ pub async fn cancel_screenshot_session(
     screenshot_service: State<'_, ScreenshotService>,
     session_id: String,
 ) -> Result<CommandResponse<CancelScreenshotSessionResult>, AppError> {
-    match screenshot_service.cancel_session(&session_id) {
+    match screenshot_service.cancel_session(&app_handle, &session_id) {
         Ok(data) => {
             if let Err(error) = screenshot_service.hide_and_clear_native_interaction(&app_handle) {
                 log::warn!(

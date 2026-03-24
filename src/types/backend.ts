@@ -575,9 +575,23 @@ export type NativeInteractionSelectionPoint = {
   y: number;
 };
 
-export type NativeInteractionMode = "selection" | "rect_annotation" | "ellipse_annotation";
+export type NativeInteractionMode =
+  | "selection"
+  | "line_annotation"
+  | "rect_annotation"
+  | "ellipse_annotation"
+  | "arrow_annotation";
 
-export type NativeInteractionShapeAnnotationKind = "rect" | "ellipse";
+export type NativeInteractionShapeAnnotationKind = "line" | "rect" | "ellipse" | "arrow";
+
+export type NativeInteractionEditableShape = {
+  id: string;
+  kind: NativeInteractionShapeAnnotationKind;
+  color: string;
+  strokeWidth: number;
+  start: NativeInteractionSelectionPoint;
+  end: NativeInteractionSelectionPoint;
+};
 
 export type NativeInteractionExclusionRect = {
   x: number;
@@ -591,9 +605,12 @@ export type NativeInteractionStateView = {
   lifecycleState: string;
   hasActiveSession: boolean;
   selection?: NativeInteractionSelectionRect | null;
+  activeShape?: NativeInteractionEditableShape | null;
+  activeShapeDraft?: NativeInteractionEditableShape | null;
   hoveredHitRegion: string;
   dragMode?: string | null;
   selectionRevision: number;
+  activeShapeRevision: number;
   interactionMode: NativeInteractionMode;
   rectDraft?: NativeInteractionSelectionRect | null;
 };
@@ -604,15 +621,28 @@ export type NativeInteractionStateUpdatedEvent = {
   lifecycleState: string;
   hasActiveSession: boolean;
   selection?: NativeInteractionSelectionRect | null;
+  activeShape?: NativeInteractionEditableShape | null;
+  activeShapeDraft?: NativeInteractionEditableShape | null;
   hoveredHitRegion: string;
   dragMode?: string | null;
   selectionRevision: number;
+  activeShapeRevision: number;
   interactionMode: NativeInteractionMode;
   rectDraft?: NativeInteractionSelectionRect | null;
 };
 
 export type NativeInteractionShapeAnnotationCommittedEvent = {
   sessionId: string;
+  kind: NativeInteractionShapeAnnotationKind;
+  color: string;
+  strokeWidth: number;
+  start: NativeInteractionSelectionPoint;
+  end: NativeInteractionSelectionPoint;
+};
+
+export type NativeInteractionShapeAnnotationUpdatedEvent = {
+  sessionId: string;
+  id: string;
   kind: NativeInteractionShapeAnnotationKind;
   color: string;
   strokeWidth: number;

@@ -18,8 +18,8 @@ mod workspace_service;
 
 pub use hotkey_service::HotkeyService;
 pub use native_interaction_service::{
-    NativeInteractionBackendKind, NativeInteractionExclusionRect, NativeInteractionMode,
-    NativeInteractionRuntimeUpdateInput, NativeInteractionSelectionRect,
+    NativeInteractionBackendKind, NativeInteractionEditableShape, NativeInteractionExclusionRect,
+    NativeInteractionMode, NativeInteractionRuntimeUpdateInput, NativeInteractionSelectionRect,
     NativeInteractionService, NativeInteractionStateUpdatedEvent, NativeInteractionStateView,
 };
 pub use native_preview_service::NativePreviewService;

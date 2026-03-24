@@ -17,8 +17,10 @@ import type {
   HotkeyTriggerEvent,
   LaunchTaskRecord,
   NativeInteractionExclusionRect,
+  NativeInteractionEditableShape,
   NativeInteractionMode,
   NativeInteractionShapeAnnotationCommittedEvent,
+  NativeInteractionShapeAnnotationUpdatedEvent,
   NativeInteractionSelectionRect,
   NativeInteractionStateView,
   NativeInteractionStateUpdatedEvent,
@@ -258,6 +260,8 @@ export function updateNativeInteractionRuntime(
   exclusionRects: NativeInteractionExclusionRect[],
   mode: NativeInteractionMode,
   selection?: NativeInteractionSelectionRect | null,
+  activeShape?: NativeInteractionEditableShape | null,
+  shapeCandidates?: NativeInteractionEditableShape[],
   annotationColor?: string | null,
   annotationStrokeWidth?: number | null,
 ) {
@@ -268,6 +272,8 @@ export function updateNativeInteractionRuntime(
       exclusionRects,
       mode,
       selection: selection ?? null,
+      activeShape: activeShape ?? null,
+      shapeCandidates: shapeCandidates ?? [],
       annotationColor: annotationColor?.trim() ? annotationColor.trim() : null,
       annotationStrokeWidth:
         typeof annotationStrokeWidth === "number" && Number.isFinite(annotationStrokeWidth)
@@ -436,6 +442,21 @@ export async function listenToNativeInteractionShapeAnnotationCommittedEvents(
 
   return listen<NativeInteractionShapeAnnotationCommittedEvent>(
     "native_interaction://shape-annotation-committed",
+    (event) => {
+      handler(event.payload);
+    },
+  );
+}
+
+export async function listenToNativeInteractionShapeAnnotationUpdatedEvents(
+  handler: (event: NativeInteractionShapeAnnotationUpdatedEvent) => void,
+): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    desktopRuntimeRequired();
+  }
+
+  return listen<NativeInteractionShapeAnnotationUpdatedEvent>(
+    "native_interaction://shape-annotation-updated",
     (event) => {
       handler(event.payload);
     },

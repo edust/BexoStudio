@@ -1,5 +1,14 @@
 # findings
 
+## 2026-03-18
+- `log.log` 已证明本次“按截图热键立即无响应”不是截图会话启动失败：`received hotkey -> native_preview_window_shown -> native_interaction_session_prepared -> get_screenshot_session completed -> start_session_completed` 全部成功。
+- 挂起发生在截图态建立之后；日志最后一个前端关键点是 `preview_image_decode_start`，最后一个 Rust 侧新增行为之一是 `escape_cancel_binding_applied source=global_shortcut shortcut=Escape`。
+- 当前最值得优先审查的两条路径是：
+  - `ScreenshotService` 运行期动态注册 `Escape` 全局热键
+  - overlay 页 `raw_protocol` 预览解码后的渲染链路
+- `screenshot-overlay-page` 在 `nativePreviewActive=true` 且没有 effect preview 时，原本仍会立即 `loadImage(previewImageSource)` 解码 WebView 预览图；这条 eager decode 与日志里最后一个前端关键点完全对齐，但该会话下 WebView 实际并不展示这张图。
+- overlay 本地已经有 `keydown Escape -> handleCancel()`，而 NativeInteraction backend 也已有 `CancelRequested -> cancel_active_session_from_escape()`；因此 `ScreenshotService` 会话期再动态注册 `Escape` 全局热键是冗余路径，应移除以降低热路径风险。
+
 ## 2026-03-15
 - 用户当前目标已从“继续抠 WGC/WebView 图片链路”切换为“无黄边 + 接近实时”，这要求 live capture 后端本身不再依赖 `Windows.Graphics.Capture` 的系统捕获边框机制。
 - 在当前 `tauri dev` / 非 package identity 运行形态下，`GraphicsCaptureAccessKind::Borderless + graphicsCaptureWithoutBorder capability` 并不是可立即稳定落地的方案；即使发布态可做，也不能解决当前开发态黄边问题。
@@ -381,3 +390,111 @@
 - After event sync landed, the remaining small interaction jitter came from a feedback loop: native selection updates changed React `selection`, which retriggered `update_native_interaction_runtime` even in selection mode.
 - Breaking that loop requires treating Native as the sole owner of selection state while `interactionMode=selection`; the frontend should only consume events, not echo the same selection back.
 - For the second native annotation family, `ellipse` is the safest next step because it reuses the same bounding-box interaction model as `rect` while still validating that the shape-commit protocol can support more than one annotation kind.
+
+## 2026-03-16 Findings: Screenshot overlay UX should not expose full editing chrome before region selection
+- 用户截图已直接证明当前问题不是 native 预览性能，而是 overlay 页面运行时 UX：顶部常驻说明条造成视觉遮挡，全量工具栏导致初始截图态像“完整编辑器”而不是“先选区后编辑”。
+- 合理业务流应为：进入截图 -> 先框选区域 -> 再出现紧凑的区域编辑工具栏；高级控制仅在对应上下文出现。
+- 因此此阶段应优先压缩 WebView 运行时 chrome，而不是继续向截图首帧链路追加性能优化。
+
+## 2026-03-16 Findings: White flash and Esc failure were caused by two separate runtime ownership gaps
+- 白闪并不全是首帧慢，而是部分会话退回 `wgc_single_monitor` 后 `native_preview_status=skipped`，底图重新落回 WebView `img` 路径。
+- `Esc` 失效不是取消逻辑不存在，而是焦点不稳定：高频鼠标交互期间 NativeInteractionWindow 可能成为实际输入窗口，导致 WebView 的 `window.keydown` 不再可靠。
+- 这类问题不应该继续靠“确保 WebView 拿焦点”来赌，正确做法是让 NativeInteractionWindow 自己发出取消请求事件。
+
+## 2026-03-16 - White flash and Esc cancel findings
+- `wgc_single_monitor` 回退时 `CapturedMonitorFrame.bgra_top_down=None`，导致 `build_native_preview_runtime_inputs()` 直接返回 `None`，native preview 被跳过，出现白闪回退到 WebView 底图。
+- `Esc` 取消不能依赖 WebView `keydown`，也不能依赖 `SW_SHOWNOACTIVATE` 的 NativeInteraction 窗口过程。当前项目已存在稳定的 `WH_KEYBOARD_LL` manager，适合做截图会话级 `Esc` 取消闭环。
+
+- 2026-03-17: 日志证明 screenshot 专用 cancel hook 已 apply(binding_count=1) 但从未产生 escape_cancel_hook_triggered；根因不在 overlay hide，而在回调根本没触发。改为 NativeInteractionWindow 直接 RegisterHotKey(Esc) 并通过 NativeInteractionBackendEvent::CancelRequested 驱动 ScreenshotService.cancel_active_session_from_escape。
+- 2026-03-17 用户新日志已经直接证明：同一截图会话内多次出现 `native_interaction_drag_started ... drag_mode=creating hit_region=none`，因此“区域外不能重新划选”不是后端交互逻辑锁死，而是光标反馈误导了用户判断。
+- `NativeInteractionWindow` 如果只在状态变化时 `SetCursor`，但不处理 `WM_SETCURSOR`，Windows 仍可能在下一次光标查询时恢复成默认/底层样式。这正是当前区域外出现“禁止”光标的高概率原因。
+- 正确修复点是原生窗口过程：显式处理 `WM_SETCURSOR`，每次根据当前 `hovered_hit_region/drag_mode/interaction_mode` 强制回写 Native cursor。这样既不动现有 hit test 状态机，也能消除错误光标反馈。
+- 2026-03-17 最新用户澄清了业务规则：基础截图并不是“允许随时重划新选区”，而是只允许首次框选；形成有效选区后，区域外应禁止新建，仅允许移动/缩放当前选区。这意味着之前把“区域外可重新 creating”当作正确行为的判断不符合产品要求。
+- 同一份日志还明确给出了 `Esc` 失败根因：`update_native_interaction_runtime failed ... NATIVE_INTERACTION_ESCAPE_HOTKEY_REGISTER_FAILED`。这不是消息没收到，而是 `RegisterHotKey(Esc)` 在当前实现里根本注册失败。
+- 因此正确修复不是继续调 WebView 焦点，也不是继续赌 `RegisterHotKey`，而是：
+  1. 在 Native 选区状态机里锁住已有选区后的区域外 `creating`
+  2. 用项目现成的 `WindowsHookHotkeyManager` 绑定 `Esc`，直接发 Native cancel request
+- Phase C 当前不是全 Native。现状是：
+  - Native：Desktop Duplication、NativePreviewWindow、NativeInteractionWindow（基础选区/句柄/部分 shape）
+  - WebView：工具栏、复杂标注编辑流程、配置与非高频 UI
+- 最新修复针对 Native 交互业务规则：已有选区后锁住区域外重建；Esc 取消改由低级键盘 hook 驱动，不再使用无效的 RegisterHotKey(Esc)。
+- 2026-03-17 最新日志其实已经证明 Esc 取消链路在某些时刻是通的：日志中存在 `native_interaction_escape_cancel_requested`、`escape_cancel_completed`。因此问题不是“Esc 功能不存在”，而是它当前挂载在 NativeInteraction 局部路径上，实测仍然有时序/焦点依赖。
+- 更稳的做法是把 Esc 取消再上移到 ScreenshotService 会话级：只要截图会话存在，就立即通过 `WindowsHookHotkeyManager` 绑定 Esc；会话清除时统一解绑。这能和 NativeInteractionWindow 的显示、焦点、show/hide 完全解耦。
+- 当前截图运行时仍然是混合架构，不是全 Native：Native 负责采集、预览、基础选区/部分 shape，高频主链路已在 Native；WebView 仍负责工具栏、复杂标注编辑和非高频 UI。
+- 2026-03-17 最新日志已经直接暴露出 `Esc` 不稳定的结构性原因：进程内同时存在三条 Windows 低级键盘 hook 线程，其中两条与截图取消相关。重复 hook 会导致同一按键在不同线程里被竞争消费。
+- 日志里已经能看到 `ScreenshotService` 会话级 `Esc` 取消成功，因此 NativeInteraction 自己再保留一条取消 hook 没有价值，反而制造不稳定。
+- 正确修复是单路径原则：截图态只保留 `ScreenshotService` 会话级 Esc hook，NativeInteraction 不再管理 Esc。
+
+- 2026-03-17: 最新 log 显示 escape_cancel_hook_triggered 能成功，但触发时机不稳定；windows_hook_hotkey 单键 Esc 理论上应在 WM_KEYDOWN 触发，说明问题更可能在当前会话输入链路。决定改为 tauri-plugin-global-shortcut 的临时 Escape 注册为主路径，hook 仅作回退。
+
+- 2026-03-17: 确认截图态 Esc 未响应的硬根因是 tauri-plugin-global-shortcut 在回调执行时持有 shortcuts 锁，而我们在回调里同步注销 Escape 会反向拿同一把锁，造成死锁。已改为在回调中异步派发取消，待回调退出后再执行会话清理和注销。
+
+- 2026-03-17: 截图态 Esc 已稳定后，下一阶段的正确方向是把运行时工具栏从 WebView 拿到 Native，并优先下沉 arrow 这类高频 shape。
+
+## 2026-03-17 Findings: Phase D should add arrow before forcing runtime toolbar cutover
+- `arrow` 比 text/effect 更适合作为第三个 Native shape：它和现有 `rect/ellipse` 一样都是几何对象，只需要新增 draft 线段与提交事件，不需要改前端注释模型。
+- 当前前端 `shape-annotation-committed` 已经是泛化协议，前端现有 `ShapeAnnotation.kind` 也已支持 `arrow`；因此最稳的做法是扩展 NativeInteraction 的 mode/kind 枚举，而不是重新设计一套 arrow 专用事件。
+- `NativeToolbarWindow` 本轮不应该急着替换现有 WebView toolbar。先把隐藏 tool window、生命周期和 app 注入做成稳定骨架，再在下一轮接 selection anchor 和原生按钮，否则会把 Phase D 风险一次性放大。
+- 2026-03-17: 修复截图态无法切换到 arrow/tool 按钮的问题。
+  - 根因：`NativeInteractionWindow` 的 exclusion rect 只清除了视觉遮罩，没有在 Win32 命中测试里返回 `HTTRANSPARENT`。
+  - 处理：在 `WM_NCHITTEST` 中对 toolbar/text-editor exclusion rect 命中后返回 `HTTRANSPARENT`，让下层 WebView 真正接收点击。
+- 2026-03-17: 运行时 toolbar 点击不稳的根因，不只是 exclusion rect 的 `HTTRANSPARENT`，而是 `NativeInteractionWindow` 仍保持全屏输入区域。即使局部打洞，窗口命中和层级时序仍可能挡住 toolbar。更稳的输入模型是：初始框选时全屏输入；形成有效选区后，把 Native 输入区域收缩到“选区本体 + 句柄 padding”，把区域外输入交还给 overlay/WebView。
+- 2026-03-17: toolbar 仍不可点的更深层根因，是 `NativeInteractionWindow` 的输入区域只在 `prepare_session/update_runtime` 时重算，但选区创建/移动/缩放是在 backend 内部完成的。视觉选区更新后，如果不立即重算 window region，实际挡鼠标的仍是旧 region（常见为全屏或旧位置），于是 toolbar 继续被挡住。
+- 2026-03-17: `NativeToolbarWindow` 不再只是 skeleton。当前已经确认更稳的切换方式是：Rust 命令负责 runtime state 推送，Native toolbar 只发 `native_toolbar://action` 事件，WebView 只做业务动作分发和高级控制兜底。这样不会把截图复制/保存逻辑重写一遍。
+- 2026-03-17: `NativeToolbarWindow` 的 Win32 后端采用真实 `BUTTON` 子窗口，而不是继续赌 layered/WebView exclusion 命中。原因很直接：工具切换、颜色、复制/保存/取消本质是标准命令按钮，没必要留在 WebView 才做得快。
+- 2026-03-17: `line` 是 arrow 之后最合适的下沉对象。它和 `arrow` 共用两点几何模型，Native backend 只需要维护不带箭头的线段草稿即可，不需要引入新提交协议。
+- 2026-03-17: NativeToolbarWindow 点击工具按钮后卡死的高概率根因，不是按钮命中本身，而是 `WM_COMMAND -> app_handle.emit -> WebView listener -> setTool/applyColor -> updateNativeToolbarRuntime` 形成了同步重入链。Win32 按钮消息处理栈内不应该同步再触发 toolbar 自身 runtime 回写。
+- 更稳的修复方式是双保险：
+  1. Rust 侧把 toolbar action 改为异步派发，保证 `WM_COMMAND` 先返回。
+  2. Rust/前端两侧都对“值未变化”的工具/颜色更新做 no-op，避免无意义回写。
+- 2026-03-17: 在 Native toolbar 已经接管工具/颜色/复制保存取消之后，下一批最应该下沉的不是新图形，而是 `撤销/重做/线宽` 这类运行时基础操作。原因：它们高频、边界清晰，且能立即减少截图态 WebView 主工具栏的职责。
+- 这类运行时动作最适合使用离散动作而不是数值输入框：`undo / redo / decrease_stroke_width / increase_stroke_width`。这样 Native toolbar 不需要先引入复杂输入控件，也能完成最小闭环。
+- 2026-03-17: 修复 Native toolbar 接管前 WebView 旧 toolbar 先闪一下的问题。
+  - 原因：`showWebToolbarPrimaryRows` 之前依赖 `nativeToolbarState.visible`，需要等一次异步 runtime 回执，导致 WebView 主行先渲染一帧。
+  - 处理：改为只要 `nativeToolbarRuntimeVisible` 成立，就提前把 WebView 主行隐藏，由 native toolbar 负责接管主运行时工具栏。
+
+- 2026-03-17: 当前单对象 shape 编辑态的关键缺口不是创建，而是 active shape 协议缺失。已补 ctiveShape 运行时输入和 shape-annotation-updated 事件。
+
+- 2026-03-17: 单对象 shape Native 编辑态的真实首个阻塞点，不一定在 Native backend 命中/拖拽，而可能在 WebView 的对象‘首击选中’入口。ect/ellipse 若只按 outline 命中，用户点击内部时会被误判为未命中，从而触发 object marquee 或重新框选，看起来像‘无法选中对象’。
+
+- 2026-03-17: 当前截图态主工具栏消失的直接根因，不一定是 native toolbar 没准备，而是前端过早用 
+ativeToolbarRuntimeVisible 接管了 WebView 主行。更稳的规则是：只有 
+ativeToolbarActive（native 已确认 visible 且 session 有效）时，才隐藏 WebView 主工具行。
+
+- 2026-03-17: shape 工具下必须把‘已有对象候选列表’下沉到 NativeInteraction runtime，不能只传 activeShape。否则 Native backend 在 line/rect/ellipse/arrow 模式只能无条件进入 *_creating，无法智能判断‘点中已有对象则编辑，点空白则新建’。
+- 2026-03-17: 单对象 Native 编辑态除了 backend 命中，还必须把 native activeShape 反向同步到前端 selectedShape；否则对象即使在 Native 中已命中，WebView 仍会认为未选中，工具状态和编辑 UI 会漂移。
+- 2026-03-17: native toolbar 多轮截图后回落到 WebView 的高概率根因仍在 Win32 show/hide 时序，已补 SWP_SHOWWINDOW 并保留 WebView 兜底；需要结合本轮回归确认是否已稳定。
+- 2026-03-17 20:15 继续排查“画完对象切回选区后无响应”。根据手动控制台日志，卡死前最后一条为 `native_interaction_drag_started ... drag_mode=resizing ... mode=selection`，说明问题不在 shape 创建/移动，而在切回 `tool=select` 后的 selection resize 链路。
+- 本轮前端收口：1) 从 shape 工具切回 `select` 时先清掉 shape 选中态，避免把上一轮 `activeShape` 带入 selection resize；2) `tool=select` 且 Native 正在 `creating/moving/resizing` 选区时，暂停向 Native 回写 `shapeCandidates`，降低 selection 每次变化导致的 runtime 更新风暴；3) 只有 Native 真正进入 `shape_moving/shape_start_moving/shape_end_moving/shape_resizing` 时，才把对象选中态同步回前端，避免在纯 selection 模式下误触发对象同步。
+- 2026-03-17 20:26 继续修“切回选区后拖动选区句柄卡死”。基于最新日志，第二次卡死仍停在 `native_interaction_drag_started ... drag_mode=resizing ... mode=selection`，且没有 `drag_committed`。进一步收敛到 Native backend：拖拽过程中不应持续调用 `SetWindowRgn` 改输入区域。当前实现会在 selection create/move/resize 的每次 `WM_MOUSEMOVE` 中同步 window region，风险点高且在鼠标已 `SetCapture` 的前提下没有必要。
+- 2026-03-17 21:42 再补一刀：NativeInteraction 拖拽进行中（`dragMode` 非空）时，前端不再调用 `updateNativeInteractionRuntime`。此前即便在初始选区创建阶段，前端也会随着 Native state event 持续回写 runtime，形成双向竞争。当前策略改为：拖拽期只接收 Native 状态事件，不向 Native 反向推送 runtime；拖拽结束后再恢复同步。
+- 2026-03-17 21:55 最新 `log.log` 明确显示两类跨会话问题仍存在：
+  1. 新 session 刚启动时，前端会发出旧 session 的 `updateNativeInteractionRuntime`，Rust 侧报 `NATIVE_INTERACTION_SESSION_MISMATCH`。
+  2. 截图取消后，前端仍可能继续发 runtime 更新，Rust 侧报 `NATIVE_INTERACTION_SESSION_NOT_PREPARED`。
+- 这说明当前真正需要先收口的是“session 切换期的 runtime update 闸门”，而不是继续盲改拖拽命中或 shape 创建逻辑。
+- 2026-03-17 21:55 本轮修复策略：
+  - 前端引入 `pendingSessionIdRef`，一旦收到 `session_updated_event`，旧 session 即不再允许向 NativeInteraction 回写 runtime。
+  - 前端 runtime update effect 新增精确埋点：`runtime_update_sent/completed/failed/skipped`，日志带 `session_id / pending_session_id / active_session_id / tool / mode / candidates`。
+  - Native state event 新增 `state_updated_applied/dropped` 埋点，直接暴露 session 过滤是否生效。
+  - Rust `NativeInteractionService::update_runtime()` 对 `SESSION_NOT_PREPARED / SESSION_MISMATCH` 增加结构化日志，输出 `requested_session_id / active_session_id / visible / mode / lifecycle_state`，不再只靠模糊错误串排障。
+- 2026-03-17 22:20 最新日志确认：第二次截图时 `native_toolbar_session_prepared` 存在，但没有 `native_toolbar_window_shown`。这说明问题不在 session 准备，而在“toolbar 可见化”链路。
+- 当前 `NativeToolbarWindow` 的显示完全依赖前端 `updateNativeToolbarRuntime(visible=true)` 间接触发；`screenshot_service` 并不会主动 `show_prepared_session()`。这条设计本身依赖前端时序，二次截图时容易退回 WebView toolbar。
+- 本轮针对 toolbar 增加和 NativeInteraction 对等的诊断能力：
+  - 前端：`runtime_update_sent/completed/failed/skipped`
+  - Rust command：`session_id / visible / active_tool / active_color`
+  - Rust service：显式 `native_toolbar_window_shown/hidden trigger=runtime_update`
+- 下一轮判断标准会非常明确：
+  1. 若没有 `runtime_update_sent visible=true`，问题在前端 toolbar 可见性判定或 session gate。
+  2. 若有 `runtime_update_sent visible=true` 但没有 `native_toolbar_window_shown trigger=runtime_update`，问题在 Rust service/backend。
+  3. 若两者都有但界面仍是 WebView toolbar，问题在 Z-order 或前端 `nativeToolbarActive` 状态回写。
+## 2026-03-17 Native Toolbar Runtime Failure Root Cause
+
+- `native toolbar` 二次截图或切工具后回退到 WebView toolbar 的硬根因之一，不是前端没发 `visible=true`，而是前端日志里已经出现 `stroke_width=2.8568357680973286` 这类浮点值，而 Rust `update_native_toolbar_runtime` payload 把 `stroke_width` 定义成了 `u32`。
+- 该错误发生在 Tauri 命令反序列化阶段，因此不会进入 `bexo::command::native_toolbar` 命令体，也不会产生 Rust 命令日志；前端只会拿到统一的 `命令执行失败`。
+- 旧 WebView 主 toolbar 继续兜底会把 NativeToolbar 的失败掩盖掉，并导致截图运行时出现双 toolbar/回退错觉。截图运行时主 toolbar 需要彻底退出 WebView，只保留 NativeToolbarWindow。
+
+- 2026-03-18：基于最新边界确认，`toolbar` 本身并不属于必须 Native 化的低延迟层；当前实现里 Native toolbar 只是“Win32 按钮 + 事件回调到 React 业务处理”，没有把复杂状态真正移出 WebView。
+- 这意味着 Native toolbar 的收益远小于其复杂度：它额外引入了 session gate、show/hide 时序、跨窗口事件桥接、多轮截图可见性等故障面，却没有像 `NativePreviewWindow` / `NativeInteractionWindow` 那样直接解决底图首帧或高频命中问题。
+- 正确边界应回到：Native 只承载 preview / selection / 高频 shape interaction / system input-focus-windowing；WebView 承载 toolbar、属性、对象操作和复杂配置 UI。
+- 2026-03-18：实际回改后不需要保留 `NativeToolbarWindow` 作为“点击穿透保险”。现有 `NativeInteractionWindow` exclusion rect / input region 已足够支撑 WebView toolbar 与 text editor 点击。
+- 2026-03-18：在物理删除 `src-tauri/src/commands/native_toolbar.rs`、`src-tauri/src/services/native_toolbar_service.rs`、`src-tauri/src/services/native_toolbar_backend_windows.rs` 后，`npm run web:build` 与 `cargo check` 仍通过，说明 toolbar Native 化没有留下隐藏主路径依赖。

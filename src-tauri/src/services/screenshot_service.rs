@@ -74,7 +74,6 @@ const LIVE_CAPTURE_WAIT_FOR_READY_FRAME_MS: u64 = 180;
 const LIVE_CAPTURE_WAIT_POLL_INTERVAL_MS: u64 = 10;
 const OVERLAY_EVENT_SUPPRESS_MS: u64 = 250;
 const OVERLAY_TRANSPARENT_BG: Color = Color(0, 0, 0, 0);
-
 #[derive(Clone)]
 pub struct ScreenshotService {
     state: Arc<Mutex<ScreenshotState>>,
@@ -4064,8 +4063,9 @@ impl ScreenshotService {
         })
     }
 
-    pub fn copy_selection(
+    pub fn copy_selection<R: Runtime>(
         &self,
+        app: &AppHandle<R>,
         session_id: &str,
         selection: ScreenshotSelectionInput,
         rendered_image: Option<ScreenshotRenderedImageInput>,
@@ -4094,6 +4094,7 @@ impl ScreenshotService {
                     .with_detail("reason", error.to_string())
             })?;
 
+        let _ = app;
         let _ = self.clear_active_session(Some(session_id));
 
         Ok(CopyScreenshotSelectionResult {
@@ -4139,6 +4140,7 @@ impl ScreenshotService {
                 .with_detail("reason", error.to_string())
         })?;
 
+        let _ = app;
         let _ = self.clear_active_session(Some(session_id));
 
         Ok(SaveScreenshotSelectionResult {
@@ -4149,12 +4151,62 @@ impl ScreenshotService {
         })
     }
 
-    pub fn cancel_session(&self, session_id: &str) -> AppResult<CancelScreenshotSessionResult> {
+    pub fn cancel_session<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        session_id: &str,
+    ) -> AppResult<CancelScreenshotSessionResult> {
+        let _ = app;
         let cancelled = self.clear_active_session(Some(session_id))?;
         Ok(CancelScreenshotSessionResult {
             session_id: session_id.to_string(),
             cancelled,
         })
+    }
+
+    pub fn cancel_active_session_from_escape<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+    ) -> AppResult<Option<String>> {
+        let Some(session) = self.get_active_session_optional()? else {
+            return Ok(None);
+        };
+        let session_id = session.id.clone();
+        if !self.clear_active_session(Some(session_id.as_str()))? {
+            return Ok(None);
+        }
+
+        if let Err(error) = hide_and_clear_native_preview(app) {
+            log::warn!(
+                target: "bexo::service::screenshot",
+                "hide native preview after escape cancel failed session_id={} reason={}",
+                session_id,
+                error
+            );
+        }
+        if let Err(error) = hide_and_clear_native_interaction(app) {
+            log::warn!(
+                target: "bexo::service::screenshot",
+                "hide native interaction after escape cancel failed session_id={} reason={}",
+                session_id,
+                error
+            );
+        }
+        if let Err(error) = self.restore_overlay_hot_state(app) {
+            log::warn!(
+                target: "bexo::service::screenshot",
+                "restore overlay hot state after escape cancel failed session_id={} reason={}",
+                session_id,
+                error
+            );
+        }
+
+        log::info!(
+            target: "bexo::service::screenshot",
+            "escape_cancel_completed session_id={}",
+            session_id
+        );
+        Ok(Some(session_id))
     }
 
     pub fn clear_active_session(&self, session_id: Option<&str>) -> AppResult<bool> {
@@ -4741,8 +4793,9 @@ fn build_native_preview_runtime_inputs(
         .monitors
         .first()
         .ok_or_else(|| AppError::new("SCREENSHOT_MONITOR_NOT_FOUND", "未找到截图显示器"))?;
-    let Some(bgra_top_down) = monitor.bgra_top_down.clone() else {
-        return Ok(None);
+    let bgra_top_down = match monitor.bgra_top_down.clone() {
+        Some(bytes) => bytes,
+        None => Arc::new(top_down_bgra_from_rgba_image(monitor.source_image()?)?),
     };
     if monitor.capture_width == 0 || monitor.capture_height == 0 {
         return Ok(None);
@@ -4765,6 +4818,26 @@ fn build_native_preview_runtime_inputs(
         },
         bgra_top_down,
     )))
+}
+
+#[cfg(target_os = "windows")]
+fn top_down_bgra_from_rgba_image(image: &RgbaImage) -> AppResult<Vec<u8>> {
+    let rgba = image.as_raw();
+    if rgba.len() % 4 != 0 {
+        return Err(
+            AppError::new("SCREENSHOT_CAPTURE_FAILED", "RGBA 图像缓冲区长度异常")
+                .with_detail("actual", rgba.len().to_string()),
+        );
+    }
+
+    let mut bgra = vec![0u8; rgba.len()];
+    for (src, dst) in rgba.chunks_exact(4).zip(bgra.chunks_exact_mut(4)) {
+        dst[0] = src[2];
+        dst[1] = src[1];
+        dst[2] = src[0];
+        dst[3] = src[3];
+    }
+    Ok(bgra)
 }
 
 #[cfg(test)]

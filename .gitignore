@@ -26,3 +26,4 @@ dist/
 target/
 
 *.log
+codex_payload_*

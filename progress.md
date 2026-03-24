@@ -1,5 +1,27 @@
 # progress
 
+## 2026-03-18
+- 初始化 `scripts/work/2026-03-18-screenshot-hotkey-freeze-fix/`：
+  - `task_plan.md`
+  - `notes.md`
+  - `deliverable.md`
+- 已完成首轮日志复盘：
+  - 截图热键收到
+  - 会话建立成功
+  - NativePreview / NativeInteraction 成功显示
+  - 挂起发生在 `start_session_completed` 之后
+- 已进入根因确认阶段，当前重点排查运行期 `Escape` 绑定与 overlay 预览解码链路。
+- 已完成修复：
+  - `src/pages/screenshot-overlay-page.tsx` 在 `nativePreviewActive && !hasEffectPreview` 时跳过预览 eager decode，并新增 `preview_image_decode_skipped` 日志。
+  - `src-tauri/src/services/screenshot_service.rs` 已移除截图会话期的动态 `Escape` 全局热键/Windows hook fallback 绑定逻辑，保留现有 overlay 与 NativeInteraction cancel 路径。
+- 验证通过：
+  - `npm run web:build`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+- 待用户本机手工确认：
+  - 截图热键触发后不再进入“未响应”
+  - `Esc` 取消截图仍正常
+  - 连续触发截图热键稳定
+
 ## 2026-03-15
 - 初始化 `scripts/work/2026-03-15-desktop-duplication-live-capture/`：
   - `task_plan.md`
@@ -1263,3 +1285,276 @@
 - Validation:
   - `cargo check --manifest-path "src-tauri/Cargo.toml"`
   - `npm run web:build`
+
+## 2026-03-16 Progress: Screenshot overlay UX tightening
+- Removed the always-visible top instruction banner from screenshot runtime.
+- Changed screenshot toolbar behavior to appear only after a meaningful selection exists.
+- Reduced default toolbar footprint by showing advanced sections only when the active tool or current object selection actually needs them.
+- Pending verification: `npm run web:build` and manual screenshot UX regression check.
+
+## 2026-03-16 Progress: Screenshot cancel + white flash stabilization
+- Added a concrete stabilization increment for screenshot runtime: keep native preview active even when capture falls back from live cache, and route `Esc` cancel requests from NativeInteractionWindow instead of relying solely on WebView keydown focus.
+- Pending implementation and verification in Rust/TS event contracts.
+
+## 2026-03-16 - Native cancel hook and fallback preview wired
+- 已在 `ScreenshotService` 中接入截图会话级 `Esc` 低级键盘 hook，触发后直接执行 Rust 侧取消闭环。
+- 已为 native preview 增加 `RgbaImage -> BGRA top-down` 回退输入，避免 `wgc/gdi` one-shot 回退时跳回 WebView 底图。
+- 已完成验证：
+  - `cargo check --manifest-path "D:\Desktop\rust\BexoStudio\src-tauri\Cargo.toml"`
+  - `npm run web:build`
+
+- 2026-03-17: 移除 screenshot_service 运行时的 screenshot cancel hook 注册/清理逻辑；NativeInteractionWindow 新增 Esc RegisterHotKey/WM_HOTKEY 取消链路，cargo check 通过。
+
+## 2026-03-17 Progress: NativeInteraction cursor feedback correction
+- 查看用户最新 [log.log](/D:/Desktop/rust/BexoStudio/log.log)，确认同一截图会话内多次 `drag_mode=creating hit_region=none`，后端已支持区域外重新划选。
+- 修改 [native_interaction_backend_windows.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/services/native_interaction_backend_windows.rs)
+  - 新增 `WM_SETCURSOR` 处理
+  - 将 cursor 写入拆成 `set_cursor_for_kind()`
+  - 新增 `force_cursor_for_shared_state()`，确保 Windows 每次请求光标时都按 Native 状态强制回写
+- 目的：消除区域外错误显示“禁止”光标的问题，避免用户误判为无法重新划选。
+- 待验证：
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - 手工进入截图，确认区域外 cursor 为 crosshair 而不是禁止样式
+
+## 2026-03-17 Progress: Selection lock and Esc hook correction
+- 查看最新 [log.log](/D:/Desktop/rust/BexoStudio/log.log)
+  - 明确发现：
+    - 会话内大量 `drag_mode=creating hit_region=none`，说明当前仍允许区域外重复重划
+    - `update_native_interaction_runtime failed ... NATIVE_INTERACTION_ESCAPE_HOTKEY_REGISTER_FAILED`，说明 `RegisterHotKey(Esc)` 路径本身失效
+- 修改 [native_interaction_backend_windows.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/services/native_interaction_backend_windows.rs)
+  - 选区模式下，已有选区时区域外左键按下不再进入 `creating`
+  - 新增 `NotAllowed` cursor 语义，已有选区且区域外 hover 时显示禁止光标
+  - 移除 `RegisterHotKey/WM_HOTKEY` 取消路径
+  - 改为 `WindowsHookHotkeyManager` 绑定 `Esc` 并通过 Native cancel request 闭环取消截图
+- 待验证：
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - 手工进入截图：首次框选后区域外不能重建新选区，`Esc` 能立即退出
+
+## 2026-03-17 Progress: Esc cancel moved to ScreenshotService session scope
+- 查看最新 [log.log](/D:/Desktop/rust/BexoStudio/log.log)
+  - 发现：
+    - `Esc` 成功时会出现 `native_interaction_escape_cancel_requested` 与 `escape_cancel_completed`
+    - 但用户实测仍存在“当前截图态不稳定，alt+tab 后才容易触发”的问题
+- 修改 [screenshot_service.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/services/screenshot_service.rs)
+  - 新增会话级 `escape_hook_manager`
+  - `start_session()` 建立会话后立即 `apply_escape_cancel_hook()`
+  - `clear_active_session()` 统一 `clear_escape_cancel_hook()`
+  - 新增日志：
+    - `escape_cancel_hook_triggered`
+    - `escape_cancel_hook_ignored`
+    - `escape_cancel_hook_failed`
+- 验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - 结果：通过
+
+## 2026-03-17 Progress: Removed duplicate NativeInteraction Esc hook
+- 查看最新 [log.log](/D:/Desktop/rust/BexoStudio/log.log)
+  - 发现：
+    - 进程内存在 3 条 `windows hook installed`
+    - `Esc` 成功日志来自 `ScreenshotService` 会话级 hook
+    - NativeInteraction 自己保留的 Esc hook 只会造成竞争
+- 修改 [native_interaction_backend_windows.rs](/D:/Desktop/rust/BexoStudio/src-tauri/src/services/native_interaction_backend_windows.rs)
+  - 移除 NativeInteraction 内部的 Esc hook manager / state / apply/clear 逻辑
+  - 仅保留 ScreenshotService 的会话级 Esc hook
+- 验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - 结果：通过
+
+- 2026-03-17: 开始重构截图态 Esc 取消路径，准备从会话级 Windows hook 单一路径切到 global shortcut 主路径 + hook 回退。
+
+- 2026-03-17: 已将截图态 Esc 取消主路径切换为 tauri-plugin-global-shortcut 的临时 Escape 注册，Windows hook 仅作回退；同时统一清会话时注销 Escape 绑定。已通过 cargo check。
+
+- 2026-03-17: 修复截图态 Esc 导致未响应：global shortcut Escape 回调改为线程异步派发，避免在插件持锁回调内同步 unregister 造成死锁。已通过 cargo check。
+
+- 2026-03-17: 已初始化 Phase D 计划，准备实现 NativeToolbarWindow 和 arrow 原生化第一版。
+
+- 2026-03-17: 已完成 Phase D 第一轮实现：
+  - 新增 `NativeToolbarWindow` Rust/Win32 骨架：
+    - `src-tauri/src/services/native_toolbar_service.rs`
+    - `src-tauri/src/services/native_toolbar_backend_windows.rs`
+  - `app.setup()` 已初始化并 `manage(NativeToolbarService)`，初始化失败只写 `warn` 不阻断启动。
+  - `ScreenshotService` 已接入 native toolbar 会话 `prepare/hide/clear`。
+  - `NativeInteraction` 已新增 `ArrowAnnotation`：
+    - Rust 枚举扩展 `ArrowAnnotation / ArrowCreating / Arrow`
+    - Win32 backend 支持 arrow 草稿绘制与 mouse-up 提交
+    - 前端工具映射已把 `arrow` 接到 native interaction runtime。
+- 本轮验证通过：
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`
+- 当前保留项：
+  - 运行时 toolbar 仍由 WebView 提供；`NativeToolbarWindow` 仅完成 skeleton 和生命周期接线，下一轮再接 anchor/按钮逻辑。
+- 2026-03-17: 修复运行时工具栏点击被 NativeInteractionWindow 吞掉的问题：
+  - `src-tauri/src/services/native_interaction_backend_windows.rs` 新增 `WM_NCHITTEST` 命中透传逻辑。
+  - exclusion rect 现在不仅视觉透明，而且输入也会落到下层 WebView toolbar。
+- 验证：
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+- 2026-03-17: 收紧 `NativeInteractionWindow` 输入区域策略。
+  - 修改 `src-tauri/src/services/native_interaction_backend_windows.rs`
+  - `sync_window_input_region()` 现在优先按有效选区构建输入区域，并在此基础上继续减去 exclusion rect；不再默认始终使用全屏输入区域。
+  - 目的：让运行时 toolbar/text editor 不再被 NativeInteractionWindow 挡住，同时保留“已有选区后区域外不能重建”的业务规则。
+- 验证：
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - 结果：通过
+- 2026-03-17: 修复 NativeInteraction backend 内部选区变化后输入区域不同步的问题。
+  - 修改 `src-tauri/src/services/native_interaction_backend_windows.rs`
+  - 在 `handle_left_button_down / handle_mouse_move / handle_left_button_up` 中，当选区状态变化时立即调用 `sync_window_input_region()`。
+  - 同时在 `resolve_interaction_input_bounds()` 中对 `Creating` 拖拽保留全屏输入，避免首次框选时 region 过早收缩。
+- 验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - 结果：通过
+- 2026-03-17: 已完成 NativeToolbarWindow 运行时接线：
+  - 新增 Rust 命令 `get_native_toolbar_state / update_native_toolbar_runtime`
+  - `NativeToolbarWindow` Win32 backend 采用真实按钮窗口，支持最小运行时工具栏：工具切换、7 色、复制/保存/取消
+  - 前端 `screenshot-overlay-page.tsx` 已接入 `native_toolbar://action` 事件并在 Native toolbar 激活后隐藏 WebView 主工具/颜色/复制保存取消行，仅保留高级控制区兜底
+- 2026-03-17: 已完成 Native line MVP：
+  - Rust 交互枚举扩展 `LineAnnotation / LineCreating / Line`
+  - Win32 backend 支持 Native 线段草稿绘制和提交
+  - 前端已把 `line` 接到 native interaction runtime
+- 验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`
+- 2026-03-17: 修复 Native toolbar 点击卡死。
+  - 修改 `src-tauri/src/services/native_toolbar_service.rs`
+    - `NativeToolbarRuntimeUpdateInput` 增加 `PartialEq`
+    - `update_runtime()` 对未变化 runtime 做 no-op 短路
+    - `build_native_toolbar_event_sink()` 改为后台线程异步 `emit`
+  - 修改 `src/pages/screenshot-overlay-page.tsx`
+    - native toolbar 的 `set_tool / set_color` 如果目标值未变化则直接返回
+  - 验证：
+    - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+    - `npm run web:build`
+- 2026-03-17: 启动 Phase E 第一刀，继续扩展 Native toolbar。
+  - 修改 `src-tauri/src/services/native_toolbar_service.rs`
+    - 新增 `Undo / Redo / DecreaseStrokeWidth / IncreaseStrokeWidth`
+    - runtime input 新增 `stroke_width / can_undo / can_redo / can_adjust_stroke`
+  - 修改 `src-tauri/src/services/native_toolbar_backend_windows.rs`
+    - 新增撤销/重做/线宽 +/- 按钮
+    - runtime 文案和启用状态同步
+  - 修改 `src-tauri/src/commands/native_toolbar.rs`
+    - 更新 payload 契约
+  - 修改 `src/lib/command-client.ts`、`src/types/backend.ts`
+    - 更新前端命令与类型
+  - 修改 `src/pages/screenshot-overlay-page.tsx`
+    - 处理新的 native toolbar action
+    - native toolbar 激活时隐藏 WebView 撤销/重做/线宽行
+  - 验证：
+    - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+    - `npm run web:build`
+- 2026-03-17: 修复截图态旧 WebView toolbar 先闪后消失的问题。
+  - 修改 `src/pages/screenshot-overlay-page.tsx`
+    - 新增 `nativeToolbarPrimariesOwned`
+    - `showWebToolbarPrimaryRows` 改为按运行时接管时机提前隐藏，不再等 `nativeToolbarState.visible` 回执
+  - 验证：
+    - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+    - `npm run web:build`
+
+- 2026-03-17: 完成 single active shape Native edit MVP 第一版契约和 backend 分支接线；cargo check、
+pm run web:build 通过。
+
+- 2026-03-17: 修复单对象 shape 编辑态的前端选中入口。src/pages/screenshot-overlay-page.tsx 中 indShapeAnnotationAtPoint() 现在对 ect/ellipse 同时接受边框和内部命中，避免点击对象内部时误落到 marquee / 重新框选分支。验证：
+pm run web:build。
+
+- 2026-03-17: 修复截图态主工具栏丢失与 shape 选中状态漂移。src/pages/screenshot-overlay-page.tsx 中 selectedShapeAnnotation/selectedShapeAnnotations 改为从原始 nnotations 派生，不再受 Native 管理 shape 被 displayAnnotations 隐藏的影响；showWebToolbarPrimaryRows 改为仅在 
+ativeToolbarActive 为真时隐藏 WebView 主行，避免 native toolbar 未真正显示时主工具栏整块消失。验证：
+pm run web:build。
+- 2026-03-17: 修复 Phase E 的两个关键阻塞。
+  - 修改 `src-tauri/src/services/native_interaction_service.rs`、`src-tauri/src/commands/native_interaction.rs`：给 runtime update 增加 `shape_candidates`。
+  - 修改 `src-tauri/src/services/native_interaction_backend_windows.rs`：保存物理 shape candidates，并在 selection/shape tool 模式下优先命中候选对象；hover/cursor 也开始识别候选对象。
+  - 修改 `src/lib/command-client.ts`、`src/pages/screenshot-overlay-page.tsx`：前端下发 shape candidates，并在 native active shape 变化时回写 selected shape。
+  - 修改 `src-tauri/src/services/native_toolbar_backend_windows.rs`：补 `SWP_SHOWWINDOW` 导入，保证隐藏后再次显示 toolbar 的 Win32 flags 正确。
+  - 验证：`cargo fmt --manifest-path "src-tauri/Cargo.toml"`、`cargo check --manifest-path "src-tauri/Cargo.toml"`、`npm run web:build`。
+- 2026-03-17 20:15 修复截图态从 shape 工具切回“选区”后无响应：调整 [screenshot-overlay-page.tsx](D:/Desktop/rust/BexoStudio/src/pages/screenshot-overlay-page.tsx) 的 Native/WebView 同步策略。切回 `select` 时清 shape 选中；selection drag 期间暂停 `shapeCandidates` 回写；仅在 Native 进入 shape 编辑拖拽时同步 `activeShape` 到前端。
+- 验证：`npm run web:build`，`cargo check --manifest-path "D:\Desktop\rust\BexoStudio\src-tauri\Cargo.toml"`。
+- 2026-03-17 20:26 调整 [native_interaction_backend_windows.rs](D:/Desktop/rust/BexoStudio/src-tauri/src/services/native_interaction_backend_windows.rs)：selection create/move/resize 的 `handle_mouse_move()` 不再在拖拽过程中持续调用 `sync_window_input_region()` / `SetWindowRgn`。窗口输入区域仍在 `mouse down` 起始和 `mouse up` 提交后同步，避免拖拽中改 region 导致卡死或丢失后续消息。
+- 验证：`cargo check --manifest-path "D:\Desktop\rust\BexoStudio\src-tauri\Cargo.toml"`。
+- 2026-03-17 21:42 调整 [screenshot-overlay-page.tsx](D:/Desktop/rust/BexoStudio/src/pages/screenshot-overlay-page.tsx)：当 `nativeInteractionState.dragMode` 非空时，跳过 `updateNativeInteractionRuntime(...)` 前端回写。验证：`npm run web:build`，`cargo check --manifest-path "D:\Desktop\rust\BexoStudio\src-tauri\Cargo.toml"`。
+- 2026-03-17 21:55 继续收口跨 session runtime 更新。修改 [screenshot-overlay-page.tsx](D:/Desktop/rust/BexoStudio/src/pages/screenshot-overlay-page.tsx)：
+  - 新增 `pendingSessionIdRef` 和 `nativeInteractionRuntimeSeqRef`
+  - `session_updated_event` 到达时立即刷新 `pendingSessionIdRef`
+  - `updateNativeInteractionRuntime(...)` 前增加 session gate：若当前 `session.sessionId` 与 `pendingSessionIdRef/current activeSessionIdRef` 不一致，则直接跳过
+  - 新增前端埋点：
+    - `runtime_update_sent`
+    - `runtime_update_completed`
+    - `runtime_update_failed`
+    - `runtime_update_skipped`
+    - `state_updated_applied`
+    - `state_updated_dropped`
+    - `native-toolbar action_received/action_ignored`
+- 2026-03-17 21:55 修改 [native_interaction_service.rs](D:/Desktop/rust/BexoStudio/src-tauri/src/services/native_interaction_service.rs) 和 [native_interaction.rs](D:/Desktop/rust/BexoStudio/src-tauri/src/commands/native_interaction.rs)：
+  - `SESSION_NOT_PREPARED / SESSION_MISMATCH` 增加结构化日志
+  - 命令层日志补齐 `session_id / visible / mode / candidates`
+- 验证：
+  - `npm run web:build`
+  - `cargo check --manifest-path "D:\Desktop\rust\BexoStudio\src-tauri\Cargo.toml"`
+- 2026-03-17 22:20 继续排查“第二次截图 native toolbar 不出现”。根据 `log.log`：
+  - 第二次截图有 `native_toolbar_session_prepared`
+  - 但没有 `native_toolbar_window_shown`
+  - 说明问题不在 prepare，而在运行时 `visible=true` show 链路
+- 本轮修改：
+  - [screenshot-overlay-page.tsx](D:/Desktop/rust/BexoStudio/src/pages/screenshot-overlay-page.tsx)
+    - 给 NativeToolbar runtime update 加入与 NativeInteraction 对等的 session gate
+    - 新增 `runtime_update_sent/completed/failed/skipped`
+  - [native_toolbar_service.rs](D:/Desktop/rust/BexoStudio/src-tauri/src/services/native_toolbar_service.rs)
+    - 在 `update_runtime()` 中显式记录 `native_toolbar_window_shown/hidden trigger=runtime_update`
+  - [native_toolbar.rs](D:/Desktop/rust/BexoStudio/src-tauri/src/commands/native_toolbar.rs)
+    - 命令层日志补齐 `session_id / visible / active_tool / active_color`
+- 验证：
+  - `npm run web:build`
+  - `cargo check --manifest-path "D:\Desktop\rust\BexoStudio\src-tauri\Cargo.toml"`
+## 2026-03-17 22:40 Native Toolbar Contract Fix
+
+- 修正 `native_toolbar` 运行时契约：Rust `stroke_width` 从 `u32` 改为浮点，避免前端发送浮点线宽时在命令反序列化阶段直接失败。
+- `NativeToolbarWindow` 按钮文案更新改为支持浮点线宽显示。
+- 前端为 native toolbar runtime 增加 payload 去重，避免 render 抖动导致重复命令风暴。
+- 截图运行时移除旧 WebView 主 toolbar 主行，不再让旧 toolbar 作为 NativeToolbar 的运行时兜底层。
+- 已验证：
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `npm run web:build`
+
+- 2026-03-17：从 screenshot-overlay-page.tsx 移除 WebView 运行时主工具栏与复制/保存/取消主行，结束 NativeToolbarWindow 与旧主工具栏并存问题；已通过 npm run web:build。
+
+## 2026-03-18 Screenshot Toolbar WebView Boundary Rollback
+
+- 已创建计划目录：
+  - `scripts/work/2026-03-18-screenshot-toolbar-webview-boundary/task_plan.md`
+  - `scripts/work/2026-03-18-screenshot-toolbar-webview-boundary/notes.md`
+  - `scripts/work/2026-03-18-screenshot-toolbar-webview-boundary/deliverable.md`
+- 已根据用户最新确认，重置截图架构边界：
+  - Native 只保留 `preview / selection / 高频 shape interaction / system input-focus-windowing`
+  - WebView 接回 `toolbar / 属性面板 / 对象操作面板 / 复杂配置 UI`
+- 下一步实施顺序：
+  1. 恢复 WebView toolbar 主行与主操作入口
+  2. 移除前端 Native toolbar runtime 契约
+  3. 清理 Rust Native toolbar command/service/backend 注册
+  4. 同步文档并编译验证
+- 已完成实现：
+  - 修改 `src/pages/screenshot-overlay-page.tsx`
+    - 恢复 WebView 主工具栏：工具切换、颜色、撤销/重做、线宽、复制/保存/取消
+    - 移除 `native_toolbar` 事件监听、runtime update、状态 gating
+  - 修改 `src/lib/command-client.ts`
+    - 删除 Native toolbar 命令和事件桥接
+  - 修改 `src/types/backend.ts`
+    - 删除 Native toolbar 前端类型
+  - 修改 `src-tauri/src/services/screenshot_service.rs`
+    - 去掉 Native toolbar prepare/hide/clear 主路径接线
+  - 修改 `src-tauri/src/app/mod.rs`
+    - 取消 Native toolbar service 初始化与 command 注册
+  - 修改 `src-tauri/src/commands/mod.rs`
+    - 移除 `native_toolbar` 模块导出
+  - 修改 `src-tauri/src/services/mod.rs`
+    - 移除 `native_toolbar` 模块和 re-export
+  - 删除：
+    - `src-tauri/src/commands/native_toolbar.rs`
+    - `src-tauri/src/services/native_toolbar_service.rs`
+    - `src-tauri/src/services/native_toolbar_backend_windows.rs`
+  - 修改 `docs/technical-architecture.md`
+    - 截图专项架构边界改为 WebView toolbar / panels
+  - 修改 `docs/implementation-roadmap.md`
+    - Stage D/E 改为 WebView toolbar consolidation 与 mixed boundary hardening
+- 验证通过：
+  - `npm run web:build`
+  - `cargo check --manifest-path "D:\\Desktop\\rust\\BexoStudio\\src-tauri\\Cargo.toml"`

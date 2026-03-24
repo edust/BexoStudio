@@ -6,8 +6,9 @@ use tauri::State;
 use crate::{
     error::{AppError, CommandResponse},
     services::{
-        NativeInteractionExclusionRect, NativeInteractionMode, NativeInteractionRuntimeUpdateInput,
-        NativeInteractionSelectionRect, NativeInteractionService, NativeInteractionStateView,
+        NativeInteractionEditableShape, NativeInteractionExclusionRect, NativeInteractionMode,
+        NativeInteractionRuntimeUpdateInput, NativeInteractionSelectionRect,
+        NativeInteractionService, NativeInteractionStateView,
     },
 };
 
@@ -21,6 +22,9 @@ pub struct UpdateNativeInteractionRuntimePayload {
     #[serde(default = "default_native_interaction_mode")]
     pub mode: NativeInteractionMode,
     pub selection: Option<NativeInteractionSelectionRect>,
+    pub active_shape: Option<NativeInteractionEditableShape>,
+    #[serde(default)]
+    pub shape_candidates: Vec<NativeInteractionEditableShape>,
     pub annotation_color: Option<String>,
     pub annotation_stroke_width: Option<f64>,
 }
@@ -60,19 +64,26 @@ pub async fn update_native_interaction_runtime(
     input: UpdateNativeInteractionRuntimePayload,
 ) -> Result<CommandResponse<NativeInteractionStateView>, AppError> {
     let started_at = Instant::now();
+    let request_session_id = input.session_id.clone();
+    let request_visible = input.visible;
+    let request_mode = input.mode;
+    let request_shape_candidates = input.shape_candidates.len();
     match native_interaction_service.update_runtime(NativeInteractionRuntimeUpdateInput {
         session_id: input.session_id,
         visible: input.visible,
         exclusion_rects: input.exclusion_rects,
         mode: input.mode,
         selection: input.selection,
+        active_shape: input.active_shape,
+        shape_candidates: input.shape_candidates,
         annotation_color: input.annotation_color,
         annotation_stroke_width: input.annotation_stroke_width,
     }) {
         Ok(data) => {
             log::debug!(
                 target: "bexo::command::native_interaction",
-                "update_native_interaction_runtime completed lifecycle_state={} has_active_session={} selection_revision={} total_ms={}",
+                "update_native_interaction_runtime completed session_id={} lifecycle_state={} has_active_session={} selection_revision={} total_ms={}",
+                request_session_id,
                 data.lifecycle_state,
                 data.has_active_session,
                 data.selection_revision,
@@ -83,7 +94,11 @@ pub async fn update_native_interaction_runtime(
         Err(error) => {
             log::error!(
                 target: "bexo::command::native_interaction",
-                "update_native_interaction_runtime failed total_ms={} reason={}",
+                "update_native_interaction_runtime failed session_id={} visible={} mode={} candidates={} total_ms={} reason={}",
+                request_session_id,
+                request_visible,
+                request_mode.as_str(),
+                request_shape_candidates,
                 started_at.elapsed().as_millis(),
                 error
             );

@@ -11,33 +11,36 @@ use windows::core::w;
 use windows_sys::Win32::{
     Foundation::{GetLastError, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM},
     Graphics::Gdi::{
-        CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, ReleaseDC,
-        SelectObject, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
-        BLENDFUNCTION, DIB_RGB_COLORS, HDC, HGDIOBJ,
+        CombineRgn, CreateCompatibleDC, CreateDIBSection, CreateRectRgn, DeleteDC, DeleteObject,
+        GetDC, ReleaseDC, SelectObject, SetWindowRgn, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO,
+        BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HDC, HGDIOBJ, RGN_DIFF,
     },
     System::LibraryLoader::GetModuleHandleW,
-    UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
-    UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, LoadCursorW,
-        RegisterClassExW, SetCursor, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-        UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, HWND_TOPMOST, IDC_ARROW,
-        IDC_CROSS, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE,
-        SWP_HIDEWINDOW, SWP_NOACTIVATE, SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA,
-        WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY,
-        WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    UI::{
+        Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
+        WindowsAndMessaging::{
+            CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, LoadCursorW,
+            RegisterClassExW, SetCursor, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+            UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, HTCLIENT, HTTRANSPARENT,
+            HWND_TOPMOST, IDC_ARROW, IDC_CROSS, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
+            IDC_SIZENWSE, IDC_SIZEWE, SWP_HIDEWINDOW, SWP_NOACTIVATE, SW_HIDE, SW_SHOWNOACTIVATE,
+            ULW_ALPHA, WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE,
+            WM_NCDESTROY, WM_NCHITTEST, WM_SETCURSOR, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
+            WS_EX_TOPMOST, WS_POPUP,
+        },
     },
 };
 
 use crate::{
     error::{AppError, AppResult},
     services::native_interaction_service::{
-        NativeInteractionBackendEvent, NativeInteractionDragMode, NativeInteractionEventSink,
-        NativeInteractionExclusionRect, NativeInteractionHitRegion, NativeInteractionMode,
-        NativeInteractionRuntimeUpdateInput, NativeInteractionShapeAnnotationCommittedEvent,
-        NativeInteractionShapeAnnotationKind,
+        NativeInteractionBackendEvent, NativeInteractionDragMode, NativeInteractionEditableShape,
+        NativeInteractionEventSink, NativeInteractionExclusionRect, NativeInteractionHitRegion,
+        NativeInteractionMode, NativeInteractionRuntimeUpdateInput,
         NativeInteractionSelectionHandle, NativeInteractionSelectionPoint,
         NativeInteractionSelectionRect, NativeInteractionSelectionSnapshot,
-        NativeInteractionSessionSpec,
+        NativeInteractionSessionSpec, NativeInteractionShapeAnnotationCommittedEvent,
+        NativeInteractionShapeAnnotationKind, NativeInteractionShapeAnnotationUpdatedEvent,
     },
 };
 
@@ -54,6 +57,7 @@ const MIN_SELECTION_SIZE_LOGICAL: f64 = 8.0;
 const HANDLE_SIZE_LOGICAL: f64 = 10.0;
 const BORDER_THICKNESS_LOGICAL: f64 = 2.0;
 const NATIVE_INTERACTION_EVENT_THROTTLE_MS: u128 = 16;
+const ARROW_HEAD_LENGTH_MULTIPLIER: f64 = 4.0;
 
 pub struct NativeInteractionWindowsBackend {
     hwnd: HWND,
@@ -109,10 +113,32 @@ struct PhysicalRect {
     height: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PhysicalArrowDraft {
+    start_x: f64,
+    start_y: f64,
+    end_x: f64,
+    end_y: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct PhysicalShapeAnnotation {
+    id: String,
+    kind: NativeInteractionShapeAnnotationKind,
+    color_hex: String,
+    color: [u8; 4],
+    stroke_width_physical: i32,
+    start_x: f64,
+    start_y: f64,
+    end_x: f64,
+    end_y: f64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NativeInteractionCursorKind {
     Crosshair,
     Move,
+    NotAllowed,
     ResizeNs,
     ResizeWe,
     ResizeNwse,
@@ -128,12 +154,19 @@ struct InteractionWindowSharedState {
     rect_annotation_color: [u8; 4],
     rect_annotation_stroke_width_physical: i32,
     rect_annotation_draft_physical: Option<PhysicalRect>,
+    line_annotation_draft_physical: Option<PhysicalArrowDraft>,
+    arrow_annotation_draft_physical: Option<PhysicalArrowDraft>,
+    active_shape_physical: Option<PhysicalShapeAnnotation>,
+    active_shape_draft_physical: Option<PhysicalShapeAnnotation>,
+    shape_candidates_physical: Vec<PhysicalShapeAnnotation>,
     hovered_hit_region: NativeInteractionHitRegion,
     drag_mode: Option<NativeInteractionDragMode>,
     selection_revision: u64,
+    active_shape_revision: u64,
     rect_draft_revision: u64,
     drag_origin_point: Option<(i32, i32)>,
     drag_origin_selection: Option<PhysicalRect>,
+    drag_origin_shape: Option<PhysicalShapeAnnotation>,
     drag_started_at: Option<Instant>,
     pixel_buffer: Vec<u8>,
     base_mask_buffer: Vec<u8>,
@@ -157,12 +190,19 @@ impl Default for InteractionWindowSharedState {
             rect_annotation_color: BORDER_COLOR,
             rect_annotation_stroke_width_physical: 2,
             rect_annotation_draft_physical: None,
+            line_annotation_draft_physical: None,
+            arrow_annotation_draft_physical: None,
+            active_shape_physical: None,
+            active_shape_draft_physical: None,
+            shape_candidates_physical: Vec::new(),
             hovered_hit_region: NativeInteractionHitRegion::None,
             drag_mode: None,
             selection_revision: 0,
+            active_shape_revision: 0,
             rect_draft_revision: 0,
             drag_origin_point: None,
             drag_origin_selection: None,
+            drag_origin_shape: None,
             drag_started_at: None,
             pixel_buffer: Vec::new(),
             base_mask_buffer: Vec::new(),
@@ -368,12 +408,19 @@ impl NativeInteractionWindowsBackend {
             shared.rect_annotation_stroke_width_physical =
                 logical_to_physical(BORDER_THICKNESS_LOGICAL, session.scale_factor).max(1);
             shared.rect_annotation_draft_physical = None;
+            shared.line_annotation_draft_physical = None;
+            shared.arrow_annotation_draft_physical = None;
+            shared.active_shape_physical = None;
+            shared.active_shape_draft_physical = None;
+            shared.shape_candidates_physical.clear();
             shared.hovered_hit_region = NativeInteractionHitRegion::None;
             shared.drag_mode = None;
             shared.drag_origin_point = None;
             shared.drag_origin_selection = None;
+            shared.drag_origin_shape = None;
             shared.drag_started_at = None;
             shared.selection_revision = 0;
+            shared.active_shape_revision = 0;
             shared.rect_draft_revision = 0;
             shared.drag_present_samples = 0;
             shared.drag_present_total_ms = 0;
@@ -381,8 +428,8 @@ impl NativeInteractionWindowsBackend {
             shared.last_cursor_kind = NativeInteractionCursorKind::Crosshair;
             shared.last_state_event_ms = None;
             ensure_pixel_buffer(&mut shared, window_width, window_height)?;
+            sync_window_input_region(self.hwnd, &shared)?;
         }
-
         let present_metrics = present_interaction_surface(self.hwnd, &self.shared_state)?;
         let present_ms = present_metrics.total_ms;
 
@@ -427,9 +474,13 @@ impl NativeInteractionWindowsBackend {
         self.visible = false;
         if let Ok(mut shared) = self.lock_state() {
             shared.rect_annotation_draft_physical = None;
+            shared.line_annotation_draft_physical = None;
+            shared.arrow_annotation_draft_physical = None;
+            shared.active_shape_draft_physical = None;
             shared.drag_mode = None;
             shared.drag_origin_point = None;
             shared.drag_origin_selection = None;
+            shared.drag_origin_shape = None;
             shared.drag_started_at = None;
             shared.hovered_hit_region = NativeInteractionHitRegion::None;
             shared.last_cursor_kind = NativeInteractionCursorKind::Crosshair;
@@ -443,12 +494,19 @@ impl NativeInteractionWindowsBackend {
         shared.interaction_mode = NativeInteractionMode::Selection;
         shared.exclusion_rects_physical.clear();
         shared.rect_annotation_draft_physical = None;
+        shared.line_annotation_draft_physical = None;
+        shared.arrow_annotation_draft_physical = None;
+        shared.active_shape_physical = None;
+        shared.active_shape_draft_physical = None;
+        shared.shape_candidates_physical.clear();
         shared.hovered_hit_region = NativeInteractionHitRegion::None;
         shared.drag_mode = None;
         shared.drag_origin_point = None;
         shared.drag_origin_selection = None;
+        shared.drag_origin_shape = None;
         shared.drag_started_at = None;
         shared.selection_revision = 0;
+        shared.active_shape_revision = 0;
         shared.rect_draft_revision = 0;
         shared.drag_present_samples = 0;
         shared.drag_present_total_ms = 0;
@@ -474,6 +532,7 @@ impl NativeInteractionWindowsBackend {
             .iter()
             .filter_map(|rect| logical_to_physical_rect(*rect, &session))
             .collect();
+        sync_window_input_region(self.hwnd, &shared)?;
         drop(shared);
         let _ = present_interaction_surface(self.hwnd, &self.shared_state)?;
         Ok(())
@@ -485,29 +544,64 @@ impl NativeInteractionWindowsBackend {
             return Ok(());
         };
         shared.interaction_mode = input.mode;
-        if let Some(selection) = input.selection.and_then(|value| logical_selection_to_physical(value, &session)) {
+        if let Some(selection) = input
+            .selection
+            .and_then(|value| logical_selection_to_physical(value, &session))
+        {
             if shared.selection_physical != Some(selection) {
                 shared.selection_physical = Some(selection);
                 shared.selection_revision = shared.selection_revision.saturating_add(1);
             }
         }
+        if !matches!(
+            shared.drag_mode,
+            Some(
+                NativeInteractionDragMode::ShapeMoving
+                    | NativeInteractionDragMode::ShapeStartMoving
+                    | NativeInteractionDragMode::ShapeEndMoving
+                    | NativeInteractionDragMode::ShapeResizing(_)
+            )
+        ) {
+            let next_active_shape = input
+                .active_shape
+                .as_ref()
+                .and_then(|shape| logical_shape_to_physical(shape, &session));
+            if shared.active_shape_physical != next_active_shape {
+                shared.active_shape_physical = next_active_shape;
+                shared.active_shape_revision = shared.active_shape_revision.saturating_add(1);
+            }
+            if shared.active_shape_physical.is_none()
+                && shared.active_shape_draft_physical.is_some()
+            {
+                shared.active_shape_draft_physical = None;
+                shared.active_shape_revision = shared.active_shape_revision.saturating_add(1);
+            }
+        }
+        shared.shape_candidates_physical = input
+            .shape_candidates
+            .iter()
+            .filter_map(|shape| logical_shape_to_physical(shape, &session))
+            .collect();
         shared.exclusion_rects_physical = input
             .exclusion_rects
             .iter()
             .filter_map(|rect| logical_to_physical_rect(*rect, &session))
             .collect();
-        if let Some(color_hex) = input.annotation_color.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        sync_window_input_region(self.hwnd, &shared)?;
+        if let Some(color_hex) = input
+            .annotation_color
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             if let Some(color) = parse_color_rgba(Some(color_hex)) {
                 shared.rect_annotation_color = color;
                 shared.rect_annotation_color_hex = color_hex.to_string();
             }
         }
         if let Some(stroke_width) = input.annotation_stroke_width {
-            shared.rect_annotation_stroke_width_physical = logical_to_physical(
-                stroke_width.clamp(1.0, 32.0),
-                session.scale_factor,
-            )
-            .max(1);
+            shared.rect_annotation_stroke_width_physical =
+                logical_to_physical(stroke_width.clamp(1.0, 32.0), session.scale_factor).max(1);
         }
         if !matches!(
             input.mode,
@@ -515,6 +609,17 @@ impl NativeInteractionWindowsBackend {
         ) && shared.rect_annotation_draft_physical.take().is_some()
         {
             shared.rect_draft_revision = shared.rect_draft_revision.saturating_add(1);
+        }
+        if input.mode != NativeInteractionMode::LineAnnotation {
+            shared.line_annotation_draft_physical = None;
+        }
+        if input.mode != NativeInteractionMode::ArrowAnnotation {
+            shared.arrow_annotation_draft_physical = None;
+        }
+        if input.mode != NativeInteractionMode::Selection
+            && shared.active_shape_draft_physical.take().is_some()
+        {
+            shared.active_shape_revision = shared.active_shape_revision.saturating_add(1);
         }
         drop(shared);
         let _ = present_interaction_surface(self.hwnd, &self.shared_state)?;
@@ -560,6 +665,27 @@ unsafe extern "system" fn native_interaction_window_proc(
     match message {
         WM_NCCREATE => 1,
         WM_ERASEBKGND => 1,
+        WM_NCHITTEST => {
+            if let Some(shared) = shared_state_from_hwnd(hwnd) {
+                if let Ok(state) = shared.lock() {
+                    let (screen_x, screen_y) = mouse_point_from_lparam(l_param);
+                    if point_hits_exclusion_rects(&state, screen_x, screen_y) {
+                        return HTTRANSPARENT as LRESULT;
+                    }
+                    return HTCLIENT as LRESULT;
+                }
+            }
+            DefWindowProcW(hwnd, message, w_param, l_param)
+        }
+        WM_SETCURSOR => {
+            if let Some(shared) = shared_state_from_hwnd(hwnd) {
+                if let Ok(mut state) = shared.lock() {
+                    force_cursor_for_shared_state(&mut state);
+                    return 1;
+                }
+            }
+            DefWindowProcW(hwnd, message, w_param, l_param)
+        }
         WM_MOUSEMOVE => {
             let (x, y) = mouse_point_from_lparam(l_param);
             if let Some(shared) = shared_state_from_hwnd(hwnd) {
@@ -605,69 +731,178 @@ fn handle_left_button_down(
         return Ok(());
     };
     let (x, y) = clamp_point_to_bounds(x, y, &session);
-    let hit_region = hit_test_selection(&state, x, y);
-    let drag_mode = match state.interaction_mode {
-        NativeInteractionMode::Selection => match hit_region {
-            NativeInteractionHitRegion::Handle(handle) => {
-                NativeInteractionDragMode::Resizing(handle)
-            }
-            NativeInteractionHitRegion::SelectionBody => NativeInteractionDragMode::Moving,
-            NativeInteractionHitRegion::None => NativeInteractionDragMode::Creating,
-        },
-        NativeInteractionMode::RectAnnotation | NativeInteractionMode::EllipseAnnotation => {
-            let Some(selection) = state.selection_physical else {
-                return Ok(());
-            };
-            if !point_in_box(
-                x,
-                y,
-                selection.x.floor() as i32,
-                selection.y.floor() as i32,
-                selection.width.ceil() as i32,
-                selection.height.ceil() as i32,
-            ) {
-                return Ok(());
-            }
-            if matches!(state.interaction_mode, NativeInteractionMode::EllipseAnnotation) {
-                NativeInteractionDragMode::EllipseCreating
-            } else {
-                NativeInteractionDragMode::RectCreating
-            }
+    let selection_hit_region = hit_test_selection(&state, x, y);
+    let active_shape_hit_region = hit_test_active_shape(&state, x, y);
+    let candidate_shape_hit = if active_shape_hit_region == NativeInteractionHitRegion::None {
+        hit_test_shape_candidates(&state, x, y)
+    } else {
+        None
+    };
+    let shape_hit_region = if active_shape_hit_region != NativeInteractionHitRegion::None {
+        active_shape_hit_region
+    } else {
+        candidate_shape_hit
+            .as_ref()
+            .map(|(_, hit)| *hit)
+            .unwrap_or(NativeInteractionHitRegion::None)
+    };
+    if let Some((candidate_shape, _)) = candidate_shape_hit.as_ref() {
+        if state
+            .active_shape_physical
+            .as_ref()
+            .map(|shape| shape.id.as_str())
+            != Some(candidate_shape.id.as_str())
+        {
+            state.active_shape_physical = Some(candidate_shape.clone());
+            state.active_shape_draft_physical = None;
+            state.active_shape_revision = state.active_shape_revision.saturating_add(1);
         }
+    }
+    let drag_mode = match state.interaction_mode {
+        NativeInteractionMode::Selection => match shape_hit_region {
+            NativeInteractionHitRegion::ShapeStart => NativeInteractionDragMode::ShapeStartMoving,
+            NativeInteractionHitRegion::ShapeEnd => NativeInteractionDragMode::ShapeEndMoving,
+            NativeInteractionHitRegion::ShapeBody => NativeInteractionDragMode::ShapeMoving,
+            NativeInteractionHitRegion::ShapeHandle(handle) => {
+                NativeInteractionDragMode::ShapeResizing(handle)
+            }
+            _ => match selection_hit_region {
+                NativeInteractionHitRegion::Handle(handle) => {
+                    NativeInteractionDragMode::Resizing(handle)
+                }
+                NativeInteractionHitRegion::SelectionBody => NativeInteractionDragMode::Moving,
+                NativeInteractionHitRegion::None if state.selection_physical.is_some() => {
+                    return Ok(());
+                }
+                NativeInteractionHitRegion::None => NativeInteractionDragMode::Creating,
+                _ => NativeInteractionDragMode::Creating,
+            },
+        },
+        NativeInteractionMode::LineAnnotation
+        | NativeInteractionMode::RectAnnotation
+        | NativeInteractionMode::EllipseAnnotation
+        | NativeInteractionMode::ArrowAnnotation => match shape_hit_region {
+            NativeInteractionHitRegion::ShapeStart => NativeInteractionDragMode::ShapeStartMoving,
+            NativeInteractionHitRegion::ShapeEnd => NativeInteractionDragMode::ShapeEndMoving,
+            NativeInteractionHitRegion::ShapeBody => NativeInteractionDragMode::ShapeMoving,
+            NativeInteractionHitRegion::ShapeHandle(handle) => {
+                NativeInteractionDragMode::ShapeResizing(handle)
+            }
+            _ => {
+                let Some(selection) = state.selection_physical else {
+                    return Ok(());
+                };
+                if !point_in_box(
+                    x,
+                    y,
+                    selection.x.floor() as i32,
+                    selection.y.floor() as i32,
+                    selection.width.ceil() as i32,
+                    selection.height.ceil() as i32,
+                ) {
+                    return Ok(());
+                }
+                match state.interaction_mode {
+                    NativeInteractionMode::LineAnnotation => {
+                        NativeInteractionDragMode::LineCreating
+                    }
+                    NativeInteractionMode::EllipseAnnotation => {
+                        NativeInteractionDragMode::EllipseCreating
+                    }
+                    NativeInteractionMode::ArrowAnnotation => {
+                        NativeInteractionDragMode::ArrowCreating
+                    }
+                    _ => NativeInteractionDragMode::RectCreating,
+                }
+            }
+        },
     };
 
     if matches!(
         drag_mode,
-        NativeInteractionDragMode::RectCreating | NativeInteractionDragMode::EllipseCreating
+        NativeInteractionDragMode::LineCreating
+            | NativeInteractionDragMode::RectCreating
+            | NativeInteractionDragMode::EllipseCreating
+            | NativeInteractionDragMode::ArrowCreating
     ) {
-        let rect = build_physical_rect(x, y, x + 1, y + 1);
-        if state.rect_annotation_draft_physical != Some(rect) {
-            state.rect_annotation_draft_physical = Some(rect);
-            state.rect_draft_revision = state.rect_draft_revision.saturating_add(1);
+        if matches!(
+            drag_mode,
+            NativeInteractionDragMode::LineCreating | NativeInteractionDragMode::ArrowCreating
+        ) {
+            let draft = PhysicalArrowDraft {
+                start_x: f64::from(x),
+                start_y: f64::from(y),
+                end_x: f64::from(x),
+                end_y: f64::from(y),
+            };
+            if drag_mode == NativeInteractionDragMode::LineCreating {
+                if state.line_annotation_draft_physical != Some(draft) {
+                    state.line_annotation_draft_physical = Some(draft);
+                    state.rect_draft_revision = state.rect_draft_revision.saturating_add(1);
+                }
+                state.arrow_annotation_draft_physical = None;
+            } else if state.arrow_annotation_draft_physical != Some(draft) {
+                state.arrow_annotation_draft_physical = Some(draft);
+                state.rect_draft_revision = state.rect_draft_revision.saturating_add(1);
+            }
+            state.rect_annotation_draft_physical = None;
+        } else {
+            let rect = build_physical_rect(x, y, x + 1, y + 1);
+            if state.rect_annotation_draft_physical != Some(rect) {
+                state.rect_annotation_draft_physical = Some(rect);
+                state.rect_draft_revision = state.rect_draft_revision.saturating_add(1);
+            }
+            state.line_annotation_draft_physical = None;
+            state.arrow_annotation_draft_physical = None;
         }
         state.hovered_hit_region = NativeInteractionHitRegion::None;
     } else {
-        state.hovered_hit_region = hit_region;
+        state.hovered_hit_region = if shape_hit_region != NativeInteractionHitRegion::None {
+            shape_hit_region
+        } else {
+            selection_hit_region
+        };
         if matches!(drag_mode, NativeInteractionDragMode::Creating) {
             state.selection_physical = Some(build_physical_rect(x, y, x + 1, y + 1));
             state.selection_revision = state.selection_revision.saturating_add(1);
         }
+        if matches!(
+            drag_mode,
+            NativeInteractionDragMode::ShapeMoving
+                | NativeInteractionDragMode::ShapeStartMoving
+                | NativeInteractionDragMode::ShapeEndMoving
+                | NativeInteractionDragMode::ShapeResizing(_)
+        ) {
+            state.active_shape_draft_physical = state.active_shape_physical.clone();
+            state.active_shape_revision = state.active_shape_revision.saturating_add(1);
+        }
         state.rect_annotation_draft_physical = None;
+        state.line_annotation_draft_physical = None;
+        state.arrow_annotation_draft_physical = None;
     }
 
     state.drag_mode = Some(drag_mode);
     state.drag_origin_point = Some((x, y));
     state.drag_origin_selection = match drag_mode {
-        NativeInteractionDragMode::RectCreating | NativeInteractionDragMode::EllipseCreating => {
-            state.rect_annotation_draft_physical
-        }
+        NativeInteractionDragMode::LineCreating => state.selection_physical,
+        NativeInteractionDragMode::RectCreating
+        | NativeInteractionDragMode::EllipseCreating
+        | NativeInteractionDragMode::ArrowCreating => state.rect_annotation_draft_physical,
         _ => state.selection_physical,
+    };
+    state.drag_origin_shape = match drag_mode {
+        NativeInteractionDragMode::ShapeMoving
+        | NativeInteractionDragMode::ShapeStartMoving
+        | NativeInteractionDragMode::ShapeEndMoving
+        | NativeInteractionDragMode::ShapeResizing(_) => state.active_shape_physical.clone(),
+        _ => None,
     };
     state.drag_started_at = Some(Instant::now());
     state.drag_present_samples = 0;
     state.drag_present_total_ms = 0;
     state.drag_present_max_ms = 0;
     apply_cursor_for_shared_state(&mut state);
+    sync_window_input_region(hwnd, &state)?;
     let snapshot = snapshot_from_shared(&state);
     let event_sink = state.event_sink.clone();
     let throttled_event = emit_state_updated_from_shared(&mut state, true);
@@ -744,14 +979,74 @@ fn handle_mouse_move(
                 }
             }
             NativeInteractionDragMode::Resizing(handle) => {
-                let next_selection = resize_selection_rect(origin_selection, handle, x, y, &session);
+                let next_selection =
+                    resize_selection_rect(origin_selection, handle, x, y, &session);
                 if state.selection_physical != Some(next_selection) {
                     state.selection_physical = Some(next_selection);
                     state.selection_revision = state.selection_revision.saturating_add(1);
                     state_changed = true;
                 }
             }
-            NativeInteractionDragMode::RectCreating | NativeInteractionDragMode::EllipseCreating => {
+            NativeInteractionDragMode::ShapeMoving => {
+                if let Some(origin_shape) = state.drag_origin_shape.clone() {
+                    let selection_bounds = state.selection_physical.unwrap_or(origin_selection);
+                    let next_shape = move_shape_annotation(
+                        &origin_shape,
+                        x - origin_point.0,
+                        y - origin_point.1,
+                        selection_bounds,
+                    );
+                    if state.active_shape_draft_physical.as_ref() != Some(&next_shape) {
+                        state.active_shape_draft_physical = Some(next_shape);
+                        state.active_shape_revision = state.active_shape_revision.saturating_add(1);
+                        state_changed = true;
+                    }
+                }
+            }
+            NativeInteractionDragMode::ShapeStartMoving => {
+                if let Some(origin_shape) = state.drag_origin_shape.clone() {
+                    let selection_bounds = state.selection_physical.unwrap_or(origin_selection);
+                    let next_shape =
+                        move_shape_endpoint(&origin_shape, true, x, y, selection_bounds);
+                    if state.active_shape_draft_physical.as_ref() != Some(&next_shape) {
+                        state.active_shape_draft_physical = Some(next_shape);
+                        state.active_shape_revision = state.active_shape_revision.saturating_add(1);
+                        state_changed = true;
+                    }
+                }
+            }
+            NativeInteractionDragMode::ShapeEndMoving => {
+                if let Some(origin_shape) = state.drag_origin_shape.clone() {
+                    let selection_bounds = state.selection_physical.unwrap_or(origin_selection);
+                    let next_shape =
+                        move_shape_endpoint(&origin_shape, false, x, y, selection_bounds);
+                    if state.active_shape_draft_physical.as_ref() != Some(&next_shape) {
+                        state.active_shape_draft_physical = Some(next_shape);
+                        state.active_shape_revision = state.active_shape_revision.saturating_add(1);
+                        state_changed = true;
+                    }
+                }
+            }
+            NativeInteractionDragMode::ShapeResizing(handle) => {
+                if let Some(origin_shape) = state.drag_origin_shape.clone() {
+                    let selection_bounds = state.selection_physical.unwrap_or(origin_selection);
+                    let next_shape = resize_shape_annotation(
+                        &origin_shape,
+                        handle,
+                        origin_point,
+                        x,
+                        y,
+                        selection_bounds,
+                    );
+                    if state.active_shape_draft_physical.as_ref() != Some(&next_shape) {
+                        state.active_shape_draft_physical = Some(next_shape);
+                        state.active_shape_revision = state.active_shape_revision.saturating_add(1);
+                        state_changed = true;
+                    }
+                }
+            }
+            NativeInteractionDragMode::RectCreating
+            | NativeInteractionDragMode::EllipseCreating => {
                 let bounds = state.selection_physical.unwrap_or(origin_selection);
                 let next_rect = clamp_rect_to_bounds(
                     build_physical_rect(origin_point.0, origin_point.1, x, y),
@@ -763,9 +1058,50 @@ fn handle_mouse_move(
                     state_changed = true;
                 }
             }
+            NativeInteractionDragMode::LineCreating => {
+                let Some(bounds) = state.selection_physical else {
+                    return Ok(());
+                };
+                let (next_x, next_y) = clamp_point_to_rect(x, y, bounds);
+                let next_draft = PhysicalArrowDraft {
+                    start_x: f64::from(origin_point.0),
+                    start_y: f64::from(origin_point.1),
+                    end_x: f64::from(next_x),
+                    end_y: f64::from(next_y),
+                };
+                if state.line_annotation_draft_physical != Some(next_draft) {
+                    state.line_annotation_draft_physical = Some(next_draft);
+                    state.rect_draft_revision = state.rect_draft_revision.saturating_add(1);
+                    state_changed = true;
+                }
+            }
+            NativeInteractionDragMode::ArrowCreating => {
+                let Some(bounds) = state.selection_physical else {
+                    return Ok(());
+                };
+                let (next_x, next_y) = clamp_point_to_rect(x, y, bounds);
+                let next_draft = PhysicalArrowDraft {
+                    start_x: f64::from(origin_point.0),
+                    start_y: f64::from(origin_point.1),
+                    end_x: f64::from(next_x),
+                    end_y: f64::from(next_y),
+                };
+                if state.arrow_annotation_draft_physical != Some(next_draft) {
+                    state.arrow_annotation_draft_physical = Some(next_draft);
+                    state.rect_draft_revision = state.rect_draft_revision.saturating_add(1);
+                    state_changed = true;
+                }
+            }
         }
         let next_hit = if matches!(state.interaction_mode, NativeInteractionMode::Selection) {
-            hit_test_selection(&state, x, y)
+            let shape_hit = hit_test_active_shape(&state, x, y);
+            if shape_hit != NativeInteractionHitRegion::None {
+                shape_hit
+            } else if let Some((_, candidate_hit)) = hit_test_shape_candidates(&state, x, y) {
+                candidate_hit
+            } else {
+                hit_test_selection(&state, x, y)
+            }
         } else {
             NativeInteractionHitRegion::None
         };
@@ -774,14 +1110,26 @@ fn handle_mouse_move(
             state_changed = true;
         }
     } else if matches!(state.interaction_mode, NativeInteractionMode::Selection) {
-        let next_hit = hit_test_selection(&state, x, y);
+        let shape_hit = hit_test_active_shape(&state, x, y);
+        let next_hit = if shape_hit != NativeInteractionHitRegion::None {
+            shape_hit
+        } else if let Some((_, candidate_hit)) = hit_test_shape_candidates(&state, x, y) {
+            candidate_hit
+        } else {
+            hit_test_selection(&state, x, y)
+        };
         if state.hovered_hit_region != next_hit {
             state.hovered_hit_region = next_hit;
             state_changed = true;
         }
-    } else if state.hovered_hit_region != NativeInteractionHitRegion::None {
-        state.hovered_hit_region = NativeInteractionHitRegion::None;
-        state_changed = true;
+    } else {
+        let next_hit = hit_test_shape_candidates(&state, x, y)
+            .map(|(_, hit)| hit)
+            .unwrap_or(NativeInteractionHitRegion::None);
+        if state.hovered_hit_region != next_hit {
+            state.hovered_hit_region = next_hit;
+            state_changed = true;
+        }
     }
 
     apply_cursor_for_shared_state(&mut state);
@@ -838,13 +1186,19 @@ fn handle_left_button_up(
     let event_sink = state.event_sink.clone();
     let mut backend_event = None;
     if matches!(state.interaction_mode, NativeInteractionMode::Selection) {
-        state.hovered_hit_region = hit_test_selection(&state, x, y);
+        let shape_hit = hit_test_active_shape(&state, x, y);
+        state.hovered_hit_region = if shape_hit != NativeInteractionHitRegion::None {
+            shape_hit
+        } else {
+            hit_test_selection(&state, x, y)
+        };
     } else {
         state.hovered_hit_region = NativeInteractionHitRegion::None;
     }
     let drag_mode = state.drag_mode.take();
     state.drag_origin_point = None;
     state.drag_origin_selection = None;
+    state.drag_origin_shape = None;
     let drag_elapsed_ms = state
         .drag_started_at
         .take()
@@ -858,40 +1212,162 @@ fn handle_left_button_up(
     } else {
         drag_present_total_ms / u128::from(drag_present_samples)
     };
-    if let Some(
-        NativeInteractionDragMode::RectCreating | NativeInteractionDragMode::EllipseCreating,
-    ) = drag_mode
-    {
-        if let Some(draft) = state.rect_annotation_draft_physical.take() {
-            state.rect_draft_revision = state.rect_draft_revision.saturating_add(1);
-            let logical = physical_to_logical(draft, &session);
-            if logical.width >= 2.0 && logical.height >= 2.0 {
-                backend_event = Some(NativeInteractionBackendEvent::ShapeAnnotationCommitted(
-                    NativeInteractionShapeAnnotationCommittedEvent {
-                        session_id: session.session_id.clone(),
-                        kind: if matches!(state.interaction_mode, NativeInteractionMode::EllipseAnnotation) {
-                            NativeInteractionShapeAnnotationKind::Ellipse
-                        } else {
-                            NativeInteractionShapeAnnotationKind::Rect
-                        },
-                        color: state.rect_annotation_color_hex.clone(),
-                        stroke_width: (f64::from(state.rect_annotation_stroke_width_physical)
-                            / f64::from(session.scale_factor.max(0.0001)))
-                            .max(1.0),
-                        start: NativeInteractionSelectionPoint {
-                            x: logical.x,
-                            y: logical.y,
-                        },
-                        end: NativeInteractionSelectionPoint {
-                            x: logical.x + logical.width,
-                            y: logical.y + logical.height,
-                        },
-                    },
-                ));
+    if let Some(drag_mode_value) = drag_mode {
+        match drag_mode_value {
+            NativeInteractionDragMode::LineCreating => {
+                if let Some(draft) = state.line_annotation_draft_physical.take() {
+                    state.rect_draft_revision = state.rect_draft_revision.saturating_add(1);
+                    let logical_start =
+                        physical_point_to_logical(draft.start_x, draft.start_y, &session);
+                    let logical_end = physical_point_to_logical(draft.end_x, draft.end_y, &session);
+                    if line_length(logical_start, logical_end) >= 2.0 {
+                        backend_event =
+                            Some(NativeInteractionBackendEvent::ShapeAnnotationCommitted(
+                                NativeInteractionShapeAnnotationCommittedEvent {
+                                    session_id: session.session_id.clone(),
+                                    kind: NativeInteractionShapeAnnotationKind::Line,
+                                    color: state.rect_annotation_color_hex.clone(),
+                                    stroke_width: (f64::from(
+                                        state.rect_annotation_stroke_width_physical,
+                                    ) / f64::from(session.scale_factor.max(0.0001)))
+                                    .max(1.0),
+                                    start: NativeInteractionSelectionPoint {
+                                        x: logical_start.0,
+                                        y: logical_start.1,
+                                    },
+                                    end: NativeInteractionSelectionPoint {
+                                        x: logical_end.0,
+                                        y: logical_end.1,
+                                    },
+                                },
+                            ));
+                    }
+                }
             }
+            NativeInteractionDragMode::RectCreating
+            | NativeInteractionDragMode::EllipseCreating => {
+                if let Some(draft) = state.rect_annotation_draft_physical.take() {
+                    state.rect_draft_revision = state.rect_draft_revision.saturating_add(1);
+                    let logical = physical_to_logical(draft, &session);
+                    if logical.width >= 2.0 && logical.height >= 2.0 {
+                        backend_event =
+                            Some(NativeInteractionBackendEvent::ShapeAnnotationCommitted(
+                                NativeInteractionShapeAnnotationCommittedEvent {
+                                    session_id: session.session_id.clone(),
+                                    kind: if matches!(
+                                        state.interaction_mode,
+                                        NativeInteractionMode::EllipseAnnotation
+                                    ) {
+                                        NativeInteractionShapeAnnotationKind::Ellipse
+                                    } else {
+                                        NativeInteractionShapeAnnotationKind::Rect
+                                    },
+                                    color: state.rect_annotation_color_hex.clone(),
+                                    stroke_width: (f64::from(
+                                        state.rect_annotation_stroke_width_physical,
+                                    ) / f64::from(session.scale_factor.max(0.0001)))
+                                    .max(1.0),
+                                    start: NativeInteractionSelectionPoint {
+                                        x: logical.x,
+                                        y: logical.y,
+                                    },
+                                    end: NativeInteractionSelectionPoint {
+                                        x: logical.x + logical.width,
+                                        y: logical.y + logical.height,
+                                    },
+                                },
+                            ));
+                    }
+                }
+            }
+            NativeInteractionDragMode::ArrowCreating => {
+                if let Some(draft) = state.arrow_annotation_draft_physical.take() {
+                    state.rect_draft_revision = state.rect_draft_revision.saturating_add(1);
+                    let logical_start =
+                        physical_point_to_logical(draft.start_x, draft.start_y, &session);
+                    let logical_end = physical_point_to_logical(draft.end_x, draft.end_y, &session);
+                    if line_length(logical_start, logical_end) >= 2.0 {
+                        backend_event =
+                            Some(NativeInteractionBackendEvent::ShapeAnnotationCommitted(
+                                NativeInteractionShapeAnnotationCommittedEvent {
+                                    session_id: session.session_id.clone(),
+                                    kind: NativeInteractionShapeAnnotationKind::Arrow,
+                                    color: state.rect_annotation_color_hex.clone(),
+                                    stroke_width: (f64::from(
+                                        state.rect_annotation_stroke_width_physical,
+                                    ) / f64::from(session.scale_factor.max(0.0001)))
+                                    .max(1.0),
+                                    start: NativeInteractionSelectionPoint {
+                                        x: logical_start.0,
+                                        y: logical_start.1,
+                                    },
+                                    end: NativeInteractionSelectionPoint {
+                                        x: logical_end.0,
+                                        y: logical_end.1,
+                                    },
+                                },
+                            ));
+                    }
+                }
+            }
+            NativeInteractionDragMode::ShapeMoving
+            | NativeInteractionDragMode::ShapeStartMoving
+            | NativeInteractionDragMode::ShapeEndMoving
+            | NativeInteractionDragMode::ShapeResizing(_) => {
+                let origin_shape = state.active_shape_physical.clone();
+                if let Some(next_shape) = state.active_shape_draft_physical.clone() {
+                    state.active_shape_physical = Some(next_shape.clone());
+                    if origin_shape.as_ref() != Some(&next_shape) {
+                        state.active_shape_revision = state.active_shape_revision.saturating_add(1);
+                        backend_event =
+                            Some(NativeInteractionBackendEvent::ShapeAnnotationUpdated(
+                                NativeInteractionShapeAnnotationUpdatedEvent {
+                                    session_id: session.session_id.clone(),
+                                    id: next_shape.id.clone(),
+                                    kind: next_shape.kind,
+                                    color: next_shape.color_hex.clone(),
+                                    stroke_width: (f64::from(next_shape.stroke_width_physical)
+                                        / f64::from(session.scale_factor.max(0.0001)))
+                                    .max(1.0),
+                                    start: NativeInteractionSelectionPoint {
+                                        x: physical_point_to_logical(
+                                            next_shape.start_x,
+                                            next_shape.start_y,
+                                            &session,
+                                        )
+                                        .0,
+                                        y: physical_point_to_logical(
+                                            next_shape.start_x,
+                                            next_shape.start_y,
+                                            &session,
+                                        )
+                                        .1,
+                                    },
+                                    end: NativeInteractionSelectionPoint {
+                                        x: physical_point_to_logical(
+                                            next_shape.end_x,
+                                            next_shape.end_y,
+                                            &session,
+                                        )
+                                        .0,
+                                        y: physical_point_to_logical(
+                                            next_shape.end_x,
+                                            next_shape.end_y,
+                                            &session,
+                                        )
+                                        .1,
+                                    },
+                                },
+                            ));
+                    }
+                    state.active_shape_draft_physical = None;
+                }
+            }
+            _ => {}
         }
     }
     apply_cursor_for_shared_state(&mut state);
+    sync_window_input_region(hwnd, &state)?;
     let snapshot = snapshot_from_shared(&state);
     let state_event = emit_state_updated_from_shared(&mut state, true);
     let session_id = session.session_id.clone();
@@ -1067,6 +1543,17 @@ fn render_selection_overlay(
         }
     }
 
+    if let Some(active_shape) = current_active_shape(state).cloned() {
+        draw_shape_annotation(&mut state.pixel_buffer, width, height, &active_shape);
+        draw_shape_annotation_handles(
+            &mut state.pixel_buffer,
+            width,
+            height,
+            &active_shape,
+            session.scale_factor,
+        );
+    }
+
     if let Some(rect_draft) = state.rect_annotation_draft_physical {
         let fill_color = [
             state.rect_annotation_color[0],
@@ -1074,7 +1561,10 @@ fn render_selection_overlay(
             state.rect_annotation_color[2],
             RECT_ANNOTATION_FILL_ALPHA,
         ];
-        if matches!(state.interaction_mode, NativeInteractionMode::EllipseAnnotation) {
+        if matches!(
+            state.interaction_mode,
+            NativeInteractionMode::EllipseAnnotation
+        ) {
             fill_ellipse(
                 &mut state.pixel_buffer,
                 width,
@@ -1147,6 +1637,31 @@ fn render_selection_overlay(
                 state.rect_annotation_color,
             );
         }
+    }
+
+    if let Some(arrow_draft) = state.arrow_annotation_draft_physical {
+        draw_arrow(
+            &mut state.pixel_buffer,
+            width,
+            height,
+            arrow_draft,
+            state.rect_annotation_stroke_width_physical.max(1),
+            state.rect_annotation_color,
+        );
+    }
+
+    if let Some(line_draft) = state.line_annotation_draft_physical {
+        draw_line_segment(
+            &mut state.pixel_buffer,
+            width,
+            height,
+            line_draft.start_x,
+            line_draft.start_y,
+            line_draft.end_x,
+            line_draft.end_y,
+            state.rect_annotation_stroke_width_physical.max(1),
+            state.rect_annotation_color,
+        );
     }
 
     for exclusion in &state.exclusion_rects_physical {
@@ -1402,6 +1917,21 @@ fn snapshot_from_shared(
             .as_ref()
             .map(|session| physical_to_logical(rect, session))
     });
+    let active_shape = state.active_shape_physical.as_ref().and_then(|shape| {
+        state
+            .session
+            .as_ref()
+            .map(|session| physical_shape_to_logical(shape, session))
+    });
+    let active_shape_draft = state
+        .active_shape_draft_physical
+        .as_ref()
+        .and_then(|shape| {
+            state
+                .session
+                .as_ref()
+                .map(|session| physical_shape_to_logical(shape, session))
+        });
     let rect_draft = state.rect_annotation_draft_physical.and_then(|rect| {
         state
             .session
@@ -1410,9 +1940,12 @@ fn snapshot_from_shared(
     });
     NativeInteractionSelectionSnapshot {
         selection,
+        active_shape,
+        active_shape_draft,
         hovered_hit_region: state.hovered_hit_region,
         drag_mode: state.drag_mode,
         selection_revision: state.selection_revision,
+        active_shape_revision: state.active_shape_revision,
         interaction_mode: state.interaction_mode,
         rect_draft,
     }
@@ -1423,14 +1956,22 @@ fn build_state_updated_event_from_shared(
 ) -> Option<crate::services::NativeInteractionStateUpdatedEvent> {
     let snapshot = snapshot_from_shared(state);
     Some(crate::services::NativeInteractionStateUpdatedEvent {
-        session_id: state.session.as_ref().map(|session| session.session_id.clone()),
-        backend_kind: Some(crate::services::NativeInteractionBackendKind::WindowsLayeredSelectionMvp),
+        session_id: state
+            .session
+            .as_ref()
+            .map(|session| session.session_id.clone()),
+        backend_kind: Some(
+            crate::services::NativeInteractionBackendKind::WindowsLayeredSelectionMvp,
+        ),
         lifecycle_state: "visible".to_string(),
         has_active_session: state.session.is_some(),
         selection: snapshot.selection,
+        active_shape: snapshot.active_shape,
+        active_shape_draft: snapshot.active_shape_draft,
         hovered_hit_region: snapshot.hovered_hit_region.as_str().to_string(),
         drag_mode: snapshot.drag_mode.map(|mode| mode.as_str().to_string()),
         selection_revision: snapshot.selection_revision,
+        active_shape_revision: snapshot.active_shape_revision,
         interaction_mode: snapshot.interaction_mode.as_str().to_string(),
         rect_draft: snapshot.rect_draft,
     })
@@ -1452,7 +1993,10 @@ fn emit_state_updated_from_shared(
     Some(NativeInteractionBackendEvent::StateUpdated(event))
 }
 
-fn emit_backend_event(event_sink: Option<NativeInteractionEventSink>, event: NativeInteractionBackendEvent) {
+fn emit_backend_event(
+    event_sink: Option<NativeInteractionEventSink>,
+    event: NativeInteractionBackendEvent,
+) {
     if let Some(sink) = event_sink {
         sink(event);
     }
@@ -1468,6 +2012,30 @@ fn physical_to_logical(
         y: rect.y / scale,
         width: rect.width / scale,
         height: rect.height / scale,
+    }
+}
+
+fn physical_shape_to_logical(
+    shape: &PhysicalShapeAnnotation,
+    session: &InteractionWindowSession,
+) -> NativeInteractionEditableShape {
+    let logical_start = physical_point_to_logical(shape.start_x, shape.start_y, session);
+    let logical_end = physical_point_to_logical(shape.end_x, shape.end_y, session);
+    NativeInteractionEditableShape {
+        id: shape.id.clone(),
+        kind: shape.kind,
+        color: shape.color_hex.clone(),
+        stroke_width: (f64::from(shape.stroke_width_physical)
+            / f64::from(session.scale_factor.max(0.0001)))
+        .max(1.0),
+        start: NativeInteractionSelectionPoint {
+            x: logical_start.0,
+            y: logical_start.1,
+        },
+        end: NativeInteractionSelectionPoint {
+            x: logical_end.0,
+            y: logical_end.1,
+        },
     }
 }
 
@@ -1502,7 +2070,52 @@ fn logical_selection_to_physical(
     if width <= 0.0 || height <= 0.0 {
         return None;
     }
-    Some(PhysicalRect { x, y, width, height })
+    Some(PhysicalRect {
+        x,
+        y,
+        width,
+        height,
+    })
+}
+
+fn logical_shape_to_physical(
+    shape: &NativeInteractionEditableShape,
+    session: &InteractionWindowSession,
+) -> Option<PhysicalShapeAnnotation> {
+    let start_rect = logical_selection_to_physical(
+        NativeInteractionSelectionRect {
+            x: shape.start.x,
+            y: shape.start.y,
+            width: 1.0 / f64::from(session.scale_factor.max(0.0001)),
+            height: 1.0 / f64::from(session.scale_factor.max(0.0001)),
+        },
+        session,
+    )?;
+    let end_rect = logical_selection_to_physical(
+        NativeInteractionSelectionRect {
+            x: shape.end.x,
+            y: shape.end.y,
+            width: 1.0 / f64::from(session.scale_factor.max(0.0001)),
+            height: 1.0 / f64::from(session.scale_factor.max(0.0001)),
+        },
+        session,
+    )?;
+    let color = parse_color_rgba(Some(shape.color.as_str())).unwrap_or(BORDER_COLOR);
+    Some(PhysicalShapeAnnotation {
+        id: shape.id.clone(),
+        kind: shape.kind,
+        color_hex: shape.color.clone(),
+        color,
+        stroke_width_physical: logical_to_physical(
+            shape.stroke_width.clamp(1.0, 32.0),
+            session.scale_factor,
+        )
+        .max(1),
+        start_x: start_rect.x,
+        start_y: start_rect.y,
+        end_x: end_rect.x,
+        end_y: end_rect.y,
+    })
 }
 
 fn logical_to_physical_rect(
@@ -1580,6 +2193,116 @@ fn hit_test_selection(
         return NativeInteractionHitRegion::SelectionBody;
     }
     NativeInteractionHitRegion::None
+}
+
+fn current_active_shape<'a>(
+    state: &'a InteractionWindowSharedState,
+) -> Option<&'a PhysicalShapeAnnotation> {
+    state
+        .active_shape_draft_physical
+        .as_ref()
+        .or(state.active_shape_physical.as_ref())
+}
+
+fn hit_test_shape(
+    session: &InteractionWindowSession,
+    shape: &PhysicalShapeAnnotation,
+    x: i32,
+    y: i32,
+) -> NativeInteractionHitRegion {
+    match shape.kind {
+        NativeInteractionShapeAnnotationKind::Line
+        | NativeInteractionShapeAnnotationKind::Arrow => {
+            let handle_radius =
+                f64::from(logical_to_physical(HANDLE_SIZE_LOGICAL, session.scale_factor).max(8))
+                    / 2.0;
+            if distance_f64(shape.start_x, shape.start_y, f64::from(x), f64::from(y))
+                <= handle_radius
+            {
+                return NativeInteractionHitRegion::ShapeStart;
+            }
+            if distance_f64(shape.end_x, shape.end_y, f64::from(x), f64::from(y)) <= handle_radius {
+                return NativeInteractionHitRegion::ShapeEnd;
+            }
+            let hit_threshold = f64::from(shape.stroke_width_physical.max(1)) / 2.0 + 6.0;
+            if point_hits_line_segment(
+                f64::from(x),
+                f64::from(y),
+                shape.start_x,
+                shape.start_y,
+                shape.end_x,
+                shape.end_y,
+                hit_threshold,
+            ) {
+                return NativeInteractionHitRegion::ShapeBody;
+            }
+            NativeInteractionHitRegion::None
+        }
+        NativeInteractionShapeAnnotationKind::Rect
+        | NativeInteractionShapeAnnotationKind::Ellipse => {
+            let bounds = bounds_from_shape(shape);
+            for (handle, rect) in handle_hit_boxes(bounds, session.scale_factor) {
+                if point_in_box(
+                    x,
+                    y,
+                    rect.x.floor() as i32,
+                    rect.y.floor() as i32,
+                    rect.width.ceil() as i32,
+                    rect.height.ceil() as i32,
+                ) {
+                    return NativeInteractionHitRegion::ShapeHandle(handle);
+                }
+            }
+            let within_bounds = point_in_box(
+                x,
+                y,
+                bounds.x.floor() as i32,
+                bounds.y.floor() as i32,
+                bounds.width.ceil() as i32,
+                bounds.height.ceil() as i32,
+            );
+            if !within_bounds {
+                return NativeInteractionHitRegion::None;
+            }
+            if shape.kind == NativeInteractionShapeAnnotationKind::Ellipse
+                && !point_in_ellipse(bounds, f64::from(x), f64::from(y))
+            {
+                return NativeInteractionHitRegion::None;
+            }
+            NativeInteractionHitRegion::ShapeBody
+        }
+    }
+}
+
+fn hit_test_active_shape(
+    state: &InteractionWindowSharedState,
+    x: i32,
+    y: i32,
+) -> NativeInteractionHitRegion {
+    let Some(session) = state.session.as_ref() else {
+        return NativeInteractionHitRegion::None;
+    };
+    let Some(shape) = current_active_shape(state) else {
+        return NativeInteractionHitRegion::None;
+    };
+
+    hit_test_shape(session, shape, x, y)
+}
+
+fn hit_test_shape_candidates(
+    state: &InteractionWindowSharedState,
+    x: i32,
+    y: i32,
+) -> Option<(PhysicalShapeAnnotation, NativeInteractionHitRegion)> {
+    let session = state.session.as_ref()?;
+    state
+        .shape_candidates_physical
+        .iter()
+        .rev()
+        .find_map(|shape| {
+            let hit = hit_test_shape(session, shape, x, y);
+            (hit != NativeInteractionHitRegion::None).then(|| (shape.clone(), hit))
+        })
 }
 
 fn clamp_rect_to_bounds(rect: PhysicalRect, bounds: PhysicalRect) -> PhysicalRect {
@@ -1680,6 +2403,142 @@ fn resize_selection_rect(
         width: (right - left).max(min_size),
         height: (bottom - top).max(min_size),
     }
+}
+
+fn bounds_from_shape(shape: &PhysicalShapeAnnotation) -> PhysicalRect {
+    build_physical_rect(
+        shape.start_x.round() as i32,
+        shape.start_y.round() as i32,
+        shape.end_x.round() as i32,
+        shape.end_y.round() as i32,
+    )
+}
+
+fn move_shape_annotation(
+    origin: &PhysicalShapeAnnotation,
+    delta_x: i32,
+    delta_y: i32,
+    selection_bounds: PhysicalRect,
+) -> PhysicalShapeAnnotation {
+    let bounds = bounds_from_shape(origin);
+    let max_x =
+        (selection_bounds.x + selection_bounds.width - bounds.width).max(selection_bounds.x);
+    let max_y =
+        (selection_bounds.y + selection_bounds.height - bounds.height).max(selection_bounds.y);
+    let next_x = (bounds.x + f64::from(delta_x)).clamp(selection_bounds.x, max_x);
+    let next_y = (bounds.y + f64::from(delta_y)).clamp(selection_bounds.y, max_y);
+    let applied_delta_x = next_x - bounds.x;
+    let applied_delta_y = next_y - bounds.y;
+    PhysicalShapeAnnotation {
+        start_x: origin.start_x + applied_delta_x,
+        start_y: origin.start_y + applied_delta_y,
+        end_x: origin.end_x + applied_delta_x,
+        end_y: origin.end_y + applied_delta_y,
+        ..origin.clone()
+    }
+}
+
+fn move_shape_endpoint(
+    origin: &PhysicalShapeAnnotation,
+    move_start: bool,
+    x: i32,
+    y: i32,
+    selection_bounds: PhysicalRect,
+) -> PhysicalShapeAnnotation {
+    let (next_x, next_y) = clamp_point_to_rect(x, y, selection_bounds);
+    let mut next = origin.clone();
+    if move_start {
+        next.start_x = f64::from(next_x);
+        next.start_y = f64::from(next_y);
+    } else {
+        next.end_x = f64::from(next_x);
+        next.end_y = f64::from(next_y);
+    }
+    next
+}
+
+fn resize_shape_annotation(
+    origin: &PhysicalShapeAnnotation,
+    handle: NativeInteractionSelectionHandle,
+    origin_point: (i32, i32),
+    x: i32,
+    y: i32,
+    selection_bounds: PhysicalRect,
+) -> PhysicalShapeAnnotation {
+    let _ = origin_point;
+    let bounds = bounds_from_shape(origin);
+    let session = InteractionWindowSession {
+        session_id: String::new(),
+        physical_x: 0,
+        physical_y: 0,
+        physical_width: selection_bounds.width.ceil().max(1.0) as u32,
+        physical_height: selection_bounds.height.ceil().max(1.0) as u32,
+        scale_factor: 1.0,
+    };
+    let local_origin = PhysicalRect {
+        x: bounds.x - selection_bounds.x,
+        y: bounds.y - selection_bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+    };
+    let resized_local = resize_selection_rect(
+        local_origin,
+        handle,
+        x - selection_bounds.x.round() as i32,
+        y - selection_bounds.y.round() as i32,
+        &session,
+    );
+    let resized = PhysicalRect {
+        x: selection_bounds.x + resized_local.x,
+        y: selection_bounds.y + resized_local.y,
+        width: resized_local.width,
+        height: resized_local.height,
+    };
+    let mut next = origin.clone();
+    next.start_x = resized.x;
+    next.start_y = resized.y;
+    next.end_x = resized.x + resized.width;
+    next.end_y = resized.y + resized.height;
+    next
+}
+
+fn point_hits_line_segment(
+    point_x: f64,
+    point_y: f64,
+    start_x: f64,
+    start_y: f64,
+    end_x: f64,
+    end_y: f64,
+    threshold: f64,
+) -> bool {
+    let delta_x = end_x - start_x;
+    let delta_y = end_y - start_y;
+    let length_squared = delta_x * delta_x + delta_y * delta_y;
+    if length_squared <= f64::EPSILON {
+        return distance_f64(point_x, point_y, start_x, start_y) <= threshold;
+    }
+    let projection =
+        ((point_x - start_x) * delta_x + (point_y - start_y) * delta_y) / length_squared;
+    let t = projection.clamp(0.0, 1.0);
+    let closest_x = start_x + delta_x * t;
+    let closest_y = start_y + delta_y * t;
+    distance_f64(point_x, point_y, closest_x, closest_y) <= threshold
+}
+
+fn point_in_ellipse(bounds: PhysicalRect, point_x: f64, point_y: f64) -> bool {
+    let radius_x = bounds.width.max(1.0) / 2.0;
+    let radius_y = bounds.height.max(1.0) / 2.0;
+    let center_x = bounds.x + radius_x;
+    let center_y = bounds.y + radius_y;
+    let normalized_x = ((point_x - center_x) / radius_x).powi(2);
+    let normalized_y = ((point_y - center_y) / radius_y).powi(2);
+    normalized_x + normalized_y <= 1.0
+}
+
+fn distance_f64(ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
+    let dx = ax - bx;
+    let dy = ay - by;
+    (dx * dx + dy * dy).sqrt()
 }
 
 fn build_physical_rect(x0: i32, y0: i32, x1: i32, y1: i32) -> PhysicalRect {
@@ -1804,6 +2663,28 @@ fn clamp_point_to_bounds(x: i32, y: i32, session: &InteractionWindowSession) -> 
     )
 }
 
+fn clamp_point_to_rect(x: i32, y: i32, bounds: PhysicalRect) -> (i32, i32) {
+    let left = bounds.x.floor() as i32;
+    let top = bounds.y.floor() as i32;
+    let right = (bounds.x + bounds.width).ceil() as i32 - 1;
+    let bottom = (bounds.y + bounds.height).ceil() as i32 - 1;
+    (
+        x.clamp(left, right.max(left)),
+        y.clamp(top, bottom.max(top)),
+    )
+}
+
+fn physical_point_to_logical(x: f64, y: f64, session: &InteractionWindowSession) -> (f64, f64) {
+    let scale = f64::from(session.scale_factor).max(0.0001);
+    (x / scale, y / scale)
+}
+
+fn line_length(start: (f64, f64), end: (f64, f64)) -> f64 {
+    let dx = end.0 - start.0;
+    let dy = end.1 - start.1;
+    (dx * dx + dy * dy).sqrt()
+}
+
 fn parse_color_rgba(color_hex: Option<&str>) -> Option<[u8; 4]> {
     let value = color_hex?.trim().trim_start_matches('#');
     let [r, g, b] = match value.len() {
@@ -1831,20 +2712,38 @@ fn cursor_kind_for_state(state: &InteractionWindowSharedState) -> NativeInteract
             NativeInteractionDragMode::Creating => NativeInteractionCursorKind::Crosshair,
             NativeInteractionDragMode::Moving => NativeInteractionCursorKind::Move,
             NativeInteractionDragMode::Resizing(handle) => cursor_kind_for_handle(handle),
-            NativeInteractionDragMode::RectCreating
-            | NativeInteractionDragMode::EllipseCreating => NativeInteractionCursorKind::Crosshair,
+            NativeInteractionDragMode::ShapeMoving => NativeInteractionCursorKind::Move,
+            NativeInteractionDragMode::ShapeStartMoving
+            | NativeInteractionDragMode::ShapeEndMoving => NativeInteractionCursorKind::Move,
+            NativeInteractionDragMode::ShapeResizing(handle) => cursor_kind_for_handle(handle),
+            NativeInteractionDragMode::LineCreating
+            | NativeInteractionDragMode::RectCreating
+            | NativeInteractionDragMode::EllipseCreating
+            | NativeInteractionDragMode::ArrowCreating => NativeInteractionCursorKind::Crosshair,
         };
     }
 
     match state.interaction_mode {
         NativeInteractionMode::Selection => match state.hovered_hit_region {
-            NativeInteractionHitRegion::None => NativeInteractionCursorKind::Crosshair,
+            NativeInteractionHitRegion::None => {
+                if state.selection_physical.is_some() {
+                    NativeInteractionCursorKind::NotAllowed
+                } else {
+                    NativeInteractionCursorKind::Crosshair
+                }
+            }
             NativeInteractionHitRegion::SelectionBody => NativeInteractionCursorKind::Move,
             NativeInteractionHitRegion::Handle(handle) => cursor_kind_for_handle(handle),
+            NativeInteractionHitRegion::ShapeBody => NativeInteractionCursorKind::Move,
+            NativeInteractionHitRegion::ShapeStart | NativeInteractionHitRegion::ShapeEnd => {
+                NativeInteractionCursorKind::Move
+            }
+            NativeInteractionHitRegion::ShapeHandle(handle) => cursor_kind_for_handle(handle),
         },
-        NativeInteractionMode::RectAnnotation | NativeInteractionMode::EllipseAnnotation => {
-            NativeInteractionCursorKind::Crosshair
-        }
+        NativeInteractionMode::LineAnnotation
+        | NativeInteractionMode::RectAnnotation
+        | NativeInteractionMode::EllipseAnnotation
+        | NativeInteractionMode::ArrowAnnotation => NativeInteractionCursorKind::Crosshair,
     }
 }
 
@@ -1870,10 +2769,22 @@ fn apply_cursor_for_shared_state(state: &mut InteractionWindowSharedState) {
     if state.last_cursor_kind == next_kind {
         return;
     }
+    set_cursor_for_kind(next_kind);
+    state.last_cursor_kind = next_kind;
+}
+
+fn force_cursor_for_shared_state(state: &mut InteractionWindowSharedState) {
+    let next_kind = cursor_kind_for_state(state);
+    set_cursor_for_kind(next_kind);
+    state.last_cursor_kind = next_kind;
+}
+
+fn set_cursor_for_kind(kind: NativeInteractionCursorKind) {
     unsafe {
-        let cursor_id = match next_kind {
+        let cursor_id = match kind {
             NativeInteractionCursorKind::Crosshair => IDC_CROSS,
             NativeInteractionCursorKind::Move => IDC_SIZEALL,
+            NativeInteractionCursorKind::NotAllowed => IDC_NO,
             NativeInteractionCursorKind::ResizeNs => IDC_SIZENS,
             NativeInteractionCursorKind::ResizeWe => IDC_SIZEWE,
             NativeInteractionCursorKind::ResizeNwse => IDC_SIZENWSE,
@@ -1884,7 +2795,6 @@ fn apply_cursor_for_shared_state(state: &mut InteractionWindowSharedState) {
             SetCursor(cursor);
         }
     }
-    state.last_cursor_kind = next_kind;
 }
 
 fn logical_to_physical(value: f64, scale_factor: f32) -> i32 {
@@ -1904,6 +2814,121 @@ fn point_in_box(x: i32, y: i32, left: i32, top: i32, width: i32, height: i32) ->
         && x < left.saturating_add(width.max(0))
         && y >= top
         && y < top.saturating_add(height.max(0))
+}
+
+fn point_hits_exclusion_rects(
+    state: &InteractionWindowSharedState,
+    screen_x: i32,
+    screen_y: i32,
+) -> bool {
+    let Some(session) = state.session.as_ref() else {
+        return false;
+    };
+    let local_x = screen_x.saturating_sub(session.physical_x);
+    let local_y = screen_y.saturating_sub(session.physical_y);
+    state.exclusion_rects_physical.iter().any(|rect| {
+        point_in_box(
+            local_x,
+            local_y,
+            rect.x.floor() as i32,
+            rect.y.floor() as i32,
+            rect.width.ceil() as i32,
+            rect.height.ceil() as i32,
+        )
+    })
+}
+
+fn sync_window_input_region(hwnd: HWND, state: &InteractionWindowSharedState) -> AppResult<()> {
+    let Some(session) = state.session.as_ref() else {
+        return Ok(());
+    };
+
+    unsafe {
+        let base_region =
+            if let Some(input_bounds) = resolve_interaction_input_bounds(state, session) {
+                let left = input_bounds.x.floor().max(0.0) as i32;
+                let top = input_bounds.y.floor().max(0.0) as i32;
+                let right = (input_bounds.x + input_bounds.width)
+                    .ceil()
+                    .min(f64::from(session.physical_width)) as i32;
+                let bottom = (input_bounds.y + input_bounds.height)
+                    .ceil()
+                    .min(f64::from(session.physical_height)) as i32;
+                CreateRectRgn(left, top, right.max(left + 1), bottom.max(top + 1))
+            } else {
+                CreateRectRgn(
+                    0,
+                    0,
+                    session.physical_width.max(1) as i32,
+                    session.physical_height.max(1) as i32,
+                )
+            };
+        if base_region == 0 {
+            return Err(last_error(
+                "NATIVE_INTERACTION_CREATE_REGION_FAILED",
+                "创建 Native Interaction 输入区域失败",
+            ));
+        }
+
+        for rect in &state.exclusion_rects_physical {
+            let left = rect.x.floor().max(0.0) as i32;
+            let top = rect.y.floor().max(0.0) as i32;
+            let right = (rect.x + rect.width)
+                .ceil()
+                .min(f64::from(session.physical_width)) as i32;
+            let bottom = (rect.y + rect.height)
+                .ceil()
+                .min(f64::from(session.physical_height)) as i32;
+            if right <= left || bottom <= top {
+                continue;
+            }
+            let exclusion_region = CreateRectRgn(left, top, right, bottom);
+            if exclusion_region == 0 {
+                DeleteObject(base_region as HGDIOBJ);
+                return Err(last_error(
+                    "NATIVE_INTERACTION_CREATE_REGION_FAILED",
+                    "创建 Native Interaction exclusion 区域失败",
+                ));
+            }
+            CombineRgn(base_region, base_region, exclusion_region, RGN_DIFF);
+            DeleteObject(exclusion_region as HGDIOBJ);
+        }
+
+        if SetWindowRgn(hwnd, base_region, 0) == 0 {
+            DeleteObject(base_region as HGDIOBJ);
+            return Err(last_error(
+                "NATIVE_INTERACTION_SET_WINDOW_REGION_FAILED",
+                "应用 Native Interaction 输入区域失败",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn resolve_interaction_input_bounds(
+    state: &InteractionWindowSharedState,
+    session: &InteractionWindowSession,
+) -> Option<PhysicalRect> {
+    if matches!(state.drag_mode, Some(NativeInteractionDragMode::Creating)) {
+        return None;
+    }
+    let selection = state.selection_physical?;
+    let handle_padding =
+        logical_to_physical(HANDLE_SIZE_LOGICAL, session.scale_factor).max(6) as f64;
+    let border_padding =
+        logical_to_physical(BORDER_THICKNESS_LOGICAL, session.scale_factor).max(1) as f64;
+    let padding = (handle_padding / 2.0 + border_padding).ceil();
+    let left = (selection.x - padding).max(0.0);
+    let top = (selection.y - padding).max(0.0);
+    let right = (selection.x + selection.width + padding).min(f64::from(session.physical_width));
+    let bottom = (selection.y + selection.height + padding).min(f64::from(session.physical_height));
+    Some(PhysicalRect {
+        x: left,
+        y: top,
+        width: (right - left).max(1.0),
+        height: (bottom - top).max(1.0),
+    })
 }
 
 fn fill_rect(
@@ -1950,6 +2975,284 @@ fn clear_rect_transparent(
             buffer[offset + 1] = 0;
             buffer[offset + 2] = 0;
             buffer[offset + 3] = 0;
+        }
+    }
+}
+
+fn draw_arrow(
+    buffer: &mut [u8],
+    width: usize,
+    height: usize,
+    draft: PhysicalArrowDraft,
+    stroke_width: i32,
+    color: [u8; 4],
+) {
+    let thickness = stroke_width.max(1);
+    draw_line_segment(
+        buffer,
+        width,
+        height,
+        draft.start_x,
+        draft.start_y,
+        draft.end_x,
+        draft.end_y,
+        thickness,
+        color,
+    );
+
+    let dx = draft.end_x - draft.start_x;
+    let dy = draft.end_y - draft.start_y;
+    let length = (dx * dx + dy * dy).sqrt();
+    if length < 2.0 {
+        return;
+    }
+
+    let head_length = (f64::from(thickness) * ARROW_HEAD_LENGTH_MULTIPLIER)
+        .max(10.0)
+        .min(length);
+    let base_angle = dy.atan2(dx);
+    let wing_angle = std::f64::consts::PI / 7.0;
+    let left_angle = base_angle + std::f64::consts::PI - wing_angle;
+    let right_angle = base_angle + std::f64::consts::PI + wing_angle;
+    let left_x = draft.end_x + left_angle.cos() * head_length;
+    let left_y = draft.end_y + left_angle.sin() * head_length;
+    let right_x = draft.end_x + right_angle.cos() * head_length;
+    let right_y = draft.end_y + right_angle.sin() * head_length;
+
+    draw_line_segment(
+        buffer,
+        width,
+        height,
+        draft.end_x,
+        draft.end_y,
+        left_x,
+        left_y,
+        thickness,
+        color,
+    );
+    draw_line_segment(
+        buffer,
+        width,
+        height,
+        draft.end_x,
+        draft.end_y,
+        right_x,
+        right_y,
+        thickness,
+        color,
+    );
+}
+
+fn draw_shape_annotation(
+    buffer: &mut [u8],
+    width: usize,
+    height: usize,
+    shape: &PhysicalShapeAnnotation,
+) {
+    match shape.kind {
+        NativeInteractionShapeAnnotationKind::Line => draw_line_segment(
+            buffer,
+            width,
+            height,
+            shape.start_x,
+            shape.start_y,
+            shape.end_x,
+            shape.end_y,
+            shape.stroke_width_physical.max(1),
+            shape.color,
+        ),
+        NativeInteractionShapeAnnotationKind::Arrow => draw_arrow(
+            buffer,
+            width,
+            height,
+            PhysicalArrowDraft {
+                start_x: shape.start_x,
+                start_y: shape.start_y,
+                end_x: shape.end_x,
+                end_y: shape.end_y,
+            },
+            shape.stroke_width_physical.max(1),
+            shape.color,
+        ),
+        NativeInteractionShapeAnnotationKind::Rect => {
+            let bounds = bounds_from_shape(shape);
+            let fill_color = [
+                shape.color[0],
+                shape.color[1],
+                shape.color[2],
+                RECT_ANNOTATION_FILL_ALPHA,
+            ];
+            fill_rect(
+                buffer,
+                width,
+                height,
+                bounds.x.floor() as i32,
+                bounds.y.floor() as i32,
+                bounds.width.ceil() as i32,
+                bounds.height.ceil() as i32,
+                fill_color,
+            );
+            let border = shape.stroke_width_physical.max(1);
+            let left = bounds.x.floor() as i32;
+            let top = bounds.y.floor() as i32;
+            let right = (bounds.x + bounds.width).ceil() as i32;
+            let bottom = (bounds.y + bounds.height).ceil() as i32;
+            fill_rect(
+                buffer,
+                width,
+                height,
+                left,
+                top,
+                (right - left).max(1),
+                border,
+                shape.color,
+            );
+            fill_rect(
+                buffer,
+                width,
+                height,
+                left,
+                (bottom - border).max(top),
+                (right - left).max(1),
+                border,
+                shape.color,
+            );
+            fill_rect(
+                buffer,
+                width,
+                height,
+                left,
+                top,
+                border,
+                (bottom - top).max(1),
+                shape.color,
+            );
+            fill_rect(
+                buffer,
+                width,
+                height,
+                (right - border).max(left),
+                top,
+                border,
+                (bottom - top).max(1),
+                shape.color,
+            );
+        }
+        NativeInteractionShapeAnnotationKind::Ellipse => {
+            let bounds = bounds_from_shape(shape);
+            let fill_color = [
+                shape.color[0],
+                shape.color[1],
+                shape.color[2],
+                RECT_ANNOTATION_FILL_ALPHA,
+            ];
+            fill_ellipse(buffer, width, height, bounds, fill_color);
+            stroke_ellipse(
+                buffer,
+                width,
+                height,
+                bounds,
+                shape.stroke_width_physical.max(1),
+                shape.color,
+            );
+        }
+    }
+}
+
+fn draw_shape_annotation_handles(
+    buffer: &mut [u8],
+    width: usize,
+    height: usize,
+    shape: &PhysicalShapeAnnotation,
+    scale_factor: f32,
+) {
+    match shape.kind {
+        NativeInteractionShapeAnnotationKind::Line
+        | NativeInteractionShapeAnnotationKind::Arrow => {
+            let size = logical_to_physical(HANDLE_SIZE_LOGICAL, scale_factor).max(6) as f64;
+            let half = size / 2.0;
+            for (x, y) in [(shape.start_x, shape.start_y), (shape.end_x, shape.end_y)] {
+                fill_rect(
+                    buffer,
+                    width,
+                    height,
+                    (x - half).floor() as i32,
+                    (y - half).floor() as i32,
+                    size.ceil() as i32,
+                    size.ceil() as i32,
+                    HANDLE_COLOR,
+                );
+            }
+        }
+        NativeInteractionShapeAnnotationKind::Rect
+        | NativeInteractionShapeAnnotationKind::Ellipse => {
+            for handle_rect in handle_rects(bounds_from_shape(shape), scale_factor) {
+                fill_rect(
+                    buffer,
+                    width,
+                    height,
+                    handle_rect.x.floor() as i32,
+                    handle_rect.y.floor() as i32,
+                    handle_rect.width.ceil() as i32,
+                    handle_rect.height.ceil() as i32,
+                    HANDLE_COLOR,
+                );
+            }
+        }
+    }
+}
+
+fn draw_line_segment(
+    buffer: &mut [u8],
+    width: usize,
+    height: usize,
+    start_x: f64,
+    start_y: f64,
+    end_x: f64,
+    end_y: f64,
+    thickness: i32,
+    color: [u8; 4],
+) {
+    let delta_x = end_x - start_x;
+    let delta_y = end_y - start_y;
+    let steps = delta_x.abs().max(delta_y.abs()).ceil() as i32;
+    let radius = (thickness.max(1) as f64 / 2.0).max(0.75);
+    if steps <= 0 {
+        draw_disk(buffer, width, height, start_x, start_y, radius, color);
+        return;
+    }
+    for step in 0..=steps {
+        let progress = f64::from(step) / f64::from(steps);
+        let x = start_x + delta_x * progress;
+        let y = start_y + delta_y * progress;
+        draw_disk(buffer, width, height, x, y, radius, color);
+    }
+}
+
+fn draw_disk(
+    buffer: &mut [u8],
+    width: usize,
+    height: usize,
+    center_x: f64,
+    center_y: f64,
+    radius: f64,
+    color: [u8; 4],
+) {
+    let left = (center_x - radius).floor().max(0.0) as i32;
+    let top = (center_y - radius).floor().max(0.0) as i32;
+    let right = (center_x + radius).ceil().min(width as f64 - 1.0) as i32;
+    let bottom = (center_y + radius).ceil().min(height as f64 - 1.0) as i32;
+    let radius_squared = radius * radius;
+
+    for row in top..=bottom {
+        let row_start = row as usize * width * 4;
+        for column in left..=right {
+            let dx = (f64::from(column) + 0.5) - center_x;
+            let dy = (f64::from(row) + 0.5) - center_y;
+            if dx * dx + dy * dy <= radius_squared {
+                let offset = row_start + column as usize * 4;
+                buffer[offset..offset + 4].copy_from_slice(&color);
+            }
         }
     }
 }
