@@ -38,6 +38,7 @@ import type {
   RestoreRunDetail,
   RestoreRunSummary,
   ScreenshotRenderedImageInput,
+  ScreenshotEscapePressedEvent,
   ScreenshotSelectionInput,
   ScreenshotSelectionRenderView,
   ScreenshotSessionUpdatedEvent,
@@ -283,6 +284,18 @@ export function updateNativeInteractionRuntime(
   });
 }
 
+export function updateNativeInteractionExclusionRects(
+  sessionId: string,
+  exclusionRects: NativeInteractionExclusionRect[],
+) {
+  return invokeCommand<boolean>("update_native_interaction_exclusion_rects", {
+    input: {
+      sessionId,
+      exclusionRects,
+    },
+  });
+}
+
 export async function getScreenshotPreviewRgba(sessionId: string) {
   if (!isTauri()) {
     desktopRuntimeRequired();
@@ -417,6 +430,18 @@ export async function listenToScreenshotSessionUpdatedEvents(
   }
 
   return listen<ScreenshotSessionUpdatedEvent>("screenshot://session-updated", (event) => {
+    handler(event.payload);
+  });
+}
+
+export async function listenToScreenshotEscapePressedEvents(
+  handler: (event: ScreenshotEscapePressedEvent) => void,
+): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    desktopRuntimeRequired();
+  }
+
+  return listen<ScreenshotEscapePressedEvent>("screenshot://escape-pressed", (event) => {
     handler(event.payload);
   });
 }

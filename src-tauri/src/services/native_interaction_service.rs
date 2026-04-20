@@ -665,6 +665,58 @@ impl NativeInteractionService {
         Ok(build_state_view(&state, &selection))
     }
 
+    pub fn update_exclusion_rects(
+        &self,
+        session_id: String,
+        exclusion_rects: Vec<NativeInteractionExclusionRect>,
+    ) -> AppResult<()> {
+        if session_id.trim().is_empty() {
+            return Err(AppError::validation(
+                "native interaction sessionId 不能为空",
+            ));
+        }
+
+        let started_at = Instant::now();
+        let mut state = self.state.lock().map_err(|_| {
+            AppError::new(
+                "NATIVE_INTERACTION_STATE_LOCK_FAILED",
+                "读取 native interaction 状态失败",
+            )
+        })?;
+
+        let active_session_id = match state.active_session.as_ref() {
+            Some(value) => value.session_id.clone(),
+            None => {
+                return Err(AppError::new(
+                    "NATIVE_INTERACTION_SESSION_NOT_PREPARED",
+                    "native interaction 未准备可显示会话",
+                ));
+            }
+        };
+
+        if active_session_id != session_id {
+            return Err(AppError::new(
+                "NATIVE_INTERACTION_SESSION_MISMATCH",
+                "native interaction 会话不匹配",
+            )
+            .with_detail("expectedSessionId", active_session_id)
+            .with_detail("actualSessionId", session_id));
+        }
+
+        update_native_interaction_backend_exclusion_rects(&mut state, &exclusion_rects)?;
+
+        log::debug!(
+            target: "bexo::service::native_interaction",
+            "native_interaction_exclusion_rects_updated session_id={} rects={} lifecycle_state={} total_ms={}",
+            active_session_id,
+            exclusion_rects.len(),
+            state.lifecycle_state.as_str(),
+            started_at.elapsed().as_millis()
+        );
+
+        Ok(())
+    }
+
     pub fn update_runtime(
         &self,
         input: NativeInteractionRuntimeUpdateInput,

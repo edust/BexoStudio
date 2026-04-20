@@ -167,6 +167,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap::get_bootstrap_state,
             commands::native_interaction::get_native_interaction_state,
+            commands::native_interaction::update_native_interaction_exclusion_rects,
             commands::native_interaction::update_native_interaction_runtime,
             commands::preferences::get_app_preferences,
             commands::preferences::update_app_preferences,

@@ -14,8 +14,8 @@ import {
 import { getCurrentWindow, type DragDropEvent } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Button, Checkbox, Dropdown, Empty, Input, Modal, Popconfirm, Tag, Tooltip, Typography } from "antd";
-import { Reorder, useDragControls } from "motion/react";
+import { Button, Checkbox, Dropdown, Empty, Input, Modal, Popconfirm, Tag, Tooltip, Typography, type MenuProps } from "antd";
+import { motion, Reorder, useDragControls } from "motion/react";
 import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { toast } from "sonner";
@@ -63,8 +63,6 @@ type SectionSidebarProps = {
   content: SectionSidebarContent;
 };
 
-const WORKSPACE_REORDER_MAX_ITEMS = 18;
-
 export function SectionSidebar({ content }: SectionSidebarProps) {
   const [query, setQuery] = useState("");
   const [selectedWorkspaceIds, setSelectedWorkspaceIds] = useState<string[]>([]);
@@ -79,6 +77,7 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
   const desktopRuntimeAvailable = hasDesktopRuntime();
   const workspaceDropContainerRef = useRef<HTMLDivElement | null>(null);
   const persistSelectedWorkspaceIdsQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const persistPinnedWorkspaceIdsQueueRef = useRef<Promise<void>>(Promise.resolve());
   const workspaceDropPendingRef = useRef(false);
   const workspaceDropActiveRef = useRef(false);
   const workspaceDropLastInsideAtRef = useRef(0);
@@ -88,6 +87,7 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
     timestamp: number;
   } | null>(null);
   const selectedWorkspaceIdsRef = useRef<string[]>([]);
+  const pinnedWorkspaceIdsRef = useRef<string[]>([]);
   const workspaceItemsRef = useRef<WorkspaceSidebarItem[]>([]);
   const latestOrderedWorkspaceItemsRef = useRef<WorkspaceSidebarItem[]>([]);
   const workspaceDragStartOrderRef = useRef<string[] | null>(null);
@@ -289,7 +289,12 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
     },
   });
   const reorderWorkspacesMutation = useMutation({
-    mutationFn: async ({ nextItems }: { nextItems: WorkspaceSidebarItem[] }) => {
+    mutationFn: async ({
+      nextItems,
+    }: {
+      nextItems: WorkspaceSidebarItem[];
+      successMessage?: string | null;
+    }) => {
       for (const [index, item] of nextItems.entries()) {
         await upsertWorkspace(buildWorkspaceReorderPayload(item.workspace, index));
       }
@@ -298,13 +303,15 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
       setOrderedWorkspaceItems(nextItems);
       latestOrderedWorkspaceItemsRef.current = nextItems;
     },
-    onSuccess: async () => {
+    onSuccess: async (_, variables) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: sidebarWorkspacesQueryKey }),
         queryClient.invalidateQueries({ queryKey: workspacesQueryKey }),
         queryClient.invalidateQueries({ queryKey: recentRestoreTargetsQueryKey }),
       ]);
-      toast.success("工作区顺序已更新");
+      if (variables.successMessage !== null) {
+        toast.success(variables.successMessage ?? "工作区顺序已更新");
+      }
     },
     onError: (error) => {
       setOrderedWorkspaceItems(workspaceItemsRef.current);
@@ -321,6 +328,18 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
     selectedWorkspaceIdsRef.current = selectedWorkspaceIds;
   }, [selectedWorkspaceIds]);
 
+  const persistedPinnedWorkspaceIds = useMemo(
+    () =>
+      normalizeWorkspacePinnedIds(
+        (preferencesQuery.data ?? defaultAppPreferences).workspace.pinnedWorkspaceIds,
+      ),
+    [preferencesQuery.data],
+  );
+
+  useEffect(() => {
+    pinnedWorkspaceIdsRef.current = persistedPinnedWorkspaceIds;
+  }, [persistedPinnedWorkspaceIds]);
+
   const recentRestoreTargetByWorkspaceId = useMemo(() => {
     return new Map(
       (recentRestoreTargetsQuery.data ?? []).map((target) => [target.workspaceId, target] as const),
@@ -328,7 +347,7 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
   }, [recentRestoreTargetsQuery.data]);
 
   const workspaceItems = useMemo<WorkspaceSidebarItem[]>(() => {
-    return (workspaceQuery.data ?? []).map((workspace) => ({
+    const baseItems = (workspaceQuery.data ?? []).map((workspace) => ({
       key: workspace.id,
       label: workspace.name,
       description:
@@ -339,7 +358,9 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
       workspace,
       recentRestoreTarget: recentRestoreTargetByWorkspaceId.get(workspace.id),
     }));
-  }, [recentRestoreTargetByWorkspaceId, workspaceQuery.data]);
+
+    return applyPinnedWorkspaceGrouping(baseItems, persistedPinnedWorkspaceIds);
+  }, [persistedPinnedWorkspaceIds, recentRestoreTargetByWorkspaceId, workspaceQuery.data]);
 
   useEffect(() => {
     workspaceItemsRef.current = workspaceItems;
@@ -392,6 +413,38 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
     [queryClient, updatePreferencesMutation],
   );
 
+  const persistPinnedWorkspaceIds = useCallback(
+    (nextPinnedWorkspaceIds: string[]) => {
+      const normalizedWorkspaceIds = normalizeWorkspacePinnedIds(nextPinnedWorkspaceIds);
+      pinnedWorkspaceIdsRef.current = normalizedWorkspaceIds;
+
+      const optimisticPreferences = withWorkspacePinnedIds(
+        queryClient.getQueryData<AppPreferences>(appPreferencesQueryKey) ?? defaultAppPreferences,
+        normalizedWorkspaceIds,
+      );
+      queryClient.setQueryData(appPreferencesQueryKey, optimisticPreferences);
+
+      persistPinnedWorkspaceIdsQueueRef.current = persistPinnedWorkspaceIdsQueueRef.current
+        .catch(() => undefined)
+        .then(async () => {
+          const basePreferences =
+            queryClient.getQueryData<AppPreferences>(appPreferencesQueryKey) ??
+            defaultAppPreferences;
+          const nextPreferences = withWorkspacePinnedIds(
+            basePreferences,
+            pinnedWorkspaceIdsRef.current,
+          );
+
+          queryClient.setQueryData(appPreferencesQueryKey, nextPreferences);
+          const updatedPreferences = await updatePreferencesMutation.mutateAsync(nextPreferences);
+          queryClient.setQueryData(appPreferencesQueryKey, updatedPreferences);
+        });
+
+      return persistPinnedWorkspaceIdsQueueRef.current;
+    },
+    [queryClient, updatePreferencesMutation],
+  );
+
   useEffect(() => {
     setSelectedWorkspaceIds((current) =>
       current.filter((workspaceId) =>
@@ -434,6 +487,30 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
     content.dataSource,
     orderedWorkspaceItems,
     persistSelectedWorkspaceIds,
+    workspaceQuery.isSuccess,
+  ]);
+
+  useEffect(() => {
+    if (content.dataSource !== "workspaces" || !workspaceQuery.isSuccess) {
+      return;
+    }
+
+    const validWorkspaceIds = new Set(orderedWorkspaceItems.map((item) => item.workspace.id));
+    const filteredPinnedIds = pinnedWorkspaceIdsRef.current.filter((workspaceId) =>
+      validWorkspaceIds.has(workspaceId),
+    );
+
+    if (areStringArraysEqual(filteredPinnedIds, pinnedWorkspaceIdsRef.current)) {
+      return;
+    }
+
+    void persistPinnedWorkspaceIds(filteredPinnedIds).catch((error) => {
+      toast.error(getErrorSummary(error).message);
+    });
+  }, [
+    content.dataSource,
+    orderedWorkspaceItems,
+    persistPinnedWorkspaceIds,
     workspaceQuery.isSuccess,
   ]);
 
@@ -821,9 +898,22 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
     }
   }
 
-  const handlePreviewWorkspaceReorder = useCallback((nextItems: WorkspaceSidebarItem[]) => {
-    latestOrderedWorkspaceItemsRef.current = nextItems;
-    setOrderedWorkspaceItems(nextItems);
+  const handlePreviewWorkspaceReorder = useCallback((nextWorkspaceIds: string[]) => {
+    const currentItems = latestOrderedWorkspaceItemsRef.current;
+    const itemByWorkspaceId = new Map(
+      currentItems.map((item) => [item.workspace.id, item] as const),
+    );
+    const nextItems = nextWorkspaceIds
+      .map((workspaceId) => itemByWorkspaceId.get(workspaceId))
+      .filter((item): item is WorkspaceSidebarItem => Boolean(item));
+
+    if (nextItems.length !== currentItems.length) {
+      return;
+    }
+
+    const normalizedItems = applyPinnedWorkspaceGrouping(nextItems, pinnedWorkspaceIdsRef.current);
+    latestOrderedWorkspaceItemsRef.current = normalizedItems;
+    setOrderedWorkspaceItems(normalizedItems);
   }, []);
 
   const handleWorkspaceDragStart = useCallback(
@@ -860,6 +950,41 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
       return;
     }
   }, [reorderWorkspacesMutation]);
+
+  async function handleWorkspacePinnedChange(workspace: WorkspaceRecord, nextPinned: boolean) {
+    if (reorderWorkspacesMutation.isPending || updatePreferencesMutation.isPending) {
+      return;
+    }
+
+    const currentPinnedIds = pinnedWorkspaceIdsRef.current;
+    const nextPinnedIds = nextPinned
+      ? normalizeWorkspacePinnedIds([workspace.id, ...currentPinnedIds])
+      : currentPinnedIds.filter((workspaceId) => workspaceId !== workspace.id);
+
+    const currentItems = latestOrderedWorkspaceItemsRef.current;
+    const movedToFrontItems = nextPinned
+      ? moveWorkspaceItemToIndex(currentItems, workspace.id, 0)
+      : currentItems;
+    const nextItems = applyPinnedWorkspaceGrouping(movedToFrontItems, nextPinnedIds);
+
+    try {
+      await persistPinnedWorkspaceIds(nextPinnedIds);
+
+      if (!isSameWorkspaceOrder(currentItems.map((item) => item.workspace.id), nextItems)) {
+        await reorderWorkspacesMutation.mutateAsync({
+          nextItems,
+          successMessage: null,
+        });
+      } else {
+        setOrderedWorkspaceItems(nextItems);
+        latestOrderedWorkspaceItemsRef.current = nextItems;
+      }
+
+      toast.success(nextPinned ? `已置顶：${workspace.name}` : `已取消置顶：${workspace.name}`);
+    } catch (error) {
+      toast.error(getErrorSummary(error).message);
+    }
+  }
 
   function handleWorkspaceSelectionChange(workspaceId: string, checked: boolean) {
     const current = selectedWorkspaceIdsRef.current;
@@ -998,13 +1123,10 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
 
   const workspaceReorderEnabled =
     content.dataSource === "workspaces" &&
-    !query.trim() &&
-    orderedWorkspaceItems.length <= WORKSPACE_REORDER_MAX_ITEMS;
+    !query.trim();
   const workspaceReorderTooltip = query.trim()
     ? "搜索过滤时暂不支持拖拽排序"
-    : orderedWorkspaceItems.length > WORKSPACE_REORDER_MAX_ITEMS
-      ? `工作区过多时先关闭拖拽排序，避免滚动卡顿（最多 ${WORKSPACE_REORDER_MAX_ITEMS} 个）`
-      : "拖动调整工作区顺序";
+    : "拖动调整工作区顺序";
   const workspaceActionsBusy =
     registerWorkspaceMutation.isPending ||
     runSelectedWorkspacesMutation.isPending ||
@@ -1075,11 +1197,12 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
         ) : null}
       </div>
 
-        <div
+        <motion.div
         className={cn(
           "min-h-0 flex-1 overflow-y-auto",
           content.dataSource === "workspaces" && "flex flex-col",
         )}
+        layoutScroll={content.dataSource === "workspaces"}
         style={{ contain: "strict" }}
       >
       {content.dataSource === "workspaces" && filteredWorkspaceItems.length ? (
@@ -1091,7 +1214,7 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
                 axis="y"
                 className="flex flex-col gap-[5px]"
                 onReorder={handlePreviewWorkspaceReorder}
-                values={orderedWorkspaceItems}
+                values={orderedWorkspaceItems.map((item) => item.workspace.id)}
               >
                 {orderedWorkspaceItems.map((item) => (
                   <WorkspaceSidebarCard
@@ -1111,6 +1234,9 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
                       void handleOpenWorkspaceInEditor(item.workspace, editorKey)
                     }
                     onOpenTerminal={() => void handleOpenWorkspaceTerminal(item.workspace)}
+                    onTogglePinned={(pinned) =>
+                      void handleWorkspacePinnedChange(item.workspace, pinned)
+                    }
                     onRemove={() => void handleRemoveWorkspace(item.workspace)}
                     onSelect={() =>
                       startTransition(() => setSelectedHomeWorkspaceId(item.workspace.id))
@@ -1133,6 +1259,7 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
                     }
                     removePending={removeWorkspaceMutation.isPending}
                     reorderEnabled
+                    pinned={persistedPinnedWorkspaceIds.includes(item.workspace.id)}
                     themeMode={themeMode}
                     selected={selectedHomeWorkspaceId === item.workspace.id}
                     selectionChecked={selectedWorkspaceIds.includes(item.workspace.id)}
@@ -1158,6 +1285,9 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
                       void handleOpenWorkspaceInEditor(item.workspace, editorKey)
                     }
                     onOpenTerminal={() => void handleOpenWorkspaceTerminal(item.workspace)}
+                    onTogglePinned={(pinned) =>
+                      void handleWorkspacePinnedChange(item.workspace, pinned)
+                    }
                     onRemove={() => void handleRemoveWorkspace(item.workspace)}
                     onSelect={() =>
                       startTransition(() => setSelectedHomeWorkspaceId(item.workspace.id))
@@ -1181,6 +1311,7 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
                     removePending={removeWorkspaceMutation.isPending}
                     reorderEnabled={false}
                     reorderTooltip={workspaceReorderTooltip}
+                    pinned={persistedPinnedWorkspaceIds.includes(item.workspace.id)}
                     themeMode={themeMode}
                     selected={selectedHomeWorkspaceId === item.workspace.id}
                     selectionChecked={selectedWorkspaceIds.includes(item.workspace.id)}
@@ -1252,7 +1383,7 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
           </div>
         </div>
       ) : null}
-      </div>
+      </motion.div>
 
       {content.footerTitle || content.footerDescription ? (
         <div className="mt-[5px] border-t border-[#e6edf5] px-4 py-3">
@@ -1296,6 +1427,7 @@ type WorkspaceSidebarCardProps = {
   onOpenDirectory: () => void;
   onOpenInEditor: (editorKey: WorkspaceEditorKey) => void;
   onOpenTerminal: () => void;
+  onTogglePinned: (pinned: boolean) => void;
   onRemove: () => void;
   onSelect: () => void;
   onSelectionChange: (checked: boolean) => void;
@@ -1306,6 +1438,7 @@ type WorkspaceSidebarCardProps = {
   removePending: boolean;
   reorderEnabled: boolean;
   reorderTooltip?: string;
+  pinned: boolean;
   themeMode: "light" | "dark";
   selected: boolean;
   selectionChecked: boolean;
@@ -1324,6 +1457,7 @@ const WorkspaceSidebarCard = memo(function WorkspaceSidebarCard({
   onOpenDirectory,
   onOpenInEditor,
   onOpenTerminal,
+  onTogglePinned,
   onRemove,
   onSelect,
   onSelectionChange,
@@ -1334,12 +1468,25 @@ const WorkspaceSidebarCard = memo(function WorkspaceSidebarCard({
   removePending,
   reorderEnabled,
   reorderTooltip = "拖动调整工作区顺序",
+  pinned,
   themeMode,
   selected,
   selectionChecked,
   workspaceItem,
 }: WorkspaceSidebarCardProps) {
   const dragControls = useDragControls();
+  const contextMenu = {
+    items: [
+      {
+        key: pinned ? "unpin" : "pin",
+        label: pinned ? "取消置顶" : "置顶",
+      },
+    ],
+    onClick: ({ key, domEvent }) => {
+      domEvent.stopPropagation();
+      onTogglePinned(key === "pin");
+    },
+  } satisfies MenuProps;
   const preferredEditorOption =
     editorOptions.find((option) => option.key === editorKey) ?? editorOptions[0];
   const openEditorTooltip = !desktopRuntimeAvailable
@@ -1542,50 +1689,62 @@ const WorkspaceSidebarCard = memo(function WorkspaceSidebarCard({
 
   if (!reorderEnabled) {
     return (
-      <div
+      <Dropdown menu={contextMenu} trigger={["contextMenu"]}>
+        <div
+          className={cn(
+            "relative cursor-pointer rounded-[12px] border px-3 py-2.5 transition-colors",
+            selected
+              ? "border-[#8fd4ec] bg-[#f4fbfe]"
+              : themeMode === "dark"
+                ? "border-transparent hover:border-[#3c3c3c] hover:bg-[#2a2d2e]"
+                : "border-transparent hover:border-[#d9e2ec] hover:bg-[#f8fafc]",
+          )}
+          onClick={onSelect}
+          onContextMenu={(event) => {
+            onSelect();
+            event.preventDefault();
+          }}
+        >
+          {content}
+        </div>
+      </Dropdown>
+    );
+  }
+
+  return (
+    <Dropdown menu={contextMenu} trigger={["contextMenu"]}>
+      <Reorder.Item
+        as="div"
         className={cn(
-          "cursor-pointer rounded-[12px] border px-3 py-2.5 transition-colors",
+          "relative cursor-pointer rounded-[12px] border px-3 py-2.5 transition-[border-color,background-color,opacity] duration-150",
           selected
             ? "border-[#8fd4ec] bg-[#f4fbfe]"
             : themeMode === "dark"
               ? "border-transparent hover:border-[#3c3c3c] hover:bg-[#2a2d2e]"
               : "border-transparent hover:border-[#d9e2ec] hover:bg-[#f8fafc]",
+          dragging && "border-[#1697c5] bg-[#f0fbff] opacity-95",
         )}
+        dragControls={dragControls}
+        dragListener={false}
+        layout="position"
         onClick={onSelect}
+        onContextMenu={(event) => {
+          onSelect();
+          event.preventDefault();
+        }}
+        onDragEnd={onDragEnd}
+        onDragStart={onDragStart}
+        transition={reorderLayoutTransition}
+        value={workspaceItem.workspace.id}
+        whileDrag={{
+          scale: 1.015,
+          zIndex: 3,
+          boxShadow: "0 22px 44px -28px rgba(22,151,197,0.45)",
+        }}
       >
         {content}
-      </div>
-    );
-  }
-
-  return (
-    <Reorder.Item
-      as="div"
-      className={cn(
-        "cursor-pointer rounded-[12px] border px-3 py-2.5 transition-[border-color,background-color,opacity] duration-150",
-        selected
-          ? "border-[#8fd4ec] bg-[#f4fbfe]"
-          : themeMode === "dark"
-            ? "border-transparent hover:border-[#3c3c3c] hover:bg-[#2a2d2e]"
-            : "border-transparent hover:border-[#d9e2ec] hover:bg-[#f8fafc]",
-        dragging && "border-[#1697c5] bg-[#f0fbff] opacity-95",
-      )}
-      dragControls={dragControls}
-      dragListener={false}
-      layout="position"
-      onClick={onSelect}
-      onDragEnd={onDragEnd}
-      onDragStart={onDragStart}
-      transition={reorderLayoutTransition}
-      value={workspaceItem}
-      whileDrag={{
-        scale: 1.015,
-        zIndex: 3,
-        boxShadow: "0 22px 44px -28px rgba(22,151,197,0.45)",
-      }}
-    >
-      {content}
-    </Reorder.Item>
+      </Reorder.Item>
+    </Dropdown>
   );
 }, (previous, next) =>
   previous.desktopRuntimeAvailable === next.desktopRuntimeAvailable &&
@@ -1598,6 +1757,7 @@ const WorkspaceSidebarCard = memo(function WorkspaceSidebarCard({
   previous.removePending === next.removePending &&
   previous.reorderEnabled === next.reorderEnabled &&
   previous.reorderTooltip === next.reorderTooltip &&
+  previous.pinned === next.pinned &&
   previous.themeMode === next.themeMode &&
   previous.selected === next.selected &&
   previous.selectionChecked === next.selectionChecked &&
@@ -1744,6 +1904,14 @@ function isSidebarRouteActive(pathname: string, href: string) {
 }
 
 function normalizeWorkspaceSelectionIds(workspaceIds: string[]) {
+  return normalizeWorkspacePreferenceIds(workspaceIds);
+}
+
+function normalizeWorkspacePinnedIds(workspaceIds: string[]) {
+  return normalizeWorkspacePreferenceIds(workspaceIds);
+}
+
+function normalizeWorkspacePreferenceIds(workspaceIds: string[]) {
   const seenIds = new Set<string>();
   const normalizedIds: string[] = [];
 
@@ -1825,6 +1993,59 @@ function withWorkspaceSelectedIds(
       selectedWorkspaceIds: normalizeWorkspaceSelectionIds(selectedWorkspaceIds),
     },
   };
+}
+
+function withWorkspacePinnedIds(
+  preferences: AppPreferences,
+  pinnedWorkspaceIds: string[],
+): AppPreferences {
+  return {
+    ...preferences,
+    workspace: {
+      ...preferences.workspace,
+      pinnedWorkspaceIds: normalizeWorkspacePinnedIds(pinnedWorkspaceIds),
+    },
+  };
+}
+
+function applyPinnedWorkspaceGrouping(
+  items: WorkspaceSidebarItem[],
+  pinnedWorkspaceIds: string[],
+) {
+  if (!pinnedWorkspaceIds.length) {
+    return items;
+  }
+
+  const pinnedWorkspaceIdSet = new Set(pinnedWorkspaceIds);
+  const pinnedItems: WorkspaceSidebarItem[] = [];
+  const unpinnedItems: WorkspaceSidebarItem[] = [];
+
+  for (const item of items) {
+    if (pinnedWorkspaceIdSet.has(item.workspace.id)) {
+      pinnedItems.push(item);
+      continue;
+    }
+
+    unpinnedItems.push(item);
+  }
+
+  return [...pinnedItems, ...unpinnedItems];
+}
+
+function moveWorkspaceItemToIndex(
+  items: WorkspaceSidebarItem[],
+  workspaceId: string,
+  targetIndex: number,
+) {
+  const currentIndex = items.findIndex((item) => item.workspace.id === workspaceId);
+  if (currentIndex < 0) {
+    return items;
+  }
+
+  const nextItems = [...items];
+  const [targetItem] = nextItems.splice(currentIndex, 1);
+  nextItems.splice(Math.max(0, Math.min(targetIndex, nextItems.length)), 0, targetItem);
+  return nextItems;
 }
 
 function buildWorkspaceEditorOptions(

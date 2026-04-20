@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub const SCREENSHOT_OVERLAY_WINDOW_LABEL: &str = "screenshot_overlay";
 pub const SCREENSHOT_SESSION_UPDATED_EVENT_NAME: &str = "screenshot://session-updated";
+pub const SCREENSHOT_ESCAPE_PRESSED_EVENT_NAME: &str = "screenshot://escape-pressed";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -141,4 +142,12 @@ pub struct CancelScreenshotSessionResult {
 pub struct ScreenshotSessionUpdatedEvent {
     pub session_id: String,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenshotEscapePressedEvent {
+    pub session_id: String,
+    pub shortcut: String,
+    pub triggered_at: String,
 }

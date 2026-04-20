@@ -76,23 +76,17 @@ export function parseTerminalCommandLine(commandLine: string): ParsedTerminalCom
   const tokens: string[] = [];
   let current = "";
   let quote: "'" | '"' | null = null;
-  let escaped = false;
 
   for (let index = 0; index < normalized.length; index += 1) {
     const character = normalized[index];
 
-    if (escaped) {
-      current += character;
-      escaped = false;
-      continue;
-    }
-
-    if (character === "\\") {
-      escaped = true;
-      continue;
-    }
-
     if (quote) {
+      if (character === "\\" && normalized[index + 1] === quote) {
+        current += quote;
+        index += 1;
+        continue;
+      }
+
       if (character === quote) {
         quote = null;
       } else {
@@ -115,10 +109,6 @@ export function parseTerminalCommandLine(commandLine: string): ParsedTerminalCom
     }
 
     current += character;
-  }
-
-  if (escaped) {
-    current += "\\";
   }
 
   if (quote) {
@@ -197,11 +187,19 @@ export function reorderTerminalCommandTemplates(
 }
 
 function quoteIfNeeded(value: string) {
-  if (!/[\s"'\\]/.test(value)) {
+  if (!/[\s"']/.test(value)) {
     return value;
   }
 
-  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  if (!value.includes('"')) {
+    return `"${value}"`;
+  }
+
+  if (!value.includes("'")) {
+    return `'${value}'`;
+  }
+
+  return `"${value.replace(/"/g, '\\"')}"`;
 }
 
 function resolveTemplateSortOrder(sortOrder: number | undefined, fallbackIndex: number) {

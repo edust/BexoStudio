@@ -1,5 +1,239 @@
 # progress
 
+## 2026-04-20
+- 初始化 `scripts/work/2026-04-20-workspace-pin-context-menu/`：
+  - `task_plan.md`
+  - `notes.md`
+  - `deliverable.md`
+- 已完成首轮定位：
+  - 右键菜单可直接复用 AntD `Dropdown trigger=[\"contextMenu\"]`
+  - `WorkspaceRecord` 只有 `sortOrder`，不足以支撑“取消置顶”
+  - 置顶状态应放入 `AppPreferences.workspace.pinnedWorkspaceIds`
+- 已完成实现：
+  - `src/types/backend.ts` / `src/lib/app-preferences.ts`
+    - 新增 `workspace.pinnedWorkspaceIds`
+  - `src-tauri/src/domain/preferences.rs` / `src-tauri/src/services/preferences_service.rs`
+    - 新增 `pinned_workspace_ids` 与校验
+  - `src/components/shell/section-sidebar.tsx`
+    - 工作区卡片新增右键菜单
+    - 菜单支持 `置顶 / 取消置顶`
+    - 置顶组优先显示，置顶动作会把目标工作区提到顶部并写回排序
+- 验证结果：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"` 通过
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"` 通过
+  - `npm run web:build` 通过
+- 初始化 `scripts/work/2026-04-20-workspace-sidebar-reorder-fix/`：
+  - `task_plan.md`
+  - `notes.md`
+  - `deliverable.md`
+- 已完成首轮定位：
+  - 入口集中在 `src/components/shell/section-sidebar.tsx`
+  - 当前工作区拖拽排序建立在 `motion/react Reorder.Group` 上
+  - 风险点集中在“滚动容器 scroll offset 未被正确计入”和“`value` 传整对象导致拖拽中引用漂移”
+- 已完成实现：
+  - `src/components/shell/section-sidebar.tsx`
+    - `Reorder.Group values` / `Reorder.Item value` 改为稳定的 `workspace.id`
+    - 工作区滚动容器改为 `motion.div layoutScroll`
+    - 恢复长列表拖拽，不再因“工作区太多”禁用
+    - 拖拽卡片补 `relative`，让拖动中的层级生效
+- 验证结果：
+  - `npm run web:build` 通过
+- 初始化 `scripts/work/2026-04-20-terminal-command-special-char-fix/`：
+  - `task_plan.md`
+  - `notes.md`
+  - `deliverable.md`
+- 已完成首轮定位：
+  - `src/lib/terminal-command.ts` 的 `parseTerminalCommandLine` 会吞掉 Windows 路径中的反斜杠
+  - `src-tauri/src/services/workspace_service.rs` 的运行时重组还会再次改写反斜杠和引号
+- 当前修复方向：
+  - 前端改为“仅在引号内支持被引号字符自身的转义”，保留普通路径反斜杠
+  - Rust 运行时改为 PowerShell 友好的 token quoting，避免二次失真
+- 已完成实现：
+  - `src/lib/terminal-command.ts`
+    - 去掉“所有反斜杠都视为 escape”的错误逻辑
+    - 改为仅在引号内支持 `\"` / `\'` 这种同类引号转义
+    - 重建显示字符串时不再双写反斜杠
+  - `src-tauri/src/services/workspace_service.rs`
+    - 终端命令重组改为 `& 'cmd' 'arg1' 'arg2'`
+    - 新增 PowerShell 字面量 quoting 单元测试
+- 验证结果：
+  - `npm run web:build` 通过
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"` 通过
+  - 本地 `esbuild` 临时打包 `src/lib/terminal-command.ts` 后行为验证通过：
+    - `parseTerminalCommandLine('cd "C:\\abcd"') -> {"command":"cd","args":["C:\\abcd"]}`
+    - `buildTerminalCommandLine('python', ['D:\\My App\\main.py', '--port', '3000']) -> python "D:\\My App\\main.py" --port 3000`
+  - Rust 单元测试执行被当前环境阻塞：`0xc0000139 (STATUS_ENTRYPOINT_NOT_FOUND)`
+- 初始化 `scripts/work/2026-04-20-screenshot-outside-click-immediate-freeze/`：
+  - `task_plan.md`
+  - `notes.md`
+  - `deliverable.md`
+- 已完成本轮代码复盘：
+  - `runtime-logs/log.log` 最新尾部没有新的未完成 `runtime_update`，根因继续收窄到前端外部点击路径
+  - `src/pages/screenshot-overlay-page.tsx` 中 `if (!selection || tool === "select")` 吞掉了后续的外部点击分支
+  - 结果是已有选区时，外部单击会在 `pointerdown` 直接进入“重画选区起点”，哪怕用户没有真正拖出新框
+- 已完成修复：
+  - `src/pages/screenshot-overlay-page.tsx`
+    - 新增 `pendingSelectionRedrawOriginRef`
+    - 选区外 `pointerdown` 改为“待判定外部拖拽”而不是立刻 `setDragStart`
+    - 仅当 `pointermove` 超过阈值时才真正进入重画选区
+    - 纯外部点击 `pointerup` 仅清空 pending 状态，不改变当前选区和对象
+- 验证通过：
+  - `npm run web:build`
+- 用户回归后确认：即使“不加对象，只拉一个选区再点外部”也会死。
+- 已复盘最新 `runtime-logs/log.log`：
+  - 冻结前最后关键链路为
+    - `native_interaction_drag_committed ... drag_mode=creating`
+    - `runtime_update_sent seq=2 ... exclusion_rects=1`
+  - 没有对应的 `runtime_update_completed seq=2`
+  - 说明真实卡点是“选区创建刚提交后的第一条 runtime update”，不是对象外点击分支
+- 已完成第二轮修复：
+  - `src/pages/screenshot-overlay-page.tsx`
+    - 新增 `nativeSelectionRuntimeBlockedUntilRef`
+    - selection drag 结束时先同步写 ref，再写 state
+    - runtime update effect 改为读取 ref 作为同步 cooldown 闸门
+    - reset / 新 session / timeout 清理时同步清 ref
+- 第二轮验证通过：
+  - `npm run web:build`
+- 初始化 `scripts/work/2026-04-20-screenshot-outside-click-freeze/`：
+  - `task_plan.md`
+  - `notes.md`
+  - `deliverable.md`
+- 已复盘用户最新冻结日志：
+  - `select` 工具下单击选区外后，日志最终卡在
+    - `runtime_update_sent seq=40 ... visible=true exclusion_rects=1 selection=none`
+  - 结合前端代码确认，根因是：
+    - `pointerdown` 先把当前 `selection` 清空
+    - `pointerup` 对 `<2px` 新框执行 `resetAnnotations()`
+    - 误把“单击外部”当成失败的新选区创建
+- 已完成修复：
+  - `src/pages/screenshot-overlay-page.tsx`
+    - 新增 `selectionRedrawStartedWithSelectionRef`
+    - `select` 工具开始重画选区时，不再在 `pointerdown` 立刻 `setSelection(null)`
+    - 仅当 `pointerup` 形成有效新框时，才提交新选区并 `resetAnnotations()`
+    - 若只是单击外部或极小位移，则保留原选区和现有对象
+- 验证通过：
+  - `npm run web:build`
+- 初始化 `scripts/work/2026-04-20-screenshot-toolbar-icon-rail/`：
+  - `task_plan.md`
+  - `notes.md`
+  - `deliverable.md`
+- 已完成工具栏单行 icon rail 改造：
+  - `src/pages/screenshot-overlay-page.tsx`
+    - 底部 toolbar 改为单行横向 icon rail
+    - 所有按钮改为 icon-only，并接入 hover tooltip
+    - 数值类设置改为 rail 内步进按钮，不再使用多排输入框
+    - `SelectionStatusBar` 拆到 toolbar 上方，避免 toolbar 重新变成多层堆叠
+    - 新增 toolbar 实际宽度测量与水平安全定位，降低靠边溢出
+- 验证通过：
+  - `npm run web:build`
+- 已复盘用户最新崩溃日志：
+  - 第二次移动选区后，Rust 侧 `native_interaction_drag_committed` 已成功落日志
+  - 随后前端连续发出 `runtime_update_sent seq=12/13`
+  - 两个请求都没有完成日志，随后进程退出
+- 当前新的修复目标已切换为：
+  - 撤掉拖拽期 exclusion rect 单独更新
+  - toolbar 拖拽期冻结位置
+  - runtime update 去重与单飞串行
+- 已完成实现：
+  - `src/pages/screenshot-overlay-page.tsx`
+    - 删除拖拽开始时的 `updateNativeInteractionExclusionRects(..., [])`
+    - 新增 Native runtime update 请求去重键
+    - 新增单飞串行 runtime update flush，避免同一 session 并发打进原生命令
+    - toolbar 改为拖拽期间冻结在旧位置，拖拽结束后再更新到新位置
+- 再次验证通过：
+  - `npm run web:build`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+- 读取最新日志后继续收窄：
+  - 当前仍会卡在“划框提交后的第一条 `runtime_update_sent seq=2`”
+  - 用户立即二次点击去拖时，这条 runtime update 还来不及完成
+- 已完成第二轮实现：
+  - `src/pages/screenshot-overlay-page.tsx`
+    - 新增 `NATIVE_SELECTION_RUNTIME_STABILIZE_MS=220`
+    - selection drag 结束后增加短暂 runtime cooldown
+    - cooldown 期间继续冻结 toolbar 位置，不立即恢复 exclusion rect/runtime update
+- 第二轮验证通过：
+  - `npm run web:build`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+- 初始化 `scripts/work/2026-04-20-screenshot-remove-color-controls/`：
+  - `task_plan.md`
+  - `notes.md`
+  - `deliverable.md`
+- 已完成首轮定位：
+  - 颜色入口集中在 `src/pages/screenshot-overlay-page.tsx`
+  - 当前最小改法是“固定默认色 + 删除按钮/交互 + 收口文案”
+- 已完成实现：
+  - `src/pages/screenshot-overlay-page.tsx`
+    - 删除工具栏颜色按钮
+    - 删除 `applyColor(...)` 与相关 `setColor(...)` 同步逻辑
+    - 标注默认色固定为 `#00d08f`
+    - 状态栏与提示文案已去掉颜色能力描述
+- 验证通过：
+  - `npm run web:build`
+- 待用户本机手工确认：
+  - 工具栏没有颜色按钮
+  - 标注仍可创建
+  - 新建对象统一单色
+
+## 2026-04-19
+- 初始化 `scripts/work/2026-04-19-screenshot-selection-visual-hardening/`：
+  - `task_plan.md`
+  - `notes.md`
+  - `deliverable.md`
+- 已完成首轮定位：
+  - Native backend 已有整屏 mask buffer
+  - 遮罩缺失和边线缺段都与 `SetWindowRgn` 裁切有关
+  - 下一步改为“全屏可见 + hit-test 控制局部交互”
+- 已完成实现：
+  - `src-tauri/src/services/native_interaction_backend_windows.rs`
+    - `sync_window_input_region()` 改为全屏 region，不再按选框缩窗
+    - `WM_NCHITTEST` 新增 `point_hits_interaction_input_bounds()`，非交互区返回透明
+    - `build_base_mask_buffer()` 改为灰色半透明遮罩
+  - `src-tauri/src/services/native_interaction_service.rs`
+    - 新增 `update_exclusion_rects(...)`
+  - `src-tauri/src/commands/native_interaction.rs`
+    - 新增 `update_native_interaction_exclusion_rects`
+  - `src-tauri/src/app/mod.rs`
+    - 注册 `update_native_interaction_exclusion_rects`
+  - `src/lib/command-client.ts`
+    - 新增 `updateNativeInteractionExclusionRects(...)`
+  - `src/pages/screenshot-overlay-page.tsx`
+    - 先新增过拖动期间的高频 exclusion rect 更新
+- 编译验证通过：
+  - `npm run web:build`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+- 待用户本机手工确认：
+  - 选区外灰淡遮罩恢复
+  - 拖动/缩放选框时边线不再缺段
+  - 拖动选框时 toolbar 旧位置不再残留黑影
+  - toolbar / text editor exclusion rect 点击透传不回归
+- 2026-04-20 回归修复：
+  - 复盘 `runtime-logs/log.log`，确认同一轮 `drag_mode=creating` 下高频 `exclusion_rects_update_sent` 是新引入回归
+  - `src/pages/screenshot-overlay-page.tsx` 已撤回“拖动中每帧刷新 exclusion rect”
+  - 改为：selection drag 开始时只清空一次 exclusion rect，drag 中隐藏 toolbar，drag 结束后再由正常 runtime update 恢复
+  - 再次验证通过：
+    - `npm run web:build`
+    - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+
+## 2026-04-19
+- 初始化 `scripts/work/2026-04-19-screenshot-mixed-selection-nudge/`：
+  - `task_plan.md`
+  - `notes.md`
+  - `deliverable.md`
+- 已完成首轮代码复核：
+  - 单家族 `nudgeSelected*` 已齐备
+  - mixed selection 已有 drag/layer/clipboard/delete
+  - 下一步直接补 `mixed nudge` 统一入口与状态栏文案
+- 已完成实现：
+  - `src/pages/screenshot-overlay-page.tsx` 新增 `nudgeSelectedMixedObjects`
+  - mixed selection 的 `Arrow* / Shift+Arrow*` 已接入整组微移
+  - mixed selection 组选中提示与状态栏文案已改为反映真实能力
+- 验证通过：
+  - `npm run web:build`
+- 待用户本机手工确认：
+  - 跨家族混选方向键微移
+  - `Shift + Arrow*` 大步长
+  - 微移后 mixed selection 的复制/删除/层级不回归
+
 ## 2026-03-18
 - 初始化 `scripts/work/2026-03-18-screenshot-hotkey-freeze-fix/`：
   - `task_plan.md`
@@ -1558,3 +1792,102 @@ pm run web:build。
 - 验证通过：
   - `npm run web:build`
   - `cargo check --manifest-path "D:\\Desktop\\rust\\BexoStudio\\src-tauri\\Cargo.toml"`
+
+## 2026-04-20 截图选区外点击立即冻结
+
+- 创建并持续维护计划目录：
+  - `scripts/work/2026-04-20-screenshot-outside-click-immediate-freeze/task_plan.md`
+  - `scripts/work/2026-04-20-screenshot-outside-click-immediate-freeze/notes.md`
+  - `scripts/work/2026-04-20-screenshot-outside-click-immediate-freeze/deliverable.md`
+- 已完成前端两轮收口：
+  - `src/pages/screenshot-overlay-page.tsx`
+    - 将“外部单击”与“外部拖拽重画选区”拆分，避免 `pointerdown` 立即进入错误的新选区路径
+    - 新增同步 cooldown ref，挡住 selection commit 后过早的第一条 native runtime update
+- 新增系统侧诊断：
+  - `Get-WinEvent` 确认最新挂起为 `Application Hang 1002 / AppHangB1`
+  - `Report.wer` 指向 `D:\Desktop\rust\BexoStudio\src-tauri\target\debug\bexo-studio.exe`
+  - 与项目日志对照后，确认最新“点选区外”挂起不是新的 JS runtime_update 缺口，而是消息线程级别的卡死
+- 已完成 Rust 侧防阻塞补丁：
+  - `src-tauri/src/services/native_interaction_backend_windows.rs`
+    - `WM_NCHITTEST / WM_SETCURSOR` 改为 `try_lock`，锁竞争时 fail-open
+    - `handle_left_button_down / handle_mouse_move / handle_left_button_up` 改为非阻塞取锁，避免鼠标消息等待共享状态锁
+    - 在 `wm_lbuttondown / wm_lbuttonup` 被锁竞争跳过时补充结构化日志
+- 验证：
+  - `cargo check --manifest-path "D:\\Desktop\\rust\\BexoStudio\\src-tauri\\Cargo.toml"`
+  - `npm run web:build`
+- 继续收口后确认还残留一条消息线程阻塞路径：
+  - `handle_left_button_down / handle_mouse_move / handle_left_button_up` 尾部仍调用阻塞版 `present_interaction_surface()`
+  - 这会在消息线程里重新抢共享锁，仍有机会把 Win32 消息泵卡住
+- 已完成第三轮 Rust 修复：
+  - `src-tauri/src/services/native_interaction_backend_windows.rs`
+    - 新增 `try_present_interaction_surface(...)`
+    - `wm_lbuttondown / wm_mousemove / wm_lbuttonup` 改为非阻塞 present，锁竞争时直接跳过本帧重绘
+- 最新验证通过：
+  - `cargo check --manifest-path "D:\\Desktop\\rust\\BexoStudio\\src-tauri\\Cargo.toml"`
+- 根据用户最新反馈“第一步仍死”，继续复盘最新 `runtime-logs/log.log`：
+  - 日志停在 `runtime_update_completed seq=3`
+  - 没有新的 `state_lock_contended / present_skipped`
+  - 说明冻结点很可能发生在选区外点击被 `HTTRANSPARENT` 透传后的下层窗口栈，而不是当前已加日志的 native handler 分支
+- 已完成第四轮 Rust 收口：
+  - `src-tauri/src/services/native_interaction_backend_windows.rs`
+    - 在 `selection` 模式且已有选区时，`point_hits_interaction_input_bounds(...)` 改为全屏命中
+    - toolbar / text editor exclusion rect 仍透传
+    - 选区外普通点击由 native window 直接 no-op 吞掉，不再往 overlay/WebView 继续透传
+- 最新验证通过：
+  - `cargo check --manifest-path "D:\\Desktop\\rust\\BexoStudio\\src-tauri\\Cargo.toml"`
+- 用户随后回归确认：
+  - 选区外点击已不再冻结
+  - 但 `Esc` 无法退出截图态
+- 已完成 `Esc` 修复：
+  - `src-tauri/src/services/screenshot_service.rs`
+    - 新增会话级 `Escape` hook 绑定
+    - hook 触发后发出 `screenshot://escape-pressed`
+  - `src-tauri/src/domain/screenshot.rs`
+    - 新增 `SCREENSHOT_ESCAPE_PRESSED_EVENT_NAME`
+    - 新增 `ScreenshotEscapePressedEvent`
+  - `src/lib/command-client.ts`
+    - 新增 `listenToScreenshotEscapePressedEvents(...)`
+  - `src/pages/screenshot-overlay-page.tsx`
+    - 抽出 `handleEscapeAction()`
+    - `window.keydown` 与 Rust `screenshot://escape-pressed` 共用同一套分级 `Esc` 处理逻辑
+- 最新验证通过：
+  - `cargo check --manifest-path "D:\\Desktop\\rust\\BexoStudio\\src-tauri\\Cargo.toml"`
+  - `npm run web:build`
+- 用户随后用新构建回归，最新日志确认：
+  - `escape_hook_applied` 已出现
+  - `windows hook config applied binding_count=1` 已出现
+  - 但按下 `Esc` 后仍无 `escape_hook_triggered`
+- 已据此调整实现：
+  - `src-tauri/src/services/screenshot_service.rs`
+    - `Escape` 主路径改为 `tauri-plugin-global-shortcut`
+    - 回调只异步发 `screenshot://escape-pressed`
+    - 不在回调里做同步注销，避免历史锁重入问题
+- 最新验证通过：
+  - `cargo check --manifest-path "D:\\Desktop\\rust\\BexoStudio\\src-tauri\\Cargo.toml"`
+  - `npm run web:build`
+  - `npm run desktop:build:debug`
+- 2026-04-20：收到新需求，要求彻底移除 Settings > Hotkeys 中“截图工具热键（截图界面内）”功能。
+- 已完成本轮代码检索与拆除方案确认：
+  - 设置页 UI、前端默认值/类型、overlay 运行时读取、Rust 偏好模型和校验链路均已定位
+  - 决定按“移除可配置化能力，保留 overlay 固定热键”落地
+- 已初始化规划文件：
+  - `scripts/work/2026-04-20-remove-screenshot-tool-hotkeys/task_plan.md`
+  - `scripts/work/2026-04-20-remove-screenshot-tool-hotkeys/notes.md`
+  - `scripts/work/2026-04-20-remove-screenshot-tool-hotkeys/deliverable.md`
+- 已完成代码收口：
+  - `src/pages/settings-page.tsx`
+    - 删除“截图工具热键（截图界面内）”整块 UI
+    - 删除工具热键草稿状态、保存/恢复默认函数与辅助函数
+  - `src/pages/screenshot-overlay-page.tsx`
+    - 删除运行时读取 `hotkey.screenshotTools`
+    - 恢复固定工具热键映射 `1~5/6~0/n`
+  - `src/lib/app-preferences.ts` / `src/types/backend.ts`
+    - 删除 `hotkey.screenshotTools` 默认值与类型定义
+  - `src-tauri/src/domain/preferences.rs` / `src-tauri/src/domain/mod.rs`
+    - 删除 `screenshot_tools` 偏好字段与导出
+  - `src-tauri/src/services/preferences_service.rs`
+    - 删除截图工具热键 sanitize / validate / dedupe / conflict 逻辑与相关测试
+- 最新验证通过：
+  - `cargo fmt --manifest-path "D:\\Desktop\\rust\\BexoStudio\\src-tauri\\Cargo.toml"`
+  - `cargo check --manifest-path "D:\\Desktop\\rust\\BexoStudio\\src-tauri\\Cargo.toml"`
+  - `npm run web:build`

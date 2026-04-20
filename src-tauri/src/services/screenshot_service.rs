@@ -25,6 +25,7 @@ use tauri::{
     window::Color, AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Position, Runtime,
     Size, WebviewUrl, WebviewWindowBuilder,
 };
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::Graphics::Gdi::{
     CreateCompatibleBitmap, CreateCompatibleDC, CreateDCW, DeleteDC, DeleteObject, GetDIBits,
@@ -42,12 +43,12 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use crate::{
     domain::{
         CancelScreenshotSessionResult, CopyScreenshotSelectionResult,
-        SaveScreenshotSelectionResult, ScreenshotImageStatus, ScreenshotMonitorView,
-        ScreenshotPreviewTransport, ScreenshotRenderedImageInput, ScreenshotSelectionInput,
-        ScreenshotSelectionRenderMode, ScreenshotSelectionRenderTile,
+        SaveScreenshotSelectionResult, ScreenshotEscapePressedEvent, ScreenshotImageStatus,
+        ScreenshotMonitorView, ScreenshotPreviewTransport, ScreenshotRenderedImageInput,
+        ScreenshotSelectionInput, ScreenshotSelectionRenderMode, ScreenshotSelectionRenderTile,
         ScreenshotSelectionRenderView, ScreenshotSessionUpdatedEvent, ScreenshotSessionView,
-        StartScreenshotSessionResult, SCREENSHOT_OVERLAY_WINDOW_LABEL,
-        SCREENSHOT_SESSION_UPDATED_EVENT_NAME,
+        StartScreenshotSessionResult, SCREENSHOT_ESCAPE_PRESSED_EVENT_NAME,
+        SCREENSHOT_OVERLAY_WINDOW_LABEL, SCREENSHOT_SESSION_UPDATED_EVENT_NAME,
     },
     error::{AppError, AppResult},
     services::{
@@ -55,6 +56,7 @@ use crate::{
         native_interaction_service::NativeInteractionSessionSpec,
         native_preview_service::{NativePreviewSessionSpec, NativePreviewSourceKind},
         wgc_capture,
+        windows_hook_hotkey::WindowsHookHotkeyManager,
     },
 };
 
@@ -78,6 +80,7 @@ const OVERLAY_TRANSPARENT_BG: Color = Color(0, 0, 0, 0);
 pub struct ScreenshotService {
     state: Arc<Mutex<ScreenshotState>>,
     live_capture: Arc<Mutex<LiveCaptureState>>,
+    escape_hook_manager: Arc<WindowsHookHotkeyManager>,
 }
 
 #[derive(Debug, Default)]
@@ -3328,6 +3331,7 @@ impl ScreenshotService {
         Self {
             state: Arc::new(Mutex::new(ScreenshotState::default())),
             live_capture: Arc::new(Mutex::new(LiveCaptureState::default())),
+            escape_hook_manager: Arc::new(WindowsHookHotkeyManager::new()),
         }
     }
 
@@ -3806,6 +3810,15 @@ impl ScreenshotService {
         }
         let overlay_ready_ms = overlay_started_at.elapsed().as_millis();
 
+        if let Err(error) = self.apply_escape_cancel_hook(app) {
+            log::warn!(
+                target: "bexo::service::screenshot",
+                "apply_escape_cancel_hook_failed session_id={} reason={}",
+                session.id,
+                error
+            );
+        }
+
         let spawn_preview_started_at = Instant::now();
         let preview_spawn_ms =
             if matches!(session.preview_transport, ScreenshotPreviewTransport::File) {
@@ -4231,8 +4244,91 @@ impl ScreenshotService {
             .map(|value| value.as_ref().clone());
         guard.active_session = None;
         drop(guard);
+        self.clear_escape_cancel_hook();
         cleanup_preview_file(stale_preview_path.as_deref());
         Ok(true)
+    }
+
+    fn apply_escape_cancel_hook<R: Runtime>(&self, app: &AppHandle<R>) -> AppResult<()> {
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = app;
+            return Ok(());
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let _ = app.global_shortcut().unregister("Escape");
+
+            let app_handle = app.clone();
+            app.global_shortcut()
+                .on_shortcut("Escape", move |_app, _shortcut, event| {
+                    if event.state != ShortcutState::Pressed {
+                        return;
+                    }
+
+                    let app_handle = app_handle.clone();
+                    std::thread::spawn(move || {
+                        let screenshot_service = app_handle.state::<ScreenshotService>();
+                        match screenshot_service.get_active_session_optional() {
+                            Ok(Some(session)) => {
+                                let payload = ScreenshotEscapePressedEvent {
+                                    session_id: session.id.clone(),
+                                    shortcut: "Escape".to_string(),
+                                    triggered_at: Utc::now().to_rfc3339(),
+                                };
+                                if let Err(error) =
+                                    app_handle.emit(SCREENSHOT_ESCAPE_PRESSED_EVENT_NAME, payload)
+                                {
+                                    log::warn!(
+                                        target: "bexo::service::screenshot",
+                                        "escape_hook_emit_failed session_id={} shortcut=Escape reason={}",
+                                        session.id,
+                                        error
+                                    );
+                                } else {
+                                    log::info!(
+                                        target: "bexo::service::screenshot",
+                                        "escape_hook_triggered session_id={} shortcut=Escape",
+                                        session.id
+                                    );
+                                }
+                            }
+                            Ok(None) => {
+                                log::debug!(
+                                    target: "bexo::service::screenshot",
+                                    "escape_hook_ignored shortcut=Escape reason=no_active_session"
+                                );
+                            }
+                            Err(error) => {
+                                log::warn!(
+                                    target: "bexo::service::screenshot",
+                                    "escape_hook_failed shortcut=Escape reason={}",
+                                    error
+                                );
+                            }
+                        }
+                    });
+                })
+                .map_err(|error| {
+                    AppError::new("SCREENSHOT_ESCAPE_HOOK_REGISTER_FAILED", "注册截图态 Esc 取消热键失败")
+                        .with_detail("reason", error.to_string())
+                })?;
+
+            log::info!(
+                target: "bexo::service::screenshot",
+                "escape_hook_applied shortcut=Escape source=global_shortcut"
+            );
+            Ok(())
+        }
+    }
+
+    fn clear_escape_cancel_hook(&self) {
+        self.escape_hook_manager.clear_bindings();
+        log::info!(
+            target: "bexo::service::screenshot",
+            "escape_hook_cleared"
+        );
     }
 
     fn is_overlay_prewarmed(&self) -> AppResult<bool> {

@@ -29,6 +29,14 @@ pub struct UpdateNativeInteractionRuntimePayload {
     pub annotation_stroke_width: Option<f64>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateNativeInteractionExclusionRectsPayload {
+    pub session_id: String,
+    #[serde(default)]
+    pub exclusion_rects: Vec<NativeInteractionExclusionRect>,
+}
+
 #[tauri::command]
 pub async fn get_native_interaction_state(
     native_interaction_service: State<'_, NativeInteractionService>,
@@ -99,6 +107,41 @@ pub async fn update_native_interaction_runtime(
                 request_visible,
                 request_mode.as_str(),
                 request_shape_candidates,
+                started_at.elapsed().as_millis(),
+                error
+            );
+            Ok(CommandResponse::failure(error))
+        }
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn update_native_interaction_exclusion_rects(
+    native_interaction_service: State<'_, NativeInteractionService>,
+    input: UpdateNativeInteractionExclusionRectsPayload,
+) -> Result<CommandResponse<bool>, AppError> {
+    let started_at = Instant::now();
+    let request_session_id = input.session_id.clone();
+    let request_rects = input.exclusion_rects.len();
+
+    match native_interaction_service.update_exclusion_rects(input.session_id, input.exclusion_rects)
+    {
+        Ok(()) => {
+            log::debug!(
+                target: "bexo::command::native_interaction",
+                "update_native_interaction_exclusion_rects completed session_id={} rects={} total_ms={}",
+                request_session_id,
+                request_rects,
+                started_at.elapsed().as_millis()
+            );
+            Ok(CommandResponse::success(true))
+        }
+        Err(error) => {
+            log::error!(
+                target: "bexo::command::native_interaction",
+                "update_native_interaction_exclusion_rects failed session_id={} rects={} total_ms={} reason={}",
+                request_session_id,
+                request_rects,
                 started_at.elapsed().as_millis(),
                 error
             );

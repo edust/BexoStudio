@@ -13,6 +13,7 @@ export const defaultAppPreferences: AppPreferences = {
   },
   workspace: {
     selectedWorkspaceIds: [],
+    pinnedWorkspaceIds: [],
   },
   startup: {
     launchAtLogin: false,
@@ -20,13 +21,6 @@ export const defaultAppPreferences: AppPreferences = {
   },
   hotkey: {
     screenshotCapture: "Ctrl+Shift+X",
-    screenshotTools: {
-      select: "1",
-      line: "2",
-      rect: "3",
-      ellipse: "4",
-      arrow: "5",
-    },
     voiceInputToggle: null,
     voiceInputHold: null,
   },

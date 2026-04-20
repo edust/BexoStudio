@@ -3,7 +3,7 @@
 use std::{
     mem::{size_of, zeroed},
     ptr::{copy_nonoverlapping, null},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard, TryLockError},
     time::Instant,
 };
 
@@ -48,7 +48,7 @@ const WINDOW_CLASS_NAME: windows::core::PCWSTR = w!("BexoStudioNativeInteraction
 const WINDOW_TITLE: windows::core::PCWSTR = w!("Bexo Studio Native Interaction");
 const INITIAL_WINDOW_WIDTH: i32 = 1;
 const INITIAL_WINDOW_HEIGHT: i32 = 1;
-const MASK_ALPHA: u8 = 112;
+const MASK_COLOR: [u8; 4] = [0x28, 0x28, 0x28, 104];
 const BORDER_COLOR: [u8; 4] = [0x8F, 0xD0, 0x00, 0xFF];
 const HANDLE_COLOR: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xF0];
 const SELECTION_HOLE_ALPHA: u8 = 1;
@@ -667,21 +667,47 @@ unsafe extern "system" fn native_interaction_window_proc(
         WM_ERASEBKGND => 1,
         WM_NCHITTEST => {
             if let Some(shared) = shared_state_from_hwnd(hwnd) {
-                if let Ok(state) = shared.lock() {
-                    let (screen_x, screen_y) = mouse_point_from_lparam(l_param);
-                    if point_hits_exclusion_rects(&state, screen_x, screen_y) {
+                match try_lock_shared_state(shared) {
+                    Ok(Some(state)) => {
+                        let (screen_x, screen_y) = mouse_point_from_lparam(l_param);
+                        if point_hits_exclusion_rects(&state, screen_x, screen_y) {
+                            return HTTRANSPARENT as LRESULT;
+                        }
+                        if !point_hits_interaction_input_bounds(&state, screen_x, screen_y) {
+                            return HTTRANSPARENT as LRESULT;
+                        }
+                        return HTCLIENT as LRESULT;
+                    }
+                    Ok(None) => {
                         return HTTRANSPARENT as LRESULT;
                     }
-                    return HTCLIENT as LRESULT;
+                    Err(error) => {
+                        log::warn!(
+                            target: "bexo::service::native_interaction",
+                            "native_interaction_nchittest_lock_failed reason={}",
+                            error
+                        );
+                        return HTTRANSPARENT as LRESULT;
+                    }
                 }
             }
             DefWindowProcW(hwnd, message, w_param, l_param)
         }
         WM_SETCURSOR => {
             if let Some(shared) = shared_state_from_hwnd(hwnd) {
-                if let Ok(mut state) = shared.lock() {
-                    force_cursor_for_shared_state(&mut state);
-                    return 1;
+                match try_lock_shared_state(shared) {
+                    Ok(Some(mut state)) => {
+                        force_cursor_for_shared_state(&mut state);
+                        return 1;
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        log::warn!(
+                            target: "bexo::service::native_interaction",
+                            "native_interaction_setcursor_lock_failed reason={}",
+                            error
+                        );
+                    }
                 }
             }
             DefWindowProcW(hwnd, message, w_param, l_param)
@@ -721,12 +747,16 @@ fn handle_left_button_down(
     x: i32,
     y: i32,
 ) -> AppResult<()> {
-    let mut state = shared.lock().map_err(|_| {
-        AppError::new(
-            "NATIVE_INTERACTION_STATE_LOCK_FAILED",
-            "读取 Native Interaction 共享状态失败",
-        )
-    })?;
+    let mut state = match try_lock_shared_state(shared)? {
+        Some(state) => state,
+        None => {
+            log::warn!(
+                target: "bexo::service::native_interaction",
+                "native_interaction_input_skipped reason=state_lock_contended message=wm_lbuttondown"
+            );
+            return Ok(());
+        }
+    };
     let Some(session) = state.session.clone() else {
         return Ok(());
     };
@@ -912,7 +942,7 @@ fn handle_left_button_down(
     unsafe {
         SetCapture(hwnd);
     }
-    let _ = present_interaction_surface(hwnd, shared)?;
+    let _ = try_present_interaction_surface(hwnd, shared, "wm_lbuttondown")?;
     if let Some(event) = throttled_event {
         emit_backend_event(event_sink, event);
     }
@@ -936,12 +966,10 @@ fn handle_mouse_move(
     x: i32,
     y: i32,
 ) -> AppResult<()> {
-    let mut state = shared.lock().map_err(|_| {
-        AppError::new(
-            "NATIVE_INTERACTION_STATE_LOCK_FAILED",
-            "读取 Native Interaction 共享状态失败",
-        )
-    })?;
+    let mut state = match try_lock_shared_state(shared)? {
+        Some(state) => state,
+        None => return Ok(()),
+    };
     let Some(session) = state.session.clone() else {
         return Ok(());
     };
@@ -1144,7 +1172,7 @@ fn handle_mouse_move(
     drop(state);
 
     if state_changed {
-        let _ = present_interaction_surface(hwnd, shared)?;
+        let _ = try_present_interaction_surface(hwnd, shared, "wm_mousemove")?;
         if let Some(event) = throttled_event {
             emit_backend_event(event_sink, event);
         }
@@ -1170,12 +1198,16 @@ fn handle_left_button_up(
     x: i32,
     y: i32,
 ) -> AppResult<()> {
-    let mut state = shared.lock().map_err(|_| {
-        AppError::new(
-            "NATIVE_INTERACTION_STATE_LOCK_FAILED",
-            "读取 Native Interaction 共享状态失败",
-        )
-    })?;
+    let mut state = match try_lock_shared_state(shared)? {
+        Some(state) => state,
+        None => {
+            log::warn!(
+                target: "bexo::service::native_interaction",
+                "native_interaction_input_skipped reason=state_lock_contended message=wm_lbuttonup"
+            );
+            return Ok(());
+        }
+    };
     let Some(session) = state.session.clone() else {
         return Ok(());
     };
@@ -1376,7 +1408,7 @@ fn handle_left_button_up(
     unsafe {
         ReleaseCapture();
     }
-    let _ = present_interaction_surface(hwnd, shared)?;
+    let _ = try_present_interaction_surface(hwnd, shared, "wm_lbuttonup")?;
     if let Some(event) = state_event {
         emit_backend_event(event_sink.clone(), event);
     }
@@ -1410,6 +1442,36 @@ fn present_interaction_surface(
             "读取 Native Interaction 共享状态失败",
         )
     })?;
+    present_interaction_surface_locked(hwnd, &mut state, started_at)
+}
+
+fn try_present_interaction_surface(
+    hwnd: HWND,
+    shared: &Arc<Mutex<InteractionWindowSharedState>>,
+    trigger: &'static str,
+) -> AppResult<Option<InteractionPresentMetrics>> {
+    let started_at = Instant::now();
+    let mut state = match try_lock_shared_state(shared)? {
+        Some(state) => state,
+        None => {
+            log::debug!(
+                target: "bexo::service::native_interaction",
+                "native_interaction_present_skipped reason=state_lock_contended trigger={}",
+                trigger
+            );
+            return Ok(None);
+        }
+    };
+    Ok(Some(present_interaction_surface_locked(
+        hwnd, &mut state, started_at,
+    )?))
+}
+
+fn present_interaction_surface_locked(
+    hwnd: HWND,
+    state: &mut InteractionWindowSharedState,
+    started_at: Instant,
+) -> AppResult<InteractionPresentMetrics> {
     let Some(session) = state.session.clone() else {
         return Ok(InteractionPresentMetrics {
             copy_ms: 0,
@@ -1418,10 +1480,10 @@ fn present_interaction_surface(
             surface_recreated: false,
         });
     };
-    ensure_pixel_buffer(&mut state, session.physical_width, session.physical_height)?;
+    ensure_pixel_buffer(state, session.physical_width, session.physical_height)?;
     let surface_recreated =
-        ensure_layered_surface(&mut state, session.physical_width, session.physical_height)?;
-    render_selection_overlay(&mut state, &session);
+        ensure_layered_surface(state, session.physical_width, session.physical_height)?;
+    render_selection_overlay(state, &session);
     let pixel_buffer_ptr = state.pixel_buffer.as_ptr();
     let pixel_buffer_len = state.pixel_buffer.len();
     let pixel_buffer = unsafe { std::slice::from_raw_parts(pixel_buffer_ptr, pixel_buffer_len) };
@@ -1883,10 +1945,7 @@ fn ensure_pixel_buffer(
 fn build_base_mask_buffer(expected: usize) -> Vec<u8> {
     let mut buffer = vec![0; expected];
     for pixel in buffer.chunks_exact_mut(4) {
-        pixel[0] = 0;
-        pixel[1] = 0;
-        pixel[2] = 0;
-        pixel[3] = MASK_ALPHA;
+        pixel.copy_from_slice(&MASK_COLOR);
     }
     buffer
 }
@@ -2838,31 +2897,57 @@ fn point_hits_exclusion_rects(
     })
 }
 
+fn point_hits_interaction_input_bounds(
+    state: &InteractionWindowSharedState,
+    screen_x: i32,
+    screen_y: i32,
+) -> bool {
+    let Some(session) = state.session.as_ref() else {
+        return false;
+    };
+
+    if state.drag_mode.is_some() {
+        return true;
+    }
+
+    // In native selection mode, WebView does not own pointer input anyway.
+    // Swallow outside-selection clicks here to avoid passing them down into the
+    // overlay/preview window stack, which has been a recurring source of hangy
+    // focus/z-order behavior after a selection already exists.
+    if matches!(state.interaction_mode, NativeInteractionMode::Selection)
+        && state.selection_physical.is_some()
+    {
+        return true;
+    }
+
+    let Some(input_bounds) = resolve_interaction_input_bounds(state, session) else {
+        return true;
+    };
+
+    let local_x = screen_x.saturating_sub(session.physical_x);
+    let local_y = screen_y.saturating_sub(session.physical_y);
+    point_in_box(
+        local_x,
+        local_y,
+        input_bounds.x.floor() as i32,
+        input_bounds.y.floor() as i32,
+        input_bounds.width.ceil() as i32,
+        input_bounds.height.ceil() as i32,
+    )
+}
+
 fn sync_window_input_region(hwnd: HWND, state: &InteractionWindowSharedState) -> AppResult<()> {
     let Some(session) = state.session.as_ref() else {
         return Ok(());
     };
 
     unsafe {
-        let base_region =
-            if let Some(input_bounds) = resolve_interaction_input_bounds(state, session) {
-                let left = input_bounds.x.floor().max(0.0) as i32;
-                let top = input_bounds.y.floor().max(0.0) as i32;
-                let right = (input_bounds.x + input_bounds.width)
-                    .ceil()
-                    .min(f64::from(session.physical_width)) as i32;
-                let bottom = (input_bounds.y + input_bounds.height)
-                    .ceil()
-                    .min(f64::from(session.physical_height)) as i32;
-                CreateRectRgn(left, top, right.max(left + 1), bottom.max(top + 1))
-            } else {
-                CreateRectRgn(
-                    0,
-                    0,
-                    session.physical_width.max(1) as i32,
-                    session.physical_height.max(1) as i32,
-                )
-            };
+        let base_region = CreateRectRgn(
+            0,
+            0,
+            session.physical_width.max(1) as i32,
+            session.physical_height.max(1) as i32,
+        );
         if base_region == 0 {
             return Err(last_error(
                 "NATIVE_INTERACTION_CREATE_REGION_FAILED",
@@ -3346,6 +3431,19 @@ fn shared_state_from_hwnd(hwnd: HWND) -> Option<&'static Arc<Mutex<InteractionWi
         None
     } else {
         Some(unsafe { &*ptr })
+    }
+}
+
+fn try_lock_shared_state<'a>(
+    shared: &'a Arc<Mutex<InteractionWindowSharedState>>,
+) -> AppResult<Option<MutexGuard<'a, InteractionWindowSharedState>>> {
+    match shared.try_lock() {
+        Ok(state) => Ok(Some(state)),
+        Err(TryLockError::WouldBlock) => Ok(None),
+        Err(TryLockError::Poisoned(_)) => Err(AppError::new(
+            "NATIVE_INTERACTION_STATE_LOCK_FAILED",
+            "读取 Native Interaction 共享状态失败",
+        )),
     }
 }
 

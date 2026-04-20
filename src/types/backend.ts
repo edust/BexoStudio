@@ -350,6 +350,7 @@ export type WorkspaceEditorKey = string;
 
 export type WorkspacePreferences = {
   selectedWorkspaceIds: string[];
+  pinnedWorkspaceIds: string[];
 };
 
 export type CodexHomeDirectoryInfo = {
@@ -373,17 +374,8 @@ export type StartupPreferences = {
   startSilently: boolean;
 };
 
-export type ScreenshotToolHotkeyPreferences = {
-  select: string;
-  line: string;
-  rect: string;
-  ellipse: string;
-  arrow: string;
-};
-
 export type HotkeyPreferences = {
   screenshotCapture: string;
-  screenshotTools: ScreenshotToolHotkeyPreferences;
   voiceInputToggle?: string | null;
   voiceInputHold?: string | null;
 };
@@ -559,6 +551,12 @@ export type CancelScreenshotSessionResult = {
 export type ScreenshotSessionUpdatedEvent = {
   sessionId: string;
   createdAt: string;
+};
+
+export type ScreenshotEscapePressedEvent = {
+  sessionId: string;
+  shortcut: string;
+  triggeredAt: string;
 };
 
 export type NativeInteractionBackendKind = "windows_layered_selection_mvp";

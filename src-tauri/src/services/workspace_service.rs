@@ -826,21 +826,19 @@ fn build_windows_shell_startup_command(shell_executable: &str, command_line: &st
 }
 
 fn build_terminal_command_line(task: &LaunchTaskRecord) -> String {
-    let mut segments = Vec::with_capacity(task.args.len() + 1);
-    segments.push(quote_if_needed(task.command.trim()));
-    segments.extend(task.args.iter().map(|arg| quote_if_needed(arg.trim())));
+    let mut segments = Vec::with_capacity(task.args.len() + 2);
+    segments.push("&".to_string());
+    segments.push(quote_powershell_literal(task.command.trim()));
+    segments.extend(
+        task.args
+            .iter()
+            .map(|arg| quote_powershell_literal(arg.trim())),
+    );
     segments.join(" ")
 }
 
-fn quote_if_needed(value: &str) -> String {
-    if !value
-        .chars()
-        .any(|character| character.is_whitespace() || matches!(character, '"' | '\'' | '\\'))
-    {
-        return value.to_string();
-    }
-
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+fn quote_powershell_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
 
 #[cfg(test)]
@@ -853,7 +851,7 @@ mod tests {
         WorkspacePreferences,
     };
 
-    use super::WorkspaceService;
+    use super::{build_terminal_command_line, quote_powershell_literal, WorkspaceService};
 
     fn unique_db_path(name: &str) -> std::path::PathBuf {
         env::temp_dir().join(format!(
@@ -1221,5 +1219,36 @@ mod tests {
         let ide_payload = fs::read_to_string(&log_path).expect("read ide log");
         assert!(ide_payload.contains("-n"));
         assert!(ide_payload.contains(&workspace_directory.display().to_string()));
+    }
+
+    #[test]
+    fn powershell_literal_quoting_preserves_single_quotes() {
+        assert_eq!(
+            quote_powershell_literal(r"C:\work\don's app"),
+            r"'C:\work\don''s app'"
+        );
+    }
+
+    #[test]
+    fn terminal_command_line_uses_call_operator_and_literal_arguments() {
+        let task = crate::domain::LaunchTaskRecord {
+            id: "task-1".into(),
+            project_id: "project-1".into(),
+            name: "Open Folder".into(),
+            task_type: "terminal_command".into(),
+            enabled: true,
+            command: "cd".into(),
+            args: vec![r"C:\My App\demo".into(), r#"say "hi""#.into()],
+            working_dir: r"C:\workspace".into(),
+            timeout_ms: 30_000,
+            continue_on_failure: false,
+            retry_policy: Default::default(),
+            sort_order: 0,
+        };
+
+        assert_eq!(
+            build_terminal_command_line(&task),
+            "& 'cd' 'C:\\My App\\demo' 'say \"hi\"'"
+        );
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "bexo-studio"
-version = "0.1.3"
+version = "0.1.4"
 description = "Bexo Studio desktop shell"
 authors = ["Codex"]
 edition = "2021"

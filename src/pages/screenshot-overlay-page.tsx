@@ -1,11 +1,42 @@
-import { App, Button, Input, Space, Typography } from "antd";
+import { App, Button, Tooltip, Typography } from "antd";
 import { save } from "@tauri-apps/plugin-dialog";
+import {
+  ArrowRight,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  Circle,
+  ClipboardPaste,
+  Copy,
+  CopyPlus,
+  Droplets,
+  Grid2x2,
+  Hash,
+  Highlighter,
+  Minus,
+  MousePointer2,
+  PaintBucket,
+  Pencil,
+  Plus,
+  Redo2,
+  RotateCcw,
+  RotateCw,
+  Save,
+  Square,
+  SquareDashed,
+  Trash2,
+  Type,
+  Undo2,
+  X,
+} from "lucide-react";
 import {
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
+  type ReactNode,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
@@ -13,7 +44,6 @@ import {
 import {
   cancelScreenshotSession,
   copyScreenshotSelection,
-  getAppPreferences,
   getErrorSummary,
   getScreenshotSelectionRender,
   getScreenshotSession,
@@ -21,12 +51,12 @@ import {
   listenToNativeInteractionShapeAnnotationCommittedEvents,
   listenToNativeInteractionShapeAnnotationUpdatedEvents,
   listenToNativeInteractionStateUpdatedEvents,
+  listenToScreenshotEscapePressedEvents,
   listenToScreenshotSessionUpdatedEvents,
   saveScreenshotSelection,
   updateNativeInteractionRuntime,
 } from "@/lib/command-client";
 import type {
-  AppPreferences,
   NativeInteractionEditableShape,
   NativeInteractionExclusionRect,
   NativeInteractionMode,
@@ -47,6 +77,28 @@ type TextStyleKind = "plain" | "outline" | "background" | "highlight";
 
 type Point = { x: number; y: number };
 type SelectionRect = { x: number; y: number; width: number; height: number };
+type NativeInteractionRuntimeRequest = {
+  sessionId: string;
+  visible: boolean;
+  exclusionRects: NativeInteractionExclusionRect[];
+  mode: NativeInteractionMode;
+  selection: SelectionRect | null;
+  activeShape: NativeInteractionEditableShape | null;
+  shapeCandidates: NativeInteractionEditableShape[];
+  color: string;
+  strokeWidth: number;
+};
+
+type ToolbarIconAction = {
+  key: string;
+  label: string;
+  icon: ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  active?: boolean;
+  danger?: boolean;
+  loading?: boolean;
+};
 
 type ShapeAnnotation = {
   id: string;
@@ -306,8 +358,6 @@ type ShapeHandleDescriptor = {
   point: Point;
   cursor: string;
 };
-type ConfigurableToolKind = "select" | "line" | "rect" | "ellipse" | "arrow";
-type OverlayToolHotkeyPreferences = AppPreferences["hotkey"]["screenshotTools"];
 
 const TOOLS: Array<{ key: ToolKind; label: string }> = [
   { key: "select", label: "选区" },
@@ -323,21 +373,20 @@ const TOOLS: Array<{ key: ToolKind; label: string }> = [
   { key: "blur", label: "模糊" },
 ];
 
-const COLORS = ["#ff3b30", "#ffd60a", "#00d08f", "#2f95ff", "#8a5cf6", "#ffffff", "#111111"];
+const DEFAULT_ANNOTATION_COLOR = "#00d08f";
 const TEXT_STYLE_OPTIONS: Array<{ key: TextStyleKind; label: string }> = [
   { key: "plain", label: "纯色" },
   { key: "outline", label: "描边" },
   { key: "background", label: "背景" },
   { key: "highlight", label: "高亮" },
 ];
-const DEFAULT_SCREENSHOT_TOOL_HOTKEYS: OverlayToolHotkeyPreferences = {
-  select: "1",
-  line: "2",
-  rect: "3",
-  ellipse: "4",
-  arrow: "5",
-};
+const NATIVE_SELECTION_RUNTIME_STABILIZE_MS = 220;
 const FIXED_SCREENSHOT_TOOL_HOTKEYS: Array<[string, ToolKind]> = [
+  ["1", "select"],
+  ["2", "line"],
+  ["3", "rect"],
+  ["4", "ellipse"],
+  ["5", "arrow"],
   ["6", "pen"],
   ["7", "text"],
   ["8", "fill"],
@@ -345,6 +394,7 @@ const FIXED_SCREENSHOT_TOOL_HOTKEYS: Array<[string, ToolKind]> = [
   ["0", "blur"],
   ["n", "number"],
 ];
+const TOOL_HOTKEY_MAP = buildToolHotkeyMap();
 
 export default function ScreenshotOverlayPage() {
   const { message } = App.useApp();
@@ -366,18 +416,31 @@ export default function ScreenshotOverlayPage() {
   const previewRenderableRef = useRef<CanvasImageSource | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
   const pendingSessionIdRef = useRef<string | null>(null);
+  const frozenToolbarRectRef = useRef<SelectionRect | null>(null);
+  const selectionRedrawStartedWithSelectionRef = useRef(false);
+  const pendingSelectionRedrawOriginRef = useRef<Point | null>(null);
+  const nativeSelectionRuntimeBlockedUntilRef = useRef(0);
+  const previousNativeSelectionDragModeRef = useRef<string | null>(null);
   const sessionLoadingSeenAtRef = useRef<Map<string, number>>(new Map());
   const firstPaintSessionIdRef = useRef<string | null>(null);
   const nativeInteractionRuntimeSeqRef = useRef(0);
+  const nativeInteractionRuntimeInFlightRef = useRef(false);
+  const nativeInteractionRuntimeInFlightKeyRef = useRef<string | null>(null);
+  const nativeInteractionRuntimeAppliedKeyRef = useRef<string | null>(null);
+  const nativeInteractionRuntimeQueuedRequestRef =
+    useRef<NativeInteractionRuntimeRequest | null>(null);
 
   const [session, setSession] = useState<ScreenshotSessionView | null>(null);
   const [selection, setSelection] = useState<SelectionRect | null>(null);
   const [dragStart, setDragStart] = useState<Point | null>(null);
   const [dragCurrent, setDragCurrent] = useState<Point | null>(null);
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
+  const [nativeSelectionRuntimeBlockedUntil, setNativeSelectionRuntimeBlockedUntil] =
+    useState(0);
+  const [toolbarMeasuredWidth, setToolbarMeasuredWidth] = useState(480);
 
   const [tool, setTool] = useState<ToolKind>("select");
-  const [color, setColor] = useState<string>(COLORS[0]);
+  const color = DEFAULT_ANNOTATION_COLOR;
   const [strokeWidth, setStrokeWidth] = useState<number>(3);
   const [fontSize, setFontSize] = useState<number>(22);
   const [textStyle, setTextStyle] = useState<TextStyleKind>("plain");
@@ -386,8 +449,6 @@ export default function ScreenshotOverlayPage() {
   const [fillOpacity, setFillOpacity] = useState<number>(24);
   const [mosaicSize, setMosaicSize] = useState<number>(14);
   const [blurRadius, setBlurRadius] = useState<number>(10);
-  const [screenshotToolHotkeys, setScreenshotToolHotkeys] =
-    useState<OverlayToolHotkeyPreferences>(DEFAULT_SCREENSHOT_TOOL_HOTKEYS);
 
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [historyStack, setHistoryStack] = useState<Annotation[][]>([]);
@@ -419,10 +480,7 @@ export default function ScreenshotOverlayPage() {
   const [previewImageVersion, setPreviewImageVersion] = useState<number>(0);
   const [nativeInteractionState, setNativeInteractionState] = useState<NativeInteractionStateView | null>(null);
   const previousToolRef = useRef<ToolKind>("select");
-  const toolHotkeyMap = useMemo(
-    () => buildToolHotkeyMap(screenshotToolHotkeys),
-    [screenshotToolHotkeys],
-  );
+  const toolHotkeyMap = TOOL_HOTKEY_MAP;
 
   const activeRect = useMemo<SelectionRect | null>(() => {
     if (dragStart && dragCurrent && tool === "select" && !textDrag && !shapeGroupDrag && !numberGroupDrag && !effectGroupDrag && !mixedGroupDrag && !objectSelectionMarquee) {
@@ -609,6 +667,11 @@ export default function ScreenshotOverlayPage() {
     (nativeInteractionState?.dragMode === "creating" ||
       nativeInteractionState?.dragMode === "moving" ||
       nativeInteractionState?.dragMode === "resizing");
+  const nativeSelectionRuntimeCoolingDown =
+    nativeInteractionRuntimeMode === "selection" &&
+    nativeSelectionRuntimeBlockedUntil > performance.now();
+  const nativeSelectionInteractionStabilizing =
+    nativeSelectionDragActive || nativeSelectionRuntimeCoolingDown;
 
   const nativeShapeDragActive =
     nativeInteractionState?.dragMode === "shape_moving" ||
@@ -843,6 +906,7 @@ export default function ScreenshotOverlayPage() {
         items: [
           `已混选 ${totalSelectedObjectCount} 个对象 / ${selectedFamilyCount} 个家族`,
           "整组拖动",
+          "方向键/Shift 微调",
           "Ctrl/Cmd+C/V/D",
           "Delete 删除",
           "Ctrl+[ / ] 层级",
@@ -868,7 +932,7 @@ export default function ScreenshotOverlayPage() {
         rect: resolveShapeGroupBounds(selectedShapeAnnotations),
         items: [
           `已选 ${selectedShapeAnnotations.length} 个图形，可整组拖动 / 复制 / 粘贴 / 重复`,
-          "批量改颜色/线宽",
+          "批量改线宽",
           "方向键/Shift 微调",
           "Ctrl+[ / ] 层级",
           "Ctrl+Shift+[ / ] 置底/置顶",
@@ -972,7 +1036,6 @@ export default function ScreenshotOverlayPage() {
     }
 
     setTextStyle(annotation.style);
-    setColor(annotation.color);
     setFontSize(annotation.fontSize);
     setTextRotation(Math.round(annotation.rotation));
     setTextOpacity(Math.round(annotation.opacity * 100));
@@ -996,7 +1059,6 @@ export default function ScreenshotOverlayPage() {
       return;
     }
 
-    setColor(annotation.color);
     setFontSize(annotation.size);
   }, []);
 
@@ -1005,7 +1067,6 @@ export default function ScreenshotOverlayPage() {
       return;
     }
 
-    setColor(annotation.color);
     setStrokeWidth(annotation.strokeWidth);
   }, []);
 
@@ -1014,7 +1075,6 @@ export default function ScreenshotOverlayPage() {
       return;
     }
 
-    setColor(annotation.color);
     setStrokeWidth(annotation.strokeWidth);
   }, []);
 
@@ -1379,6 +1439,9 @@ export default function ScreenshotOverlayPage() {
     setDragStart(null);
     setDragCurrent(null);
     setNativeInteractionState(null);
+    nativeSelectionRuntimeBlockedUntilRef.current = 0;
+    selectionRedrawStartedWithSelectionRef.current = false;
+    pendingSelectionRedrawOriginRef.current = null;
     textClipboardRef.current = null;
     shapeClipboardRef.current = null;
     penClipboardRef.current = null;
@@ -1476,7 +1539,6 @@ export default function ScreenshotOverlayPage() {
 
       clearTextSelection();
       setTextStyle(nextEditor.style);
-      setColor(nextEditor.color);
       setFontSize(nextEditor.fontSize);
       setTextRotation(Math.round(nextEditor.rotation));
       setTextOpacity(Math.round(nextEditor.opacity * 100));
@@ -1888,60 +1950,6 @@ export default function ScreenshotOverlayPage() {
       return true;
     },
     [clearPenSelection, commitAnnotations, getSelectedPenIds, selectedPenId, setPenSelection],
-  );
-
-  const applyColor = useCallback(
-    (nextColor: string) => {
-      setColor(nextColor);
-
-      if (textEditorStateRef.current) {
-        updateTextEditor((current) => ({ ...current, color: nextColor }));
-        return;
-      }
-
-      const targetIds = getSelectedTextIds();
-      if ((tool === "text" || tool === "select") && targetIds.length > 0) {
-        commitSelectedTextMutation(targetIds, (annotation) => {
-          if (annotation.color === nextColor) {
-            return annotation;
-          }
-          return { ...annotation, color: nextColor };
-        });
-        return;
-      }
-
-      if (selectedShapeAnnotation) {
-        commitSelectedShapeMutation((annotation) => {
-          if (annotation.color === nextColor) {
-            return annotation;
-          }
-          return { ...annotation, color: nextColor };
-        });
-        return;
-      }
-
-      if (selectedPenAnnotation) {
-        commitSelectedPenMutation((annotation) => {
-          if (annotation.color === nextColor) {
-            return annotation;
-          }
-          return { ...annotation, color: nextColor };
-        });
-        return;
-      }
-
-      if (getSelectedNumberIds().length === 0) {
-        return;
-      }
-
-      commitSelectedNumberMutation((annotation) => {
-        if (annotation.color === nextColor) {
-          return annotation;
-        }
-        return { ...annotation, color: nextColor };
-      });
-    },
-    [commitSelectedNumberMutation, commitSelectedPenMutation, commitSelectedShapeMutation, commitSelectedTextMutation, getSelectedNumberIds, getSelectedTextIds, selectedPenAnnotation, selectedShapeAnnotation, tool, updateTextEditor],
   );
 
   const applyStrokeWidthValue = useCallback(
@@ -2689,6 +2697,46 @@ export default function ScreenshotOverlayPage() {
       setShapeSelection,
       setTextSelection,
     ],
+  );
+
+  const nudgeSelectedMixedObjects = useCallback(
+    (dx: number, dy: number) => {
+      if (!selection) {
+        return false;
+      }
+
+      const buckets = getSelectedObjectBuckets();
+      const targetIds = Array.from(
+        new Set([...buckets.text, ...buckets.shape, ...buckets.pen, ...buckets.number, ...buckets.effect]),
+      );
+      if (targetIds.length === 0) {
+        return false;
+      }
+
+      const selectedAnnotations = getSelectedObjectAnnotations();
+      if (selectedAnnotations.length === 0) {
+        return false;
+      }
+
+      const groupBounds = resolveObjectSelectionGroupBounds(selectedAnnotations);
+      const delta = clampGroupDeltaToSelection({ x: dx, y: dy }, groupBounds, selection);
+      if (delta.x === 0 && delta.y === 0) {
+        return false;
+      }
+
+      const selectedSet = new Set(targetIds);
+      const nextAnnotations = annotationsRef.current.map((annotation) => {
+        if (annotation.kind === "fill" || !selectedSet.has(annotation.id)) {
+          return annotation;
+        }
+        return offsetObjectSelectionAnnotation(annotation, delta);
+      });
+
+      commitAnnotations(nextAnnotations);
+      restoreObjectSelections(buckets, nextAnnotations);
+      return true;
+    },
+    [commitAnnotations, getSelectedObjectAnnotations, getSelectedObjectBuckets, restoreObjectSelections, selection],
   );
 
   const deleteSelectedMixedObjects = useCallback(() => {
@@ -3582,6 +3630,14 @@ export default function ScreenshotOverlayPage() {
     pendingSessionIdRef.current = null;
     firstPaintSessionIdRef.current = null;
     previewRenderableRef.current = null;
+    frozenToolbarRectRef.current = null;
+    previousNativeSelectionDragModeRef.current = null;
+    nativeInteractionRuntimeInFlightRef.current = false;
+    nativeInteractionRuntimeInFlightKeyRef.current = null;
+    nativeInteractionRuntimeAppliedKeyRef.current = null;
+    nativeInteractionRuntimeQueuedRequestRef.current = null;
+    nativeSelectionRuntimeBlockedUntilRef.current = 0;
+    setNativeSelectionRuntimeBlockedUntil(0);
     setPreviewSurfaceReady(false);
     setPreviewImageVersion((current) => current + 1);
     setSession(null);
@@ -3598,6 +3654,16 @@ export default function ScreenshotOverlayPage() {
       const isSameSession = activeSessionIdRef.current === value.sessionId;
       activeSessionIdRef.current = value.sessionId;
       pendingSessionIdRef.current = value.sessionId;
+      if (!isSameSession) {
+        frozenToolbarRectRef.current = null;
+        previousNativeSelectionDragModeRef.current = null;
+        nativeInteractionRuntimeInFlightRef.current = false;
+        nativeInteractionRuntimeInFlightKeyRef.current = null;
+        nativeInteractionRuntimeAppliedKeyRef.current = null;
+        nativeInteractionRuntimeQueuedRequestRef.current = null;
+        nativeSelectionRuntimeBlockedUntilRef.current = 0;
+        setNativeSelectionRuntimeBlockedUntil(0);
+      }
       if (!sessionLoadingSeenAtRef.current.has(value.sessionId)) {
         sessionLoadingSeenAtRef.current.set(value.sessionId, performance.now());
       }
@@ -3652,35 +3718,145 @@ export default function ScreenshotOverlayPage() {
     return rects;
   }, []);
 
+  const flushNativeInteractionRuntimeUpdate = useCallback(
+    (request: NativeInteractionRuntimeRequest) => {
+      const requestKey = buildNativeInteractionRuntimeRequestKey(request);
+      if (
+        !nativeInteractionRuntimeInFlightRef.current &&
+        nativeInteractionRuntimeAppliedKeyRef.current === requestKey
+      ) {
+        emitPipelineInfo(
+          `[screenshot][native-interaction] runtime_update_skipped reason=dedup_applied session_id=${request.sessionId} visible=${request.visible} mode=${request.mode}`,
+        );
+        return;
+      }
+
+      if (nativeInteractionRuntimeInFlightRef.current) {
+        const queuedRequest = nativeInteractionRuntimeQueuedRequestRef.current;
+        const queuedKey = queuedRequest
+          ? buildNativeInteractionRuntimeRequestKey(queuedRequest)
+          : null;
+        if (
+          nativeInteractionRuntimeInFlightKeyRef.current === requestKey ||
+          queuedKey === requestKey
+        ) {
+          emitPipelineInfo(
+            `[screenshot][native-interaction] runtime_update_skipped reason=dedup_inflight session_id=${request.sessionId} visible=${request.visible} mode=${request.mode}`,
+          );
+          return;
+        }
+
+        nativeInteractionRuntimeQueuedRequestRef.current = request;
+        emitPipelineInfo(
+          `[screenshot][native-interaction] runtime_update_queued session_id=${request.sessionId} visible=${request.visible} mode=${request.mode} replaced=${queuedRequest ? "true" : "false"}`,
+        );
+        return;
+      }
+
+      nativeInteractionRuntimeInFlightRef.current = true;
+      nativeInteractionRuntimeInFlightKeyRef.current = requestKey;
+      const runtimeSeq = ++nativeInteractionRuntimeSeqRef.current;
+      emitPipelineInfo(
+        `[screenshot][native-interaction] runtime_update_sent seq=${runtimeSeq} session_id=${request.sessionId} visible=${request.visible} mode=${request.mode} exclusion_rects=${request.exclusionRects.length} selection=${request.selection ? `${request.selection.x.toFixed(1)},${request.selection.y.toFixed(1)},${request.selection.width.toFixed(1)},${request.selection.height.toFixed(1)}` : "none"} active_shape=${request.activeShape?.id ?? "none"} candidates=${request.shapeCandidates.length}`,
+      );
+      void updateNativeInteractionRuntime(
+        request.sessionId,
+        request.visible,
+        request.exclusionRects,
+        request.mode,
+        request.selection,
+        request.activeShape,
+        request.shapeCandidates,
+        request.color,
+        request.strokeWidth,
+      )
+        .then((value) => {
+          emitPipelineInfo(
+            `[screenshot][native-interaction] runtime_update_completed seq=${runtimeSeq} session_id=${request.sessionId} lifecycle_state=${value.lifecycleState} has_active_session=${value.hasActiveSession} drag_mode=${value.dragMode ?? "none"} selection_revision=${value.selectionRevision}`,
+          );
+          if (activeSessionIdRef.current === request.sessionId) {
+            nativeInteractionRuntimeAppliedKeyRef.current = requestKey;
+            setNativeInteractionState((current) =>
+              areNativeInteractionStatesEqual(current, value) ? current : value,
+            );
+          }
+        })
+        .catch((error) => {
+          const summary = getErrorSummary(error);
+          if (activeSessionIdRef.current === request.sessionId) {
+            emitPipelineError(
+              `[screenshot][native-interaction] runtime_update_failed seq=${runtimeSeq} session_id=${request.sessionId} pending_session_id=${pendingSessionIdRef.current ?? "none"} active_session_id=${activeSessionIdRef.current ?? "none"} mode=${request.mode}`,
+              error,
+            );
+            console.warn("update native interaction runtime failed", summary);
+          }
+        })
+        .finally(() => {
+          if (nativeInteractionRuntimeInFlightKeyRef.current === requestKey) {
+            nativeInteractionRuntimeInFlightKeyRef.current = null;
+          }
+          nativeInteractionRuntimeInFlightRef.current = false;
+          if (activeSessionIdRef.current !== request.sessionId) {
+            nativeInteractionRuntimeQueuedRequestRef.current = null;
+            return;
+          }
+          const queuedRequest = nativeInteractionRuntimeQueuedRequestRef.current;
+          nativeInteractionRuntimeQueuedRequestRef.current = null;
+          if (!queuedRequest) {
+            return;
+          }
+          const queuedKey = buildNativeInteractionRuntimeRequestKey(queuedRequest);
+          if (queuedKey === nativeInteractionRuntimeAppliedKeyRef.current) {
+            emitPipelineInfo(
+              `[screenshot][native-interaction] runtime_update_skipped reason=dedup_queued session_id=${queuedRequest.sessionId} visible=${queuedRequest.visible} mode=${queuedRequest.mode}`,
+            );
+            return;
+          }
+          queueMicrotask(() => {
+            flushNativeInteractionRuntimeUpdate(queuedRequest);
+          });
+        });
+    },
+    [],
+  );
+
   useEffect(() => {
-    if (!runtimeAvailable) {
-      setScreenshotToolHotkeys(DEFAULT_SCREENSHOT_TOOL_HOTKEYS);
+    if (!nativeSelectionRuntimeBlockedUntil) {
       return;
     }
-
-    let disposed = false;
-    void getAppPreferences()
-      .then((preferences) => {
-        if (disposed) {
-          return;
-        }
-        setScreenshotToolHotkeys(
-          resolveOverlayToolHotkeys(preferences.hotkey.screenshotTools),
-        );
-      })
-      .catch((error) => {
-        if (disposed) {
-          return;
-        }
-        const summary = getErrorSummary(error);
-        console.warn("load screenshot tool hotkeys failed", summary);
-        setScreenshotToolHotkeys(DEFAULT_SCREENSHOT_TOOL_HOTKEYS);
-      });
-
+    const remainingMs = nativeSelectionRuntimeBlockedUntil - performance.now();
+    if (remainingMs <= 0) {
+      nativeSelectionRuntimeBlockedUntilRef.current = 0;
+      setNativeSelectionRuntimeBlockedUntil(0);
+      return;
+    }
+    const timeoutId = window.setTimeout(() => {
+      nativeSelectionRuntimeBlockedUntilRef.current = 0;
+      setNativeSelectionRuntimeBlockedUntil(0);
+    }, remainingMs);
     return () => {
-      disposed = true;
+      window.clearTimeout(timeoutId);
     };
-  }, [runtimeAvailable]);
+  }, [nativeSelectionRuntimeBlockedUntil]);
+
+  useEffect(() => {
+    const currentDragMode = nativeInteractionState?.dragMode ?? null;
+    const previousDragMode = previousNativeSelectionDragModeRef.current;
+    const wasSelectionDrag =
+      previousDragMode === "creating" ||
+      previousDragMode === "moving" ||
+      previousDragMode === "resizing";
+    const isSelectionDrag =
+      currentDragMode === "creating" ||
+      currentDragMode === "moving" ||
+      currentDragMode === "resizing";
+    if (!isSelectionDrag && wasSelectionDrag) {
+      const blockedUntil = performance.now() + NATIVE_SELECTION_RUNTIME_STABILIZE_MS;
+      nativeSelectionRuntimeBlockedUntilRef.current = blockedUntil;
+      setNativeSelectionRuntimeBlockedUntil(blockedUntil);
+    }
+    previousNativeSelectionDragModeRef.current = currentDragMode;
+  }, [nativeInteractionState?.dragMode]);
 
   useEffect(() => {
     if (!runtimeAvailable || !session) {
@@ -3690,6 +3866,16 @@ export default function ScreenshotOverlayPage() {
     if (nativeInteractionState?.dragMode) {
       emitPipelineInfo(
         `[screenshot][native-interaction] runtime_update_skipped reason=drag_active session_id=${session.sessionId} drag_mode=${nativeInteractionState.dragMode} tool=${tool} mode=${nativeInteractionRuntimeMode}`,
+      );
+      return;
+    }
+
+    const runtimeBlockedUntil = nativeSelectionRuntimeBlockedUntilRef.current;
+    const runtimeSelectionCoolingDown =
+      nativeInteractionRuntimeMode === "selection" && runtimeBlockedUntil > performance.now();
+    if (runtimeSelectionCoolingDown) {
+      emitPipelineInfo(
+        `[screenshot][native-interaction] runtime_update_skipped reason=selection_cooldown session_id=${session.sessionId} blocked_until=${runtimeBlockedUntil.toFixed(1)} tool=${tool} mode=${nativeInteractionRuntimeMode}`,
       );
       return;
     }
@@ -3706,47 +3892,19 @@ export default function ScreenshotOverlayPage() {
       return;
     }
 
-    let cancelled = false;
     const visible = nativeInteractionRuntimeVisible;
     const exclusionRects = visible ? buildNativeInteractionExclusionRects() : [];
-    const runtimeSeq = ++nativeInteractionRuntimeSeqRef.current;
-    emitPipelineInfo(
-      `[screenshot][native-interaction] runtime_update_sent seq=${runtimeSeq} session_id=${session.sessionId} visible=${visible} mode=${nativeInteractionRuntimeMode} tool=${tool} exclusion_rects=${exclusionRects.length} selection=${nativeInteractionRuntimeSelection ? `${nativeInteractionRuntimeSelection.x.toFixed(1)},${nativeInteractionRuntimeSelection.y.toFixed(1)},${nativeInteractionRuntimeSelection.width.toFixed(1)},${nativeInteractionRuntimeSelection.height.toFixed(1)}` : "none"} active_shape=${nativeInteractionActiveShape?.id ?? "none"} candidates=${nativeInteractionShapeCandidates.length}`,
-    );
-    void updateNativeInteractionRuntime(
-      session.sessionId,
+    flushNativeInteractionRuntimeUpdate({
+      sessionId: session.sessionId,
       visible,
       exclusionRects,
-      nativeInteractionRuntimeMode,
-      nativeInteractionRuntimeSelection,
-      nativeInteractionActiveShape,
-      nativeInteractionShapeCandidates,
+      mode: nativeInteractionRuntimeMode,
+      selection: nativeInteractionRuntimeSelection,
+      activeShape: nativeInteractionActiveShape,
+      shapeCandidates: nativeInteractionShapeCandidates,
       color,
       strokeWidth,
-    )
-      .then((value) => {
-        emitPipelineInfo(
-          `[screenshot][native-interaction] runtime_update_completed seq=${runtimeSeq} session_id=${session.sessionId} lifecycle_state=${value.lifecycleState} has_active_session=${value.hasActiveSession} drag_mode=${value.dragMode ?? "none"} selection_revision=${value.selectionRevision}`,
-        );
-        if (!cancelled) {
-          setNativeInteractionState(value);
-        }
-      })
-      .catch((error) => {
-        if (cancelled) {
-          return;
-        }
-        const summary = getErrorSummary(error);
-        emitPipelineError(
-          `[screenshot][native-interaction] runtime_update_failed seq=${runtimeSeq} session_id=${session.sessionId} pending_session_id=${pendingSessionIdRef.current ?? "none"} active_session_id=${activeSessionIdRef.current ?? "none"} tool=${tool} mode=${nativeInteractionRuntimeMode}`,
-          error,
-        );
-        console.warn("update native interaction runtime failed", summary);
-      });
-
-    return () => {
-      cancelled = true;
-    };
+    });
   }, [
     buildNativeInteractionExclusionRects,
     busyAction,
@@ -3774,7 +3932,19 @@ export default function ScreenshotOverlayPage() {
     shapeGroupDrag,
     shapeTransform,
     textDrag,
+    flushNativeInteractionRuntimeUpdate,
+    nativeSelectionRuntimeBlockedUntil,
   ]);
+
+  useEffect(() => {
+    if (nativeSelectionInteractionStabilizing) {
+      if (!frozenToolbarRectRef.current && activeRect) {
+        frozenToolbarRectRef.current = activeRect;
+      }
+      return;
+    }
+    frozenToolbarRectRef.current = activeRect;
+  }, [activeRect, nativeSelectionInteractionStabilizing]);
 
   useEffect(() => {
     if (!runtimeAvailable) {
@@ -3995,6 +4165,93 @@ export default function ScreenshotOverlayPage() {
     }
   }, [busyAction, message, resetOverlayViewState, runtimeAvailable, session]);
 
+  const handleEscapeAction = useCallback(() => {
+    if (textEditorStateRef.current) {
+      cancelTextEditor();
+      return true;
+    }
+    if (busyAction) {
+      return false;
+    }
+    if (textDrag) {
+      setTextDrag(null);
+      return true;
+    }
+    if (mixedGroupDrag) {
+      setMixedGroupDrag(null);
+      return true;
+    }
+    if (objectSelectionMarquee) {
+      setObjectSelectionMarquee(null);
+      return true;
+    }
+    if (numberGroupDrag) {
+      setNumberGroupDrag(null);
+      return true;
+    }
+    if (numberDrag) {
+      setNumberDrag(null);
+      return true;
+    }
+    if (shapeGroupDrag) {
+      setShapeGroupDrag(null);
+      return true;
+    }
+    if (shapeTransform) {
+      setShapeTransform(null);
+      return true;
+    }
+    if (penGroupDrag) {
+      setPenGroupDrag(null);
+      return true;
+    }
+    if (penTransform) {
+      setPenTransform(null);
+      return true;
+    }
+    if (effectGroupDrag) {
+      setEffectGroupDrag(null);
+      return true;
+    }
+    if (effectTransform) {
+      setEffectTransform(null);
+      return true;
+    }
+    if (draft) {
+      setDraft(null);
+      return true;
+    }
+    if (tool !== "select") {
+      setTool("select");
+      return true;
+    }
+    if (annotations.length > 0) {
+      resetAnnotations();
+      return true;
+    }
+    void handleCancel();
+    return true;
+  }, [
+    annotations.length,
+    busyAction,
+    cancelTextEditor,
+    draft,
+    effectGroupDrag,
+    effectTransform,
+    handleCancel,
+    mixedGroupDrag,
+    numberDrag,
+    numberGroupDrag,
+    objectSelectionMarquee,
+    penGroupDrag,
+    penTransform,
+    resetAnnotations,
+    shapeGroupDrag,
+    shapeTransform,
+    textDrag,
+    tool,
+  ]);
+
   const handleCopy = useCallback(async () => {
     if (!runtimeAvailable || busyAction || !session) return;
     if (!sessionImageReady) {
@@ -4094,6 +4351,7 @@ export default function ScreenshotOverlayPage() {
 
       const point = getPointFromClient(event.clientX, event.clientY);
       if (!point) return;
+      pendingSelectionRedrawOriginRef.current = null;
 
       if (textEditorStateRef.current) {
         event.preventDefault();
@@ -4539,12 +4797,59 @@ export default function ScreenshotOverlayPage() {
         return;
       }
 
-      if (!selection || tool === "select") {
+      if (!selection) {
         event.preventDefault();
         event.currentTarget.setPointerCapture(event.pointerId);
+        selectionRedrawStartedWithSelectionRef.current = false;
         setDragStart(point);
         setDragCurrent(point);
-        setSelection(null);
+        setDraft(null);
+        clearShapeSelection();
+        clearPenSelection();
+        setObjectSelectionMarquee(null);
+        clearTextSelection();
+        clearEffectSelection();
+        clearNumberSelection();
+        setPenTransform(null);
+        setPenGroupDrag(null);
+        setEffectTransform(null);
+        setNumberDrag(null);
+        setNumberGroupDrag(null);
+        setEffectGroupDrag(null);
+        setMixedGroupDrag(null);
+        setTextDrag(null);
+        return;
+      }
+
+      if (tool === "select" && !isPointInRect(point, selection)) {
+        event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        clearTextSelection();
+        clearShapeSelection();
+        clearPenSelection();
+        clearEffectSelection();
+        clearNumberSelection();
+        setObjectSelectionMarquee(null);
+        setShapeTransform(null);
+        setShapeGroupDrag(null);
+        setPenTransform(null);
+        setPenGroupDrag(null);
+        setEffectTransform(null);
+        setNumberDrag(null);
+        setNumberGroupDrag(null);
+        setEffectGroupDrag(null);
+        setMixedGroupDrag(null);
+        setTextDrag(null);
+        pendingSelectionRedrawOriginRef.current = point;
+        return;
+      }
+
+      if (tool === "select") {
+        event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        selectionRedrawStartedWithSelectionRef.current = true;
+        setDragStart(point);
+        setDragCurrent(point);
         setDraft(null);
         clearShapeSelection();
         clearPenSelection();
@@ -4913,6 +5218,20 @@ export default function ScreenshotOverlayPage() {
         return;
       }
 
+      const pendingSelectionRedrawOrigin = pendingSelectionRedrawOriginRef.current;
+      if (pendingSelectionRedrawOrigin && tool === "select") {
+        if (
+          Math.abs(point.x - pendingSelectionRedrawOrigin.x) >= 2 ||
+          Math.abs(point.y - pendingSelectionRedrawOrigin.y) >= 2
+        ) {
+          pendingSelectionRedrawOriginRef.current = null;
+          selectionRedrawStartedWithSelectionRef.current = Boolean(selection);
+          setDragStart(pendingSelectionRedrawOrigin);
+          setDragCurrent(point);
+        }
+        return;
+      }
+
       if (dragStart && tool === "select") {
         setDragCurrent(point);
         return;
@@ -4948,6 +5267,12 @@ export default function ScreenshotOverlayPage() {
       const point = getPointFromClient(event.clientX, event.clientY);
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+
+      if (pendingSelectionRedrawOriginRef.current && tool === "select") {
+        pendingSelectionRedrawOriginRef.current = null;
+        selectionRedrawStartedWithSelectionRef.current = false;
+        return;
       }
 
       if (objectSelectionMarquee) {
@@ -5355,13 +5680,17 @@ export default function ScreenshotOverlayPage() {
       }
 
       if (dragStart && tool === "select") {
+        const startedWithSelection = selectionRedrawStartedWithSelectionRef.current;
+        selectionRedrawStartedWithSelectionRef.current = false;
         setDragStart(null);
         setDragCurrent(null);
         if (!point) return;
         const nextSelection = normalizeRect(dragStart, point);
         if (nextSelection.width < 2 || nextSelection.height < 2) {
-          setSelection(null);
-          resetAnnotations();
+          if (!startedWithSelection) {
+            setSelection(null);
+            resetAnnotations();
+          }
           return;
         }
         setSelection(nextSelection);
@@ -5573,9 +5902,6 @@ export default function ScreenshotOverlayPage() {
     if (current.style !== textStyle) {
       setTextStyle(current.style);
     }
-    if (current.color !== color) {
-      setColor(current.color);
-    }
     if (current.fontSize !== fontSize) {
       setFontSize(current.fontSize);
     }
@@ -5585,7 +5911,7 @@ export default function ScreenshotOverlayPage() {
     if (Math.round(current.opacity * 100) !== textOpacity) {
       setTextOpacity(Math.round(current.opacity * 100));
     }
-  }, [activeTextId, clearTextSelection, color, displayAnnotations, fontSize, textDrag, textEditor, textOpacity, textRotation, textStyle]);
+  }, [activeTextId, clearTextSelection, displayAnnotations, fontSize, textDrag, textEditor, textOpacity, textRotation, textStyle]);
 
   useEffect(() => {
     if (!selectedEffectId || textEditor || textDrag || effectTransform || effectGroupDrag) return;
@@ -5604,20 +5930,18 @@ export default function ScreenshotOverlayPage() {
       clearNumberSelection();
       return;
     }
-    if (current.color !== color) {
-      setColor(current.color);
-    }
     if (current.size !== fontSize) {
       setFontSize(current.size);
     }
-  }, [clearNumberSelection, color, displayAnnotations, fontSize, numberDrag, numberGroupDrag, selectedNumberId, textDrag, textEditor]);
+  }, [clearNumberSelection, displayAnnotations, fontSize, numberDrag, numberGroupDrag, selectedNumberId, textDrag, textEditor]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (textEditorStateRef.current) {
         if (event.key === "Escape") {
-          event.preventDefault();
-          cancelTextEditor();
+          if (handleEscapeAction()) {
+            event.preventDefault();
+          }
           return;
         }
 
@@ -5637,81 +5961,9 @@ export default function ScreenshotOverlayPage() {
       }
 
       if (event.key === "Escape") {
-        if (busyAction) {
-          return;
-        }
-        if (textDrag) {
+        if (handleEscapeAction()) {
           event.preventDefault();
-          setTextDrag(null);
-          return;
         }
-        if (mixedGroupDrag) {
-          event.preventDefault();
-          setMixedGroupDrag(null);
-          return;
-        }
-        if (objectSelectionMarquee) {
-          event.preventDefault();
-          setObjectSelectionMarquee(null);
-          return;
-        }
-        if (numberGroupDrag) {
-          event.preventDefault();
-          setNumberGroupDrag(null);
-          return;
-        }
-        if (numberDrag) {
-          event.preventDefault();
-          setNumberDrag(null);
-          return;
-        }
-        if (shapeGroupDrag) {
-          event.preventDefault();
-          setShapeGroupDrag(null);
-          return;
-        }
-        if (shapeTransform) {
-          event.preventDefault();
-          setShapeTransform(null);
-          return;
-        }
-        if (penGroupDrag) {
-          event.preventDefault();
-          setPenGroupDrag(null);
-          return;
-        }
-        if (penTransform) {
-          event.preventDefault();
-          setPenTransform(null);
-          return;
-        }
-        if (effectGroupDrag) {
-          event.preventDefault();
-          setEffectGroupDrag(null);
-          return;
-        }
-        if (effectTransform) {
-          event.preventDefault();
-          setEffectTransform(null);
-          return;
-        }
-        if (draft) {
-          event.preventDefault();
-          setDraft(null);
-          return;
-        }
-        if (tool !== "select") {
-          event.preventDefault();
-          setTool("select");
-          return;
-        }
-        if (annotations.length > 0) {
-          event.preventDefault();
-          resetAnnotations();
-          return;
-        }
-        event.preventDefault();
-        void handleCancel();
         return;
       }
 
@@ -5946,7 +6198,23 @@ export default function ScreenshotOverlayPage() {
 
       if (hasMixedFamilySelectionForActions && selection && event.key.startsWith("Arrow")) {
         event.preventDefault();
-        message.info("跨家族混选的方向键微调将在下一阶段接入");
+        const distance = event.shiftKey ? 10 : 1;
+        if (event.key === "ArrowLeft") {
+          nudgeSelectedMixedObjects(-distance, 0);
+          return;
+        }
+        if (event.key === "ArrowRight") {
+          nudgeSelectedMixedObjects(distance, 0);
+          return;
+        }
+        if (event.key === "ArrowUp") {
+          nudgeSelectedMixedObjects(0, -distance);
+          return;
+        }
+        if (event.key === "ArrowDown") {
+          nudgeSelectedMixedObjects(0, distance);
+          return;
+        }
         return;
       }
 
@@ -6072,10 +6340,7 @@ export default function ScreenshotOverlayPage() {
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [
-    annotations.length,
     applyStrokeWidthValue,
-    busyAction,
-    cancelTextEditor,
     commitTextEditor,
       copySelectedEffect,
       copySelectedMixedObjects,
@@ -6089,46 +6354,70 @@ export default function ScreenshotOverlayPage() {
     deleteSelectedPen,
     deleteSelectedShape,
     deleteSelectedTexts,
-    draft,
-    effectGroupDrag,
-    effectTransform,
     getSelectedObjectBuckets,
-    handleCancel,
+    handleEscapeAction,
     handleCopy,
     handleSave,
     message,
-    mixedGroupDrag,
     moveSelectedAnnotationLayer,
-    numberDrag,
-    numberGroupDrag,
+    nudgeSelectedMixedObjects,
     nudgeSelectedEffect,
     nudgeSelectedNumber,
     nudgeSelectedPen,
     nudgeSelectedShape,
     nudgeSelectedTexts,
-    objectSelectionMarquee,
       pasteEffectClipboard,
       pasteMixedClipboard,
       pasteNumberClipboard,
       pastePenClipboard,
       pasteShapeClipboard,
     pasteTextClipboard,
-    penGroupDrag,
-    penTransform,
     redo,
-    resetAnnotations,
     resolvePreferredPasteObjectKind,
     selection,
     selectAllObjects,
     setObjectSelectionMarquee,
-    shapeGroupDrag,
-    shapeTransform,
     strokeWidth,
-    textDrag,
     tool,
     toolHotkeyMap,
     undo,
   ]);
+
+  useEffect(() => {
+    if (!runtimeAvailable) {
+      return;
+    }
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    void (async () => {
+      try {
+        const detach = await listenToScreenshotEscapePressedEvents((event) => {
+          if (disposed) {
+            return;
+          }
+          if (activeSessionIdRef.current !== event.sessionId) {
+            return;
+          }
+          handleEscapeAction();
+        });
+        if (disposed) {
+          detach();
+          return;
+        }
+        unlisten = detach;
+      } catch (error) {
+        console.warn("listen screenshot escape event failed", error);
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [handleEscapeAction, runtimeAvailable]);
 
   const hasMeaningfulSelection = Boolean(selection && selection.width >= 12 && selection.height >= 12);
   const toolbarDisabled = !hasMeaningfulSelection || !!busyAction;
@@ -6137,7 +6426,6 @@ export default function ScreenshotOverlayPage() {
   const hasSelectedPen = selectedPenAnnotations.length > 0;
   const hasSelectedNumber = selectedNumberAnnotations.length > 0;
   const hasSelectedEffect = selectedEffectAnnotations.length > 0;
-  const mixedSelectionActionLocked = hasMixedFamilySelection;
   const layerControlDisabled = toolbarDisabled || !!textEditor || (!hasSelectedText && !hasSelectedShape && !hasSelectedPen && !hasSelectedNumber && !hasSelectedEffect);
   const showFloatingToolbar = hasMeaningfulSelection;
   const showSelectionStatusBar =
@@ -6203,8 +6491,8 @@ export default function ScreenshotOverlayPage() {
       return {
         tone: "selection",
         title: `跨家族混选 · ${totalSelectedObjectCount} 个对象 / ${selectedFamilyCount} 个家族`,
-        subtitle: "当前已开放整组拖动、复制/重复/粘贴、删除、层级和全选；方向键微调将在后续阶段接入",
-        chips: ["整组拖动", "Ctrl/Cmd+C/V/D", "Delete 删除", "Ctrl+[ / ] 层级", "Ctrl/Cmd+A 全选"],
+        subtitle: "当前已开放整组拖动、方向键微调、复制/重复/粘贴、删除、层级和全选",
+        chips: ["整组拖动", "方向键/Shift 微调", "Ctrl/Cmd+C/V/D", "Delete 删除", "Ctrl+[ / ] 层级", "Ctrl/Cmd+A 全选"],
       };
     }
 
@@ -6230,8 +6518,8 @@ export default function ScreenshotOverlayPage() {
       return {
         tone: "selection",
         title: `图形批处理 · ${selectedShapeAnnotations.length} 个对象`,
-        subtitle: "当前为图形多选状态，可统一调整样式和层级",
-        chips: ["整组拖动", "复制/重复", "颜色/线宽", "层级", "方向键"],
+        subtitle: "当前为图形多选状态，可统一调整线宽和层级",
+        chips: ["整组拖动", "复制/重复", "线宽", "层级", "方向键"],
       };
     }
 
@@ -6239,8 +6527,8 @@ export default function ScreenshotOverlayPage() {
       return {
         tone: "selection",
         title: `图形对象 · ${getShapeKindLabel(selectedShapeAnnotation.kind)}`,
-        subtitle: "可拖动、句柄编辑，并修改颜色和线宽",
-        chips: ["句柄编辑", "拖动", "复制/重复", "颜色/线宽", "层级"],
+        subtitle: "可拖动、句柄编辑，并修改线宽",
+        chips: ["句柄编辑", "拖动", "复制/重复", "线宽", "层级"],
       };
     }
 
@@ -6257,8 +6545,8 @@ export default function ScreenshotOverlayPage() {
       return {
         tone: "selection",
         title: "画笔对象 · 单选",
-        subtitle: "可拖动路径，并修改颜色、线宽和层级",
-        chips: ["拖动", "复制/重复", "颜色/线宽", "层级", "方向键"],
+        subtitle: "可拖动路径，并修改线宽和层级",
+        chips: ["拖动", "复制/重复", "线宽", "层级", "方向键"],
       };
     }
 
@@ -6275,8 +6563,8 @@ export default function ScreenshotOverlayPage() {
       return {
         tone: "selection",
         title: `编号对象 · #${selectedNumberAnnotation.value}`,
-        subtitle: "可拖动，并修改颜色、字号和层级",
-        chips: ["拖动", "复制/重复", "颜色/字号", "层级", "方向键"],
+        subtitle: "可拖动，并修改字号和层级",
+        chips: ["拖动", "复制/重复", "字号", "层级", "方向键"],
       };
     }
 
@@ -6301,8 +6589,8 @@ export default function ScreenshotOverlayPage() {
     return {
       tone: "idle",
       title: "默认样式状态",
-      subtitle: "未选中对象时，当前颜色、字号、旋转等设置会作用于新建对象",
-      chips: ["文字默认样式", "编号默认颜色/字号", "工具热键可切换"],
+      subtitle: "未选中对象时，当前字号、旋转等设置会作用于新建对象",
+      chips: ["文字默认样式", "编号默认字号", "工具热键可切换"],
     };
   }, [
     hasMixedFamilySelection,
@@ -6322,8 +6610,476 @@ export default function ScreenshotOverlayPage() {
     selectedTextAnnotations,
     totalSelectedObjectCount,
   ]);
-  const toolbarLeft = activeRect ? clamp(activeRect.x + activeRect.width / 2, 240, (session?.displayWidth ?? 480) - 240) : 240;
-  const toolbarTop = activeRect ? clamp(activeRect.y + activeRect.height + 16, 24, (session?.displayHeight ?? 180) - 64) : 24;
+
+  useEffect(() => {
+    if (!showWebFloatingToolbar) {
+      return;
+    }
+
+    const node = toolbarRef.current;
+    if (!node) {
+      return;
+    }
+
+    const syncWidth = () => {
+      const nextWidth = Math.ceil(node.getBoundingClientRect().width);
+      setToolbarMeasuredWidth((current) => (Math.abs(current - nextWidth) < 1 ? current : nextWidth));
+    };
+
+    syncWidth();
+
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      syncWidth();
+    });
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+    };
+  }, [showWebFloatingToolbar]);
+
+  const toolbarToolActions: ToolbarIconAction[] = TOOLS.map((item) => ({
+    key: `tool-${item.key}`,
+    label: item.label,
+    icon: getToolbarToolIcon(item.key),
+    active: tool === item.key,
+    disabled: toolbarDisabled,
+    onClick: () => setTool(item.key),
+  }));
+
+  const toolbarTextStyleActions: ToolbarIconAction[] = showTextStyleControls
+    ? TEXT_STYLE_OPTIONS.map((item) => ({
+        key: `text-style-${item.key}`,
+        label: `文字样式 · ${item.label}`,
+        icon: getToolbarTextStyleIcon(item.key),
+        active: textStyle === item.key,
+        disabled: toolbarDisabled,
+        onClick: () => applyTextStyle(item.key),
+      }))
+    : [];
+
+  const toolbarValueActions: ToolbarIconAction[] = [];
+  if (showStrokeControls) {
+    toolbarValueActions.push(
+      {
+        key: "stroke-width-dec",
+        label: `线宽 -1 · 当前 ${strokeWidth}`,
+        icon: <Minus size={15} />,
+        disabled: toolbarDisabled || strokeWidth <= 1,
+        onClick: () => applyStrokeWidthValue(strokeWidth - 1),
+      },
+      {
+        key: "stroke-width-inc",
+        label: `线宽 +1 · 当前 ${strokeWidth}`,
+        icon: <Plus size={15} />,
+        disabled: toolbarDisabled || strokeWidth >= 18,
+        onClick: () => applyStrokeWidthValue(strokeWidth + 1),
+      },
+    );
+  }
+  if (showTextControls) {
+    toolbarValueActions.push(
+      {
+        key: "font-size-dec",
+        label: `字号 -2 · 当前 ${fontSize}`,
+        icon: <Minus size={15} />,
+        disabled: toolbarDisabled || fontSize <= 10,
+        onClick: () => applyFontSize(fontSize - 2),
+      },
+      {
+        key: "font-size-inc",
+        label: `字号 +2 · 当前 ${fontSize}`,
+        icon: <Plus size={15} />,
+        disabled: toolbarDisabled || fontSize >= 64,
+        onClick: () => applyFontSize(fontSize + 2),
+      },
+      {
+        key: "text-rotate-left",
+        label: `文字左转 15° · 当前 ${textRotation}°`,
+        icon: <RotateCcw size={15} />,
+        disabled: toolbarDisabled || textRotation <= -180,
+        onClick: () => applyTextRotation(textRotation - 15),
+      },
+      {
+        key: "text-rotate-right",
+        label: `文字右转 15° · 当前 ${textRotation}°`,
+        icon: <RotateCw size={15} />,
+        disabled: toolbarDisabled || textRotation >= 180,
+        onClick: () => applyTextRotation(textRotation + 15),
+      },
+      {
+        key: "text-opacity-dec",
+        label: `文字透明度 -10% · 当前 ${textOpacity}%`,
+        icon: <Minus size={15} />,
+        disabled: toolbarDisabled || textOpacity <= 10,
+        onClick: () => applyTextOpacityValue(textOpacity - 10),
+      },
+      {
+        key: "text-opacity-inc",
+        label: `文字透明度 +10% · 当前 ${textOpacity}%`,
+        icon: <Plus size={15} />,
+        disabled: toolbarDisabled || textOpacity >= 100,
+        onClick: () => applyTextOpacityValue(textOpacity + 10),
+      },
+    );
+  }
+  if (showFillControls) {
+    toolbarValueActions.push(
+      {
+        key: "fill-opacity-dec",
+        label: `填充透明度 -10% · 当前 ${fillOpacity}%`,
+        icon: <Minus size={15} />,
+        disabled: toolbarDisabled || fillOpacity <= 5,
+        onClick: () => setFillOpacity(clampNumber(fillOpacity - 10, 5, 90)),
+      },
+      {
+        key: "fill-opacity-inc",
+        label: `填充透明度 +10% · 当前 ${fillOpacity}%`,
+        icon: <Plus size={15} />,
+        disabled: toolbarDisabled || fillOpacity >= 90,
+        onClick: () => setFillOpacity(clampNumber(fillOpacity + 10, 5, 90)),
+      },
+    );
+  }
+  if (showEffectControls) {
+    toolbarValueActions.push(
+      {
+        key: "mosaic-size-dec",
+        label: `马赛克强度 -2 · 当前 ${mosaicSize}`,
+        icon: <Minus size={15} />,
+        disabled: toolbarDisabled || mosaicSize <= 4,
+        onClick: () => applyEffectIntensity("mosaic", mosaicSize - 2),
+      },
+      {
+        key: "mosaic-size-inc",
+        label: `马赛克强度 +2 · 当前 ${mosaicSize}`,
+        icon: <Plus size={15} />,
+        disabled: toolbarDisabled || mosaicSize >= 48,
+        onClick: () => applyEffectIntensity("mosaic", mosaicSize + 2),
+      },
+      {
+        key: "blur-radius-dec",
+        label: `模糊半径 -1 · 当前 ${blurRadius}`,
+        icon: <Minus size={15} />,
+        disabled: toolbarDisabled || blurRadius <= 2,
+        onClick: () => applyEffectIntensity("blur", blurRadius - 1),
+      },
+      {
+        key: "blur-radius-inc",
+        label: `模糊半径 +1 · 当前 ${blurRadius}`,
+        icon: <Plus size={15} />,
+        disabled: toolbarDisabled || blurRadius >= 24,
+        onClick: () => applyEffectIntensity("blur", blurRadius + 1),
+      },
+    );
+  }
+
+  const toolbarObjectActions: ToolbarIconAction[] = [];
+  if (showObjectActionControls) {
+    toolbarObjectActions.push(
+      {
+        key: "layer-back",
+        label: "置底",
+        icon: <ChevronsLeft size={15} />,
+        disabled: layerControlDisabled,
+        onClick: () => moveSelectedAnnotationLayer("back"),
+      },
+      {
+        key: "layer-backward",
+        label: "后移一层",
+        icon: <ChevronLeft size={15} />,
+        disabled: layerControlDisabled,
+        onClick: () => moveSelectedAnnotationLayer("backward"),
+      },
+      {
+        key: "layer-forward",
+        label: "前移一层",
+        icon: <ChevronRight size={15} />,
+        disabled: layerControlDisabled,
+        onClick: () => moveSelectedAnnotationLayer("forward"),
+      },
+      {
+        key: "layer-front",
+        label: "置顶",
+        icon: <ChevronsRight size={15} />,
+        disabled: layerControlDisabled,
+        onClick: () => moveSelectedAnnotationLayer("front"),
+      },
+    );
+
+    if (hasMixedFamilySelection) {
+      toolbarObjectActions.push(
+        {
+          key: "mixed-copy",
+          label: "复制所选对象",
+          icon: <Copy size={15} />,
+          disabled: !hasMixedFamilySelection,
+          onClick: () => copySelectedMixedObjects(),
+        },
+        {
+          key: "mixed-paste",
+          label: "粘贴混选对象",
+          icon: <ClipboardPaste size={15} />,
+          disabled: toolbarDisabled,
+          onClick: () => pasteMixedClipboard("clipboard"),
+        },
+        {
+          key: "mixed-duplicate",
+          label: "重复所选对象",
+          icon: <CopyPlus size={15} />,
+          disabled: toolbarDisabled || !hasMixedFamilySelection,
+          onClick: () => pasteMixedClipboard("duplicate"),
+        },
+        {
+          key: "mixed-delete",
+          label: "删除所选对象",
+          icon: <Trash2 size={15} />,
+          danger: true,
+          disabled: !hasMixedFamilySelection,
+          onClick: deleteSelectedMixedObjects,
+        },
+      );
+    } else if (hasSelectedText) {
+      toolbarObjectActions.push(
+        {
+          key: "text-copy",
+          label: "复制文字对象",
+          icon: <Copy size={15} />,
+          disabled: !hasSelectedText,
+          onClick: () => copySelectedTexts(),
+        },
+        {
+          key: "text-paste",
+          label: "粘贴文字对象",
+          icon: <ClipboardPaste size={15} />,
+          disabled: toolbarDisabled,
+          onClick: () => pasteTextClipboard("clipboard"),
+        },
+        {
+          key: "text-duplicate",
+          label: "重复文字对象",
+          icon: <CopyPlus size={15} />,
+          disabled: !hasSelectedText,
+          onClick: () => pasteTextClipboard("duplicate"),
+        },
+        {
+          key: "text-delete",
+          label: "删除文字对象",
+          icon: <Trash2 size={15} />,
+          danger: true,
+          disabled: !hasSelectedText,
+          onClick: deleteSelectedTexts,
+        },
+      );
+    } else if (hasSelectedShape) {
+      toolbarObjectActions.push(
+        {
+          key: "shape-copy",
+          label: "复制图形对象",
+          icon: <Copy size={15} />,
+          disabled: !hasSelectedShape,
+          onClick: () => copySelectedShape(),
+        },
+        {
+          key: "shape-paste",
+          label: "粘贴图形对象",
+          icon: <ClipboardPaste size={15} />,
+          disabled: toolbarDisabled,
+          onClick: () => pasteShapeClipboard("clipboard"),
+        },
+        {
+          key: "shape-duplicate",
+          label: "重复图形对象",
+          icon: <CopyPlus size={15} />,
+          disabled: !hasSelectedShape,
+          onClick: () => pasteShapeClipboard("duplicate"),
+        },
+        {
+          key: "shape-delete",
+          label: "删除图形对象",
+          icon: <Trash2 size={15} />,
+          danger: true,
+          disabled: !hasSelectedShape,
+          onClick: deleteSelectedShape,
+        },
+      );
+    } else if (hasSelectedPen) {
+      toolbarObjectActions.push(
+        {
+          key: "pen-copy",
+          label: "复制画笔对象",
+          icon: <Copy size={15} />,
+          disabled: !hasSelectedPen,
+          onClick: () => copySelectedPen(),
+        },
+        {
+          key: "pen-paste",
+          label: "粘贴画笔对象",
+          icon: <ClipboardPaste size={15} />,
+          disabled: toolbarDisabled,
+          onClick: () => pastePenClipboard("clipboard"),
+        },
+        {
+          key: "pen-duplicate",
+          label: "重复画笔对象",
+          icon: <CopyPlus size={15} />,
+          disabled: !hasSelectedPen,
+          onClick: () => pastePenClipboard("duplicate"),
+        },
+        {
+          key: "pen-delete",
+          label: "删除画笔对象",
+          icon: <Trash2 size={15} />,
+          danger: true,
+          disabled: !hasSelectedPen,
+          onClick: deleteSelectedPen,
+        },
+      );
+    } else if (hasSelectedNumber) {
+      toolbarObjectActions.push(
+        {
+          key: "number-copy",
+          label: "复制编号对象",
+          icon: <Copy size={15} />,
+          disabled: !hasSelectedNumber,
+          onClick: () => copySelectedNumber(),
+        },
+        {
+          key: "number-paste",
+          label: "粘贴编号对象",
+          icon: <ClipboardPaste size={15} />,
+          disabled: toolbarDisabled,
+          onClick: () => pasteNumberClipboard("clipboard"),
+        },
+        {
+          key: "number-duplicate",
+          label: "重复编号对象",
+          icon: <CopyPlus size={15} />,
+          disabled: !hasSelectedNumber,
+          onClick: () => pasteNumberClipboard("duplicate"),
+        },
+        {
+          key: "number-delete",
+          label: "删除编号对象",
+          icon: <Trash2 size={15} />,
+          danger: true,
+          disabled: !hasSelectedNumber,
+          onClick: deleteSelectedNumber,
+        },
+      );
+    } else if (hasSelectedEffect) {
+      toolbarObjectActions.push(
+        {
+          key: "effect-copy",
+          label: "复制效果对象",
+          icon: <Copy size={15} />,
+          disabled: !hasSelectedEffect,
+          onClick: () => copySelectedEffect(),
+        },
+        {
+          key: "effect-paste",
+          label: "粘贴效果对象",
+          icon: <ClipboardPaste size={15} />,
+          disabled: toolbarDisabled,
+          onClick: () => pasteEffectClipboard("clipboard"),
+        },
+        {
+          key: "effect-duplicate",
+          label: "重复效果对象",
+          icon: <CopyPlus size={15} />,
+          disabled: !hasSelectedEffect,
+          onClick: () => pasteEffectClipboard("duplicate"),
+        },
+        {
+          key: "effect-delete",
+          label: "删除效果对象",
+          icon: <Trash2 size={15} />,
+          danger: true,
+          disabled: !hasSelectedEffect,
+          onClick: deleteSelectedEffect,
+        },
+      );
+    }
+  }
+
+  const toolbarSessionActions: ToolbarIconAction[] = [
+    {
+      key: "undo",
+      label: "撤销",
+      icon: <Undo2 size={15} />,
+      disabled: toolbarDisabled || historyStack.length === 0,
+      onClick: undo,
+    },
+    {
+      key: "redo",
+      label: "重做",
+      icon: <Redo2 size={15} />,
+      disabled: toolbarDisabled || redoStack.length === 0,
+      onClick: redo,
+    },
+    {
+      key: "copy",
+      label: "复制截图",
+      icon: <Copy size={15} />,
+      disabled: toolbarDisabled,
+      loading: busyAction === "copy",
+      onClick: () => {
+        void handleCopy();
+      },
+    },
+    {
+      key: "save",
+      label: "保存截图",
+      icon: <Save size={15} />,
+      disabled: toolbarDisabled,
+      loading: busyAction === "save",
+      onClick: () => {
+        void handleSave();
+      },
+    },
+    {
+      key: "cancel",
+      label: "取消截图",
+      icon: <X size={15} />,
+      danger: true,
+      loading: busyAction === "cancel",
+      onClick: () => {
+        void handleCancel();
+      },
+    },
+  ];
+
+  const toolbarSections = [
+    toolbarToolActions,
+    toolbarTextStyleActions,
+    toolbarValueActions,
+    toolbarObjectActions,
+    toolbarSessionActions,
+  ].filter((section) => section.length > 0);
+
+  const toolbarAnchorRect =
+    nativeSelectionInteractionStabilizing && frozenToolbarRectRef.current
+      ? frozenToolbarRectRef.current
+      : activeRect;
+  const toolbarDisplayWidth = session?.displayWidth ?? 480;
+  const toolbarSafeHalfWidth = Math.min(
+    Math.max(Math.ceil(toolbarMeasuredWidth / 2) + 12, 120),
+    Math.max((toolbarDisplayWidth - 24) / 2, 120),
+  );
+  const toolbarLeft = toolbarAnchorRect
+    ? clamp(
+        toolbarAnchorRect.x + toolbarAnchorRect.width / 2,
+        toolbarSafeHalfWidth,
+        Math.max(toolbarSafeHalfWidth, toolbarDisplayWidth - toolbarSafeHalfWidth),
+      )
+    : toolbarDisplayWidth / 2;
+  const toolbarTop = toolbarAnchorRect
+    ? clamp(toolbarAnchorRect.y + toolbarAnchorRect.height + 16, 24, (session?.displayHeight ?? 180) - 64)
+    : 24;
+  const selectionStatusTop = Math.max(12, toolbarTop - 76);
   const textEditorLayout = selection && textEditor ? resolveTextEditorLayout(textEditor, selection) : null;
   const textEditorVisual = textEditor ? resolveTextEditorVisual(textEditor) : null;
 
@@ -6485,124 +7241,106 @@ export default function ScreenshotOverlayPage() {
               />
             </div>
           ) : null}
+          {showSelectionStatusBar && showWebFloatingToolbar ? (
+            <div
+              className="absolute z-40 max-w-[calc(100vw-24px)] -translate-x-1/2"
+              style={{ left: `${toolbarLeft}px`, top: `${selectionStatusTop}px` }}
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              <SelectionStatusBar model={statusBarModel} />
+            </div>
+          ) : null}
           {showWebFloatingToolbar ? (
             <div
               ref={toolbarRef}
-              className="absolute z-40 flex max-w-[min(860px,calc(100vw-24px))] -translate-x-1/2 flex-col gap-2 rounded border border-white/20 bg-black/78 px-3 py-2 backdrop-blur"
+              role="toolbar"
+              aria-label="截图工具栏"
+              className="absolute z-40 flex max-w-[calc(100vw-24px)] -translate-x-1/2 items-center gap-2 overflow-x-auto rounded-xl border border-white/14 bg-black/80 px-2 py-2 shadow-[0_16px_40px_rgba(0,0,0,0.35)] backdrop-blur"
               style={{ left: `${toolbarLeft}px`, top: `${toolbarTop}px` }}
               onPointerDown={(event) => event.stopPropagation()}
             >
-              <Space size={6} wrap>
-                {TOOLS.map((item) => (
-                  <Button key={item.key} disabled={toolbarDisabled} size="small" type={tool === item.key ? "primary" : "default"} onClick={() => setTool(item.key)}>
-                    {item.label}
-                  </Button>
-                ))}
-              </Space>
-
-              <Space size={6} wrap>
-                {COLORS.map((entry) => (
-                  <button
-                    key={entry}
-                    className={`h-5 w-5 rounded border transition-colors ${color === entry ? "border-white shadow-[0_0_0_1px_#ffffffaa]" : "border-white/35"}`}
-                    disabled={toolbarDisabled}
-                    style={{ backgroundColor: entry }}
-                    type="button"
-                    onClick={() => applyColor(entry)}
-                  />
-                ))}
-              </Space>
-
-              {showTextStyleControls ? (
-                <Space size={6} wrap>
-                  {TEXT_STYLE_OPTIONS.map((item) => (
-                    <Button key={item.key} disabled={toolbarDisabled} size="small" type={textStyle === item.key ? "primary" : "default"} onClick={() => applyTextStyle(item.key)}>
-                      {item.label}
-                    </Button>
+              {toolbarSections.map((section, index) => (
+                <div key={`toolbar-section-${index}`} className="flex shrink-0 items-center gap-1">
+                  {section.map((action) => (
+                    <ToolbarIconButton key={action.key} action={action} />
                   ))}
-                </Space>
-              ) : null}
-
-              {showSelectionStatusBar ? <SelectionStatusBar model={statusBarModel} /> : null}
-
-              <Space size={8} wrap>
-                <Button disabled={toolbarDisabled || historyStack.length === 0} size="small" onClick={undo}>撤销</Button>
-                <Button disabled={toolbarDisabled || redoStack.length === 0} size="small" onClick={redo}>重做</Button>
-                {showStrokeControls ? (
-                  <>
-                    <span className="text-[11px] text-white/75">线宽</span>
-                    <Input className="w-14" disabled={toolbarDisabled} max={18} min={1} size="small" type="number" value={strokeWidth} onChange={(event) => applyStrokeWidthValue(Number.parseInt(event.target.value || "1", 10))} />
-                  </>
-                ) : null}
-                {showTextControls ? (
-                  <>
-                    <span className="text-[11px] text-white/75">字号</span>
-                    <Input className="w-14" disabled={toolbarDisabled} max={64} min={10} size="small" type="number" value={fontSize} onChange={(event) => applyFontSize(Number.parseInt(event.target.value || "10", 10))} />
-                    <span className="text-[11px] text-white/75">旋转</span>
-                    <Input className="w-16" disabled={toolbarDisabled} max={180} min={-180} size="small" type="number" value={textRotation} onChange={(event) => applyTextRotation(Number.parseInt(event.target.value || "0", 10))} />
-                    <span className="text-[11px] text-white/75">透明</span>
-                    <Input className="w-14" disabled={toolbarDisabled} max={100} min={10} size="small" type="number" value={textOpacity} onChange={(event) => applyTextOpacityValue(Number.parseInt(event.target.value || "10", 10))} />
-                  </>
-                ) : null}
-                {showFillControls ? (
-                  <>
-                    <span className="text-[11px] text-white/75">填充</span>
-                    <Input className="w-14" disabled={toolbarDisabled} max={90} min={5} size="small" type="number" value={fillOpacity} onChange={(event) => setFillOpacity(clampNumber(Number.parseInt(event.target.value || "5", 10), 5, 90))} />
-                  </>
-                ) : null}
-                {showEffectControls ? (
-                  <>
-                    <span className="text-[11px] text-white/75">马赛克</span>
-                    <Input className="w-14" disabled={toolbarDisabled} max={48} min={4} size="small" type="number" value={mosaicSize} onChange={(event) => applyEffectIntensity("mosaic", Number.parseInt(event.target.value || "4", 10))} />
-                    <span className="text-[11px] text-white/75">模糊</span>
-                    <Input className="w-14" disabled={toolbarDisabled} max={24} min={2} size="small" type="number" value={blurRadius} onChange={(event) => applyEffectIntensity("blur", Number.parseInt(event.target.value || "2", 10))} />
-                  </>
-                ) : null}
-              </Space>
-
-              {showObjectActionControls ? (
-                <Space size={8} wrap>
-                  <Button disabled={layerControlDisabled} size="small" onClick={() => moveSelectedAnnotationLayer("back")}>置底</Button>
-                  <Button disabled={layerControlDisabled} size="small" onClick={() => moveSelectedAnnotationLayer("backward")}>后移</Button>
-                  <Button disabled={layerControlDisabled} size="small" onClick={() => moveSelectedAnnotationLayer("forward")}>前移</Button>
-                  <Button disabled={layerControlDisabled} size="small" onClick={() => moveSelectedAnnotationLayer("front")}>置顶</Button>
-                  <Button disabled={!hasMixedFamilySelection} size="small" onClick={() => copySelectedMixedObjects()}>复制所选</Button>
-                  <Button disabled={toolbarDisabled} size="small" onClick={() => pasteMixedClipboard("clipboard")}>粘贴混选</Button>
-                  <Button disabled={toolbarDisabled || !hasMixedFamilySelection} size="small" onClick={() => pasteMixedClipboard("duplicate")}>重复所选</Button>
-                  <Button disabled={!hasSelectedText || mixedSelectionActionLocked} size="small" onClick={() => copySelectedTexts()}>复制对象</Button>
-                  <Button disabled={toolbarDisabled} size="small" onClick={() => pasteTextClipboard("clipboard")}>粘贴对象</Button>
-                  <Button disabled={!hasSelectedText || mixedSelectionActionLocked} size="small" onClick={() => pasteTextClipboard("duplicate")}>重复对象</Button>
-                  <Button disabled={!hasSelectedShape || mixedSelectionActionLocked} size="small" onClick={() => copySelectedShape()}>复制图形</Button>
-                  <Button disabled={toolbarDisabled} size="small" onClick={() => pasteShapeClipboard("clipboard")}>粘贴图形</Button>
-                  <Button disabled={!hasSelectedShape || mixedSelectionActionLocked} size="small" onClick={() => pasteShapeClipboard("duplicate")}>重复图形</Button>
-                  <Button disabled={!hasSelectedPen || mixedSelectionActionLocked} size="small" onClick={() => copySelectedPen()}>复制画笔</Button>
-                  <Button disabled={toolbarDisabled} size="small" onClick={() => pastePenClipboard("clipboard")}>粘贴画笔</Button>
-                  <Button disabled={!hasSelectedPen || mixedSelectionActionLocked} size="small" onClick={() => pastePenClipboard("duplicate")}>重复画笔</Button>
-                  <Button disabled={!hasSelectedNumber || mixedSelectionActionLocked} size="small" onClick={() => copySelectedNumber()}>复制编号</Button>
-                  <Button disabled={toolbarDisabled} size="small" onClick={() => pasteNumberClipboard("clipboard")}>粘贴编号</Button>
-                  <Button disabled={!hasSelectedNumber || mixedSelectionActionLocked} size="small" onClick={() => pasteNumberClipboard("duplicate")}>重复编号</Button>
-                  <Button disabled={!hasSelectedEffect || mixedSelectionActionLocked} size="small" onClick={() => copySelectedEffect()}>复制效果</Button>
-                  <Button disabled={toolbarDisabled} size="small" onClick={() => pasteEffectClipboard("clipboard")}>粘贴效果</Button>
-                  <Button disabled={!hasSelectedEffect || mixedSelectionActionLocked} size="small" onClick={() => pasteEffectClipboard("duplicate")}>重复效果</Button>
-                  <Button danger disabled={!hasMixedFamilySelection} size="small" onClick={deleteSelectedMixedObjects}>删除所选</Button>
-                  <Button danger disabled={!hasSelectedShape || mixedSelectionActionLocked} size="small" onClick={deleteSelectedShape}>删除图形</Button>
-                  <Button danger disabled={!hasSelectedPen || mixedSelectionActionLocked} size="small" onClick={deleteSelectedPen}>删除画笔</Button>
-                  <Button danger disabled={!hasSelectedNumber || mixedSelectionActionLocked} size="small" onClick={deleteSelectedNumber}>删除编号</Button>
-                  <Button danger disabled={!hasSelectedEffect || mixedSelectionActionLocked} size="small" onClick={deleteSelectedEffect}>删除效果</Button>
-                </Space>
-              ) : null}
-
-              <Space size={8}>
-                <Button disabled={toolbarDisabled} loading={busyAction === "copy"} size="small" type="primary" onClick={() => void handleCopy()}>复制</Button>
-                <Button disabled={toolbarDisabled} loading={busyAction === "save"} size="small" onClick={() => void handleSave()}>保存</Button>
-                <Button danger loading={busyAction === "cancel"} size="small" onClick={() => void handleCancel()}>取消</Button>
-              </Space>
+                  {index < toolbarSections.length - 1 ? <ToolbarSectionDivider /> : null}
+                </div>
+              ))}
             </div>
           ) : null}
         </>
       ) : null}
     </div>
   );
+}
+
+function getToolbarToolIcon(tool: ToolKind): ReactNode {
+  switch (tool) {
+    case "select":
+      return <MousePointer2 size={15} />;
+    case "line":
+      return <Minus size={15} />;
+    case "rect":
+      return <Square size={15} />;
+    case "ellipse":
+      return <Circle size={15} />;
+    case "arrow":
+      return <ArrowRight size={15} />;
+    case "pen":
+      return <Pencil size={15} />;
+    case "text":
+      return <Type size={15} />;
+    case "number":
+      return <Hash size={15} />;
+    case "fill":
+      return <PaintBucket size={15} />;
+    case "mosaic":
+      return <Grid2x2 size={15} />;
+    case "blur":
+      return <Droplets size={15} />;
+    default:
+      return <Square size={15} />;
+  }
+}
+
+function getToolbarTextStyleIcon(style: TextStyleKind): ReactNode {
+  switch (style) {
+    case "plain":
+      return <Type size={15} />;
+    case "outline":
+      return <SquareDashed size={15} />;
+    case "background":
+      return <Square size={15} />;
+    case "highlight":
+      return <Highlighter size={15} />;
+    default:
+      return <Type size={15} />;
+  }
+}
+
+function ToolbarIconButton({ action }: { action: ToolbarIconAction }) {
+  return (
+    <Tooltip placement="top" title={action.label}>
+      <span className="inline-flex shrink-0">
+        <Button
+          aria-label={action.label}
+          className="!h-8 !w-8 !min-w-8 !shrink-0 !px-0"
+          danger={action.danger}
+          disabled={action.disabled}
+          icon={action.icon}
+          loading={action.loading}
+          size="small"
+          type={action.active ? "primary" : "default"}
+          onClick={action.onClick}
+        />
+      </span>
+    </Tooltip>
+  );
+}
+
+function ToolbarSectionDivider() {
+  return <div className="mx-1 h-5 w-px shrink-0 bg-white/12" aria-hidden="true" />;
 }
 
 function SelectionBorder({ rect }: { rect: SelectionRect }) {
@@ -9650,56 +10388,12 @@ function encodeUrlSafeBase64Utf8(value: string) {
     .replace(/=+$/g, "");
 }
 
-function resolveOverlayToolHotkeys(
-  input?: Partial<OverlayToolHotkeyPreferences> | null,
-): OverlayToolHotkeyPreferences {
-  return {
-    select: normalizeOverlayShortcutWithFallback(
-      input?.select,
-      DEFAULT_SCREENSHOT_TOOL_HOTKEYS.select,
-    ),
-    line: normalizeOverlayShortcutWithFallback(
-      input?.line,
-      DEFAULT_SCREENSHOT_TOOL_HOTKEYS.line,
-    ),
-    rect: normalizeOverlayShortcutWithFallback(
-      input?.rect,
-      DEFAULT_SCREENSHOT_TOOL_HOTKEYS.rect,
-    ),
-    ellipse: normalizeOverlayShortcutWithFallback(
-      input?.ellipse,
-      DEFAULT_SCREENSHOT_TOOL_HOTKEYS.ellipse,
-    ),
-    arrow: normalizeOverlayShortcutWithFallback(
-      input?.arrow,
-      DEFAULT_SCREENSHOT_TOOL_HOTKEYS.arrow,
-    ),
-  };
-}
-
-function buildToolHotkeyMap(
-  hotkeys: OverlayToolHotkeyPreferences,
-): ReadonlyMap<string, ToolKind> {
+function buildToolHotkeyMap(): ReadonlyMap<string, ToolKind> {
   const map = new Map<string, ToolKind>();
-  const configurable: Array<[ConfigurableToolKind, string]> = [
-    ["select", hotkeys.select],
-    ["line", hotkeys.line],
-    ["rect", hotkeys.rect],
-    ["ellipse", hotkeys.ellipse],
-    ["arrow", hotkeys.arrow],
-  ];
-
-  for (const [tool, shortcut] of configurable) {
-    const normalized = normalizeOverlayShortcut(shortcut);
-    if (!normalized) {
-      continue;
-    }
-    map.set(normalized, tool);
-  }
 
   for (const [shortcut, tool] of FIXED_SCREENSHOT_TOOL_HOTKEYS) {
     const normalized = normalizeOverlayShortcut(shortcut);
-    if (!normalized || map.has(normalized)) {
+    if (!normalized) {
       continue;
     }
     map.set(normalized, tool);
@@ -9718,17 +10412,6 @@ function resolveToolHotkeyFromKeyboardEvent(
   }
 
   return toolHotkeyMap.get(normalized) ?? null;
-}
-
-function normalizeOverlayShortcutWithFallback(
-  value: string | null | undefined,
-  fallback: string,
-) {
-  return (
-    normalizeOverlayShortcut(value ?? "") ??
-    normalizeOverlayShortcut(fallback) ??
-    fallback.trim().toLowerCase()
-  );
 }
 
 function normalizeOverlayShortcut(value: string): string | null {
@@ -9970,6 +10653,66 @@ function areNativeInteractionStatesEqual(
     areSelectionRectsEqual(left.selection ?? null, right.selection ?? null) &&
     areSelectionRectsEqual(left.rectDraft ?? null, right.rectDraft ?? null)
   );
+}
+
+function buildNativeInteractionRuntimeRequestKey(
+  request: NativeInteractionRuntimeRequest,
+) {
+  return JSON.stringify({
+    sessionId: request.sessionId,
+    visible: request.visible,
+    mode: request.mode,
+    exclusionRects: request.exclusionRects.map((rect) => ({
+      x: roundRuntimeGeometry(rect.x),
+      y: roundRuntimeGeometry(rect.y),
+      width: roundRuntimeGeometry(rect.width),
+      height: roundRuntimeGeometry(rect.height),
+    })),
+    selection: request.selection
+      ? {
+          x: roundRuntimeGeometry(request.selection.x),
+          y: roundRuntimeGeometry(request.selection.y),
+          width: roundRuntimeGeometry(request.selection.width),
+          height: roundRuntimeGeometry(request.selection.height),
+        }
+      : null,
+    activeShape: request.activeShape
+      ? {
+          id: request.activeShape.id,
+          kind: request.activeShape.kind,
+          color: request.activeShape.color,
+          strokeWidth: roundRuntimeGeometry(request.activeShape.strokeWidth),
+          start: {
+            x: roundRuntimeGeometry(request.activeShape.start.x),
+            y: roundRuntimeGeometry(request.activeShape.start.y),
+          },
+          end: {
+            x: roundRuntimeGeometry(request.activeShape.end.x),
+            y: roundRuntimeGeometry(request.activeShape.end.y),
+          },
+        }
+      : null,
+    shapeCandidates: request.shapeCandidates.map((shape) => ({
+      id: shape.id,
+      kind: shape.kind,
+      color: shape.color,
+      strokeWidth: roundRuntimeGeometry(shape.strokeWidth),
+      start: {
+        x: roundRuntimeGeometry(shape.start.x),
+        y: roundRuntimeGeometry(shape.start.y),
+      },
+      end: {
+        x: roundRuntimeGeometry(shape.end.x),
+        y: roundRuntimeGeometry(shape.end.y),
+      },
+    })),
+    color: request.color,
+    strokeWidth: roundRuntimeGeometry(request.strokeWidth),
+  });
+}
+
+function roundRuntimeGeometry(value: number) {
+  return Number(value.toFixed(3));
 }
 
 function areNativeEditableShapesEqual(
