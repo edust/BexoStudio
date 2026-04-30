@@ -130,6 +130,10 @@ export function parseTerminalCommandLine(commandLine: string): ParsedTerminalCom
 }
 
 export function buildTerminalCommandLine(command: string, args: string[]) {
+  if (args.length === 0) {
+    return command.trim();
+  }
+
   return [command, ...args]
     .filter((segment) => segment.trim().length > 0)
     .map((segment) => quoteIfNeeded(segment.trim()))

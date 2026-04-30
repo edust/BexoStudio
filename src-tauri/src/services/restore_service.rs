@@ -13,7 +13,8 @@ use tauri::{AppHandle, Emitter};
 
 use crate::{
     adapters::{
-        run_launch_command, ActionProcessKey, ChildProcessRegistry, CodexAdapter, CodexLaunchInput,
+        build_windows_command_shell_run_args, build_windows_shell_command_line, run_launch_command,
+        ActionProcessKey, ChildProcessRegistry, CodexAdapter, CodexLaunchInput,
         DefaultCodexAdapter, IdeAdapter, JetBrainsAdapter, LaunchCommand, ProcessLaunchResult,
         ProcessTrackingContext, TerminalAdapter, TerminalLaunchInput, VSCodeAdapter,
         WindowsTerminalAdapter,
@@ -2170,9 +2171,20 @@ async fn execute_launch_task(
     match launch_task.task_type.as_str() {
         "terminal_command" => {
             let working_dir = resolve_launch_task_working_dir(launch_task, project_directory)?;
+            let command_line =
+                build_windows_shell_command_line(&launch_task.command, &launch_task.args);
+            let shell_executable = WindowsTerminalAdapter
+                .detect_shell_executable()
+                .ok_or_else(|| {
+                    AppError::new(
+                        "SHELL_EXECUTABLE_UNAVAILABLE",
+                        "Windows command shell executable is not available on this machine",
+                    )
+                    .with_detail("launchTaskId", launch_task.id.clone())
+                })?;
             run_launch_command(LaunchCommand {
-                executable_path: PathBuf::from(launch_task.command.clone()),
-                args: launch_task.args.clone(),
+                executable_path: shell_executable,
+                args: build_windows_command_shell_run_args(&command_line),
                 current_dir: Some(PathBuf::from(working_dir)),
                 envs: Vec::new(),
                 timeout: Duration::from_millis(launch_task.timeout_ms as u64),
@@ -2945,6 +2957,7 @@ mod tests {
             hotkey: crate::domain::HotkeyPreferences::default(),
             tray: TrayPreferences::default(),
             diagnostics: DiagnosticsPreferences::default(),
+            codex_history: crate::domain::CodexHistoryViewPreferences::default(),
         });
 
         let database = crate::persistence::Database::new(unique_db_path("restore-capabilities"));

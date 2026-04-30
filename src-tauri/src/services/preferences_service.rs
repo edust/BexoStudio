@@ -7,13 +7,15 @@ use std::{
 
 use chrono::Utc;
 use tauri::{AppHandle, Manager, Runtime};
+#[cfg(not(windows))]
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_store::{Store, StoreExt};
 
 use crate::{
     adapters::{resolve_configured_executable, IdeAdapter, JetBrainsAdapter, VSCodeAdapter},
     domain::{
-        AppPreferences, EditorPathDetectionResult, HotkeyAction, HotkeyPreferences,
+        AppPreferences, CodexHistoryViewPreferences, EditorPathDetectionResult, HotkeyAction,
+        HotkeyPreferences, DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE,
         DEFAULT_SCREENSHOT_CAPTURE_HOTKEY, EARLIER_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
         LEGACY_SCREENSHOT_CAPTURE_HOTKEY, PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
     },
@@ -25,6 +27,9 @@ use super::windows_hook_hotkey::classify_supported_shortcut;
 
 const PREFERENCES_STORE_PATH: &str = "settings/preferences.json";
 const PREFERENCES_STORE_KEY: &str = "appPreferences";
+const CODEX_HISTORY_MIN_MESSAGE_FONT_SIZE: i32 = 10;
+const CODEX_HISTORY_MAX_MESSAGE_FONT_SIZE: i32 = 24;
+const CODEX_HISTORY_MAX_FONT_FAMILY_LENGTH: usize = 160;
 
 #[derive(Debug, Clone)]
 pub struct PreferencesService {
@@ -63,7 +68,10 @@ impl PreferencesService {
         let previous_preferences = self.get_preferences()?;
         let validated = validate_preferences(input)?;
         sync_autostart_launch_at_login(app, validated.startup.launch_at_login)?;
-        hotkey_service.apply_preferences(app, &validated)?;
+        if let Err(error) = hotkey_service.apply_preferences(app, &validated) {
+            rollback_autostart_launch_at_login(app, &previous_preferences);
+            return Err(error);
+        }
         let store = self.open_store(app)?;
         if let Err(error) = self.write_store(&store, &validated) {
             if let Err(rollback_error) =
@@ -75,10 +83,16 @@ impl PreferencesService {
                     rollback_error
                 );
             }
+            rollback_autostart_launch_at_login(app, &previous_preferences);
             return Err(error);
         }
         self.replace_cache(validated.clone())?;
         Ok(validated)
+    }
+
+    pub fn sync_launch_at_login<R: Runtime>(&self, app: &AppHandle<R>) -> AppResult<()> {
+        let preferences = self.get_preferences()?;
+        sync_autostart_launch_at_login(app, preferences.startup.launch_at_login)
     }
 
     pub fn set_preferences_for_runtime(&self, input: AppPreferences) -> AppResult<AppPreferences> {
@@ -240,10 +254,12 @@ fn migrate_legacy_preferences(mut preferences: AppPreferences) -> PreferenceMigr
 fn repair_invalid_preferences(mut preferences: AppPreferences) -> PreferenceRepairResult {
     let repaired_hotkeys = sanitize_hotkey_preferences(preferences.hotkey);
     preferences.hotkey = repaired_hotkeys.preferences;
+    let repaired_codex_history = sanitize_codex_history_view_preferences(preferences.codex_history);
+    preferences.codex_history = repaired_codex_history.preferences;
 
     PreferenceRepairResult {
         preferences,
-        changed: repaired_hotkeys.changed,
+        changed: repaired_hotkeys.changed || repaired_codex_history.changed,
     }
 }
 
@@ -369,33 +385,396 @@ fn sanitize_optional_hotkey_shortcut(
     }
 }
 
+#[derive(Debug)]
+struct CodexHistoryViewPreferenceRepairResult {
+    preferences: CodexHistoryViewPreferences,
+    changed: bool,
+}
+
+fn sanitize_codex_history_view_preferences(
+    input: CodexHistoryViewPreferences,
+) -> CodexHistoryViewPreferenceRepairResult {
+    let defaults = CodexHistoryViewPreferences::default();
+    let mut changed = false;
+
+    let message_font_family =
+        match validate_codex_history_font_family(input.message_font_family.clone()) {
+            Ok(validated) => {
+                if validated != input.message_font_family {
+                    changed = true;
+                }
+                validated
+            }
+            Err(error) => {
+                log::warn!(
+                    target: "bexo::service::preferences",
+                    "repair codex history font family reason={}",
+                    error
+                );
+                changed = true;
+                defaults.message_font_family.clone()
+            }
+        };
+
+    let message_font_size = if (CODEX_HISTORY_MIN_MESSAGE_FONT_SIZE
+        ..=CODEX_HISTORY_MAX_MESSAGE_FONT_SIZE)
+        .contains(&input.message_font_size)
+    {
+        input.message_font_size
+    } else {
+        log::warn!(
+            target: "bexo::service::preferences",
+            "repair codex history message font size value={}",
+            input.message_font_size
+        );
+        changed = true;
+        DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE
+    };
+
+    CodexHistoryViewPreferenceRepairResult {
+        preferences: CodexHistoryViewPreferences {
+            message_font_family,
+            message_font_size,
+        },
+        changed,
+    }
+}
+
 fn sync_autostart_launch_at_login<R: Runtime>(
     app: &AppHandle<R>,
     should_enable: bool,
 ) -> AppResult<()> {
-    let autolaunch = app.autolaunch();
-    let current_enabled = autolaunch.is_enabled().map_err(|error| {
-        AppError::new("AUTOSTART_STATUS_READ_FAILED", "读取开机启动状态失败")
-            .with_detail("reason", error.to_string())
-    })?;
-
-    if current_enabled == should_enable {
-        return Ok(());
+    #[cfg(windows)]
+    {
+        return windows_autostart::sync_launch_at_login(
+            app.package_info().name.as_str(),
+            should_enable,
+        );
     }
 
-    if should_enable {
-        autolaunch.enable().map_err(|error| {
-            AppError::new("AUTOSTART_ENABLE_FAILED", "开启开机启动失败")
+    #[cfg(not(windows))]
+    {
+        let autolaunch = app.autolaunch();
+        let current_enabled = autolaunch.is_enabled().map_err(|error| {
+            AppError::new("AUTOSTART_STATUS_READ_FAILED", "读取开机启动状态失败")
                 .with_detail("reason", error.to_string())
         })?;
-    } else {
-        autolaunch.disable().map_err(|error| {
-            AppError::new("AUTOSTART_DISABLE_FAILED", "关闭开机启动失败")
-                .with_detail("reason", error.to_string())
-        })?;
+
+        if current_enabled == should_enable {
+            return Ok(());
+        }
+
+        if should_enable {
+            autolaunch.enable().map_err(|error| {
+                AppError::new("AUTOSTART_ENABLE_FAILED", "开启开机启动失败")
+                    .with_detail("reason", error.to_string())
+            })?;
+        } else {
+            autolaunch.disable().map_err(|error| {
+                AppError::new("AUTOSTART_DISABLE_FAILED", "关闭开机启动失败")
+                    .with_detail("reason", error.to_string())
+            })?;
+        }
+
+        Ok(())
+    }
+}
+
+fn rollback_autostart_launch_at_login<R: Runtime>(
+    app: &AppHandle<R>,
+    previous_preferences: &AppPreferences,
+) {
+    if let Err(error) =
+        sync_autostart_launch_at_login(app, previous_preferences.startup.launch_at_login)
+    {
+        log::error!(
+            target: "bexo::service::preferences",
+            "autostart rollback failed after preferences update error: {}",
+            error
+        );
+    }
+}
+
+#[cfg(windows)]
+mod windows_autostart {
+    use std::{
+        ffi::{c_void, OsStr},
+        os::windows::ffi::OsStrExt,
+        path::Path,
+        ptr,
+    };
+
+    use crate::error::{AppError, AppResult};
+
+    type HKey = isize;
+
+    const HKEY_CURRENT_USER: HKey = -2147483647i32 as HKey;
+    const ERROR_SUCCESS: i32 = 0;
+    const ERROR_FILE_NOT_FOUND: i32 = 2;
+    const REG_SZ: u32 = 1;
+    const REG_BINARY: u32 = 3;
+    const KEY_SET_VALUE: u32 = 0x0002;
+    const REG_OPTION_NON_VOLATILE: u32 = 0;
+    const RUN_KEY: &str = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run";
+    const STARTUP_APPROVED_RUN_KEY: &str =
+        "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run";
+    const AUTOSTART_ARGS: [&str; 1] = ["--autostart"];
+    const TASK_MANAGER_ENABLED_VALUE: [u8; 12] = [
+        0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    #[link(name = "Advapi32")]
+    extern "system" {
+        fn RegCreateKeyExW(
+            hkey: HKey,
+            lp_sub_key: *const u16,
+            reserved: u32,
+            lp_class: *const u16,
+            dw_options: u32,
+            sam_desired: u32,
+            lp_security_attributes: *const c_void,
+            phk_result: *mut HKey,
+            lpdw_disposition: *mut u32,
+        ) -> i32;
+        fn RegOpenKeyExW(
+            hkey: HKey,
+            lp_sub_key: *const u16,
+            ul_options: u32,
+            sam_desired: u32,
+            phk_result: *mut HKey,
+        ) -> i32;
+        fn RegSetValueExW(
+            hkey: HKey,
+            lp_value_name: *const u16,
+            reserved: u32,
+            dw_type: u32,
+            lp_data: *const u8,
+            cb_data: u32,
+        ) -> i32;
+        fn RegDeleteValueW(hkey: HKey, lp_value_name: *const u16) -> i32;
+        fn RegCloseKey(hkey: HKey) -> i32;
     }
 
-    Ok(())
+    pub fn sync_launch_at_login(app_name: &str, should_enable: bool) -> AppResult<()> {
+        let app_name = app_name.trim();
+        if app_name.is_empty() {
+            return Err(AppError::new(
+                "AUTOSTART_APP_NAME_INVALID",
+                "开机启动应用名称无效",
+            ));
+        }
+
+        if should_enable {
+            let executable = std::env::current_exe().map_err(|error| {
+                AppError::new("AUTOSTART_PATH_RESOLVE_FAILED", "解析开机启动路径失败")
+                    .with_detail("reason", error.to_string())
+            })?;
+            let command_line = build_registry_run_command_line(&executable, &AUTOSTART_ARGS);
+            set_registry_string_value(RUN_KEY, app_name, &command_line)?;
+            set_startup_approved_enabled(app_name)?;
+        } else {
+            delete_registry_value_if_exists(RUN_KEY, app_name)?;
+        }
+
+        Ok(())
+    }
+
+    fn set_startup_approved_enabled(app_name: &str) -> AppResult<()> {
+        let key = create_registry_key(STARTUP_APPROVED_RUN_KEY, "AUTOSTART_APPROVAL_OPEN_FAILED")?;
+        set_registry_raw_value(&key, app_name, REG_BINARY, &TASK_MANAGER_ENABLED_VALUE).map_err(
+            |error| {
+                AppError::new(
+                    "AUTOSTART_APPROVAL_WRITE_FAILED",
+                    "更新开机启动任务管理器状态失败",
+                )
+                .with_detail("reason", error)
+            },
+        )
+    }
+
+    fn set_registry_string_value(key_path: &str, value_name: &str, value: &str) -> AppResult<()> {
+        let key = create_registry_key(key_path, "AUTOSTART_REGISTRY_OPEN_FAILED")?;
+        let wide_value = to_wide_null(value);
+        let bytes = unsafe {
+            std::slice::from_raw_parts(wide_value.as_ptr().cast::<u8>(), wide_value.len() * 2)
+        };
+
+        set_registry_raw_value(&key, value_name, REG_SZ, bytes).map_err(|error| {
+            AppError::new("AUTOSTART_REGISTRY_WRITE_FAILED", "写入开机启动注册表失败")
+                .with_detail("reason", error)
+                .with_detail("commandLine", value.to_string())
+        })
+    }
+
+    fn set_registry_raw_value(
+        key: &RegistryKey,
+        value_name: &str,
+        value_type: u32,
+        value: &[u8],
+    ) -> Result<(), String> {
+        let wide_name = to_wide_null(value_name);
+        let status = unsafe {
+            RegSetValueExW(
+                key.0,
+                wide_name.as_ptr(),
+                0,
+                value_type,
+                value.as_ptr(),
+                value.len() as u32,
+            )
+        };
+        if status == ERROR_SUCCESS {
+            Ok(())
+        } else {
+            Err(format!("RegSetValueExW returned {status}"))
+        }
+    }
+
+    fn delete_registry_value_if_exists(key_path: &str, value_name: &str) -> AppResult<()> {
+        let key = match open_registry_key(key_path) {
+            Ok(key) => key,
+            Err(status) if status == ERROR_FILE_NOT_FOUND => return Ok(()),
+            Err(status) => {
+                return Err(AppError::new(
+                    "AUTOSTART_REGISTRY_OPEN_FAILED",
+                    "打开开机启动注册表失败",
+                )
+                .with_detail("reason", format!("RegOpenKeyExW returned {status}")));
+            }
+        };
+
+        let wide_name = to_wide_null(value_name);
+        let status = unsafe { RegDeleteValueW(key.0, wide_name.as_ptr()) };
+        if status == ERROR_SUCCESS || status == ERROR_FILE_NOT_FOUND {
+            Ok(())
+        } else {
+            Err(
+                AppError::new("AUTOSTART_REGISTRY_DELETE_FAILED", "删除开机启动注册表失败")
+                    .with_detail("reason", format!("RegDeleteValueW returned {status}")),
+            )
+        }
+    }
+
+    fn create_registry_key(key_path: &str, error_code: &str) -> AppResult<RegistryKey> {
+        let wide_path = to_wide_null(key_path);
+        let mut key: HKey = 0;
+        let status = unsafe {
+            RegCreateKeyExW(
+                HKEY_CURRENT_USER,
+                wide_path.as_ptr(),
+                0,
+                ptr::null(),
+                REG_OPTION_NON_VOLATILE,
+                KEY_SET_VALUE,
+                ptr::null(),
+                &mut key,
+                ptr::null_mut(),
+            )
+        };
+
+        if status == ERROR_SUCCESS {
+            Ok(RegistryKey(key))
+        } else {
+            Err(AppError::new(error_code, "打开开机启动注册表失败")
+                .with_detail("reason", format!("RegCreateKeyExW returned {status}")))
+        }
+    }
+
+    fn open_registry_key(key_path: &str) -> Result<RegistryKey, i32> {
+        let wide_path = to_wide_null(key_path);
+        let mut key: HKey = 0;
+        let status = unsafe {
+            RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                wide_path.as_ptr(),
+                0,
+                KEY_SET_VALUE,
+                &mut key,
+            )
+        };
+
+        if status == ERROR_SUCCESS {
+            Ok(RegistryKey(key))
+        } else {
+            Err(status)
+        }
+    }
+
+    fn build_registry_run_command_line(app_path: &Path, args: &[&str]) -> String {
+        let mut parts = vec![quote_windows_command_arg(&app_path.display().to_string())];
+        parts.extend(args.iter().map(|arg| quote_windows_command_arg(arg)));
+        parts.join(" ")
+    }
+
+    fn quote_windows_command_arg(value: &str) -> String {
+        let mut quoted = String::with_capacity(value.len() + 2);
+        quoted.push('"');
+
+        let mut backslash_count = 0usize;
+        for character in value.chars() {
+            match character {
+                '\\' => {
+                    backslash_count += 1;
+                }
+                '"' => {
+                    quoted.extend(std::iter::repeat('\\').take(backslash_count * 2 + 1));
+                    quoted.push('"');
+                    backslash_count = 0;
+                }
+                _ => {
+                    quoted.extend(std::iter::repeat('\\').take(backslash_count));
+                    quoted.push(character);
+                    backslash_count = 0;
+                }
+            }
+        }
+
+        quoted.extend(std::iter::repeat('\\').take(backslash_count * 2));
+        quoted.push('"');
+        quoted
+    }
+
+    fn to_wide_null(value: &str) -> Vec<u16> {
+        OsStr::new(value).encode_wide().chain([0]).collect()
+    }
+
+    struct RegistryKey(HKey);
+
+    impl Drop for RegistryKey {
+        fn drop(&mut self) {
+            unsafe {
+                RegCloseKey(self.0);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::path::Path;
+
+        use super::{build_registry_run_command_line, quote_windows_command_arg};
+
+        #[test]
+        fn registry_run_command_quotes_executable_path_and_autostart_arg() {
+            let command = build_registry_run_command_line(
+                Path::new(r"C:\Users\aka86\AppData\Local\Bexo Studio\Bexo Studio.exe"),
+                &["--autostart"],
+            );
+
+            assert_eq!(
+                command,
+                r#""C:\Users\aka86\AppData\Local\Bexo Studio\Bexo Studio.exe" "--autostart""#
+            );
+        }
+
+        #[test]
+        fn command_arg_quote_escapes_embedded_quotes_and_trailing_slash() {
+            assert_eq!(
+                quote_windows_command_arg(r#"C:\Path With "Quote"\"#),
+                r#""C:\Path With \"Quote\"\\""#
+            );
+        }
+    }
 }
 
 fn validate_preferences(input: AppPreferences) -> AppResult<AppPreferences> {
@@ -490,12 +869,50 @@ fn validate_preferences(input: AppPreferences) -> AppResult<AppPreferences> {
         hotkey: validate_hotkey_preferences(input.hotkey)?,
         tray: input.tray,
         diagnostics: input.diagnostics,
+        codex_history: validate_codex_history_view_preferences(input.codex_history)?,
     })
 }
 
 fn validate_startup_preferences(
     input: crate::domain::StartupPreferences,
 ) -> AppResult<crate::domain::StartupPreferences> {
+    Ok(input)
+}
+
+fn validate_codex_history_view_preferences(
+    input: CodexHistoryViewPreferences,
+) -> AppResult<CodexHistoryViewPreferences> {
+    Ok(CodexHistoryViewPreferences {
+        message_font_family: validate_codex_history_font_family(input.message_font_family)?,
+        message_font_size: validate_codex_history_message_font_size(input.message_font_size)?,
+    })
+}
+
+fn validate_codex_history_font_family(input: String) -> AppResult<String> {
+    let trimmed = input.trim();
+    if trimmed.chars().count() > CODEX_HISTORY_MAX_FONT_FAMILY_LENGTH {
+        return Err(
+            AppError::validation("Codex 历史字体名称不能超过 160 个字符")
+                .with_detail("field", "codexHistory.messageFontFamily"),
+        );
+    }
+    if trimmed.chars().any(char::is_control) {
+        return Err(
+            AppError::validation("Codex 历史字体名称不能包含换行或控制字符")
+                .with_detail("field", "codexHistory.messageFontFamily"),
+        );
+    }
+    Ok(trimmed.to_string())
+}
+
+fn validate_codex_history_message_font_size(input: i32) -> AppResult<i32> {
+    if !(CODEX_HISTORY_MIN_MESSAGE_FONT_SIZE..=CODEX_HISTORY_MAX_MESSAGE_FONT_SIZE).contains(&input)
+    {
+        return Err(
+            AppError::validation("Codex 历史字号必须在 10px 到 24px 之间")
+                .with_detail("field", "codexHistory.messageFontSize"),
+        );
+    }
     Ok(input)
 }
 
@@ -1036,11 +1453,13 @@ mod tests {
     use std::{env, fs};
 
     use super::{
-        build_codex_home_directory_info, migrate_legacy_preferences, sanitize_hotkey_preferences,
-        validate_hotkey_shortcut,
+        build_codex_home_directory_info, migrate_legacy_preferences,
+        sanitize_codex_history_view_preferences, sanitize_hotkey_preferences,
+        validate_codex_history_message_font_size, validate_hotkey_shortcut,
     };
     use crate::domain::{
-        AppPreferences, HotkeyAction, DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
+        AppPreferences, CodexHistoryViewPreferences, HotkeyAction,
+        DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE, DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
         EARLIER_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY, LEGACY_SCREENSHOT_CAPTURE_HOTKEY,
         PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
     };
@@ -1092,6 +1511,46 @@ mod tests {
         assert_eq!(
             migrated.preferences.hotkey.screenshot_capture,
             "Ctrl+Shift+Q"
+        );
+    }
+
+    #[test]
+    fn codex_history_font_size_default_is_twelve_pixels() {
+        let preferences = CodexHistoryViewPreferences::default();
+        assert_eq!(
+            preferences.message_font_size,
+            DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE
+        );
+        assert_eq!(preferences.message_font_size, 12);
+    }
+
+    #[test]
+    fn codex_history_font_size_validation_rejects_out_of_range_values() {
+        let error = validate_codex_history_message_font_size(9)
+            .expect_err("font size below range should be rejected");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert_eq!(
+            error
+                .details
+                .as_ref()
+                .and_then(|details| details.get("field"))
+                .map(String::as_str),
+            Some("codexHistory.messageFontSize")
+        );
+    }
+
+    #[test]
+    fn codex_history_preferences_repair_restores_invalid_size() {
+        let repaired = sanitize_codex_history_view_preferences(CodexHistoryViewPreferences {
+            message_font_family: "  Microsoft YaHei  ".to_string(),
+            message_font_size: -2,
+        });
+
+        assert!(repaired.changed);
+        assert_eq!(repaired.preferences.message_font_family, "Microsoft YaHei");
+        assert_eq!(
+            repaired.preferences.message_font_size,
+            DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE
         );
     }
 

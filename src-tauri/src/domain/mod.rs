@@ -1,4 +1,5 @@
 mod adapter;
+mod codex_history;
 mod codex_profile;
 mod hotkey;
 mod launch_task;
@@ -21,6 +22,11 @@ pub use adapter::{
     OpenWorkspaceInEditorResult, OpenWorkspaceTerminalResult, RestoreCapabilities,
     RunWorkspaceTerminalCommandResult, RunWorkspaceTerminalCommandsResult, StartRestoreRunInput,
 };
+pub use codex_history::{
+    CodexHistoryGlobalSessionsResponse, CodexHistoryMessage, CodexHistoryMessagesInput,
+    CodexHistoryMessagesPage, CodexHistorySession, CodexHistorySessionsResponse,
+    ListCodexHistorySessionsInput, OpenCodexHistoryWindowResult,
+};
 pub use codex_profile::{CodexProfileRecord, UpsertCodexProfileInput};
 pub use hotkey::{HotkeyAction, HotkeyTriggerEvent, HOTKEY_TRIGGER_EVENT_NAME};
 pub use launch_task::{
@@ -36,9 +42,10 @@ pub use native_interaction::{
 };
 #[allow(unused_imports)]
 pub use preferences::{
-    AppPreferences, CodexHomeDirectoryInfo, CustomEditorPreference, DiagnosticsPreferences,
-    HotkeyPreferences, IdePreferences, StartupPreferences, TerminalCommandTemplate,
-    TerminalPreferences, TrayPreferences, WorkspacePreferences, DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
+    AppPreferences, CodexHistoryViewPreferences, CodexHomeDirectoryInfo, CustomEditorPreference,
+    DiagnosticsPreferences, HotkeyPreferences, IdePreferences, StartupPreferences,
+    TerminalCommandTemplate, TerminalPreferences, TrayPreferences, WorkspacePreferences,
+    DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE, DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
     EARLIER_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY, LEGACY_SCREENSHOT_CAPTURE_HOTKEY,
     PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
 };

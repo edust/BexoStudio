@@ -42,7 +42,6 @@ import { sendDesktopNotification } from "@/lib/desktop-notification";
 import {
   buildTerminalCommandLine,
   sortTerminalCommandTemplates,
-  parseTerminalCommandLine,
   terminalCommandLineSchema,
 } from "@/lib/terminal-command";
 import { reorderLayoutTransition } from "@/lib/reorder-motion";
@@ -143,15 +142,15 @@ export default function HomePage() {
         throw new Error("当前工作区没有可配置的项目目录");
       }
 
-      const parsed = parseTerminalCommandLine(values.commandLine);
+      const commandLine = values.commandLine.trim();
       return upsertLaunchTask({
         id: editingTask?.id,
         projectId: selectedProject.id,
         name: values.name.trim(),
         taskType: "terminal_command",
         enabled: editingTask?.enabled ?? true,
-        command: parsed.command,
-        args: parsed.args,
+        command: commandLine,
+        args: [],
         workingDir: workspacePath || undefined,
         timeoutMs: editingTask?.timeoutMs ?? 30_000,
         continueOnFailure: editingTask?.continueOnFailure ?? false,

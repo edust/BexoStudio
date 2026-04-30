@@ -5,6 +5,7 @@ use std::{
 
 use crate::{
     adapters::{
+        build_windows_command_shell_startup_command, build_windows_shell_command_line,
         find_first_executable, run_launch_command, IdeAdapter, JetBrainsAdapter, LaunchCommand,
         TerminalAdapter, TerminalLaunchInput, VSCodeAdapter, WindowsTerminalAdapter,
         WindowsTerminalTabLaunchInput,
@@ -198,7 +199,7 @@ impl WorkspaceService {
             &launch_context.executable_path,
             WindowsTerminalTabLaunchInput {
                 project_path: launch_context.working_dir.clone(),
-                startup_command: Some(build_windows_shell_startup_command(
+                startup_command: Some(build_windows_command_shell_startup_command(
                     &launch_context.shell_executable,
                     &command_line,
                 )),
@@ -269,7 +270,7 @@ impl WorkspaceService {
                 &launch_context.executable_path,
                 WindowsTerminalTabLaunchInput {
                     project_path: resolve_terminal_working_dir_for_task(task, &project)?,
-                    startup_command: Some(build_windows_shell_startup_command(
+                    startup_command: Some(build_windows_command_shell_startup_command(
                         &launch_context.shell_executable,
                         &command_line,
                     )),
@@ -380,7 +381,7 @@ fn resolve_workspace_terminal_target_path(
         (!trimmed.is_empty()).then(|| trimmed.to_string())
     });
     let Some(requested_target) = requested_target else {
-        return Ok(workspace_root.display().to_string());
+        return Ok(path_for_external_terminal(workspace_root));
     };
 
     let requested_path = Path::new(&requested_target);
@@ -441,7 +442,29 @@ fn resolve_workspace_terminal_target_path(
         .with_detail("targetPath", target_directory.display().to_string()));
     }
 
-    Ok(target_directory.display().to_string())
+    Ok(path_for_external_terminal(&target_directory))
+}
+
+fn path_for_external_terminal(path: &Path) -> String {
+    strip_windows_verbatim_prefix(path.display().to_string())
+}
+
+#[cfg(windows)]
+fn strip_windows_verbatim_prefix(path: String) -> String {
+    if let Some(unc_path) = path.strip_prefix("\\\\?\\UNC\\") {
+        return format!("\\\\{unc_path}");
+    }
+
+    if let Some(local_path) = path.strip_prefix("\\\\?\\") {
+        return local_path.to_string();
+    }
+
+    path
+}
+
+#[cfg(not(windows))]
+fn strip_windows_verbatim_prefix(path: String) -> String {
+    path
 }
 
 fn resolve_workspace_terminal_adapter(
@@ -784,7 +807,7 @@ fn resolve_terminal_launch_context(
         .ok_or_else(|| {
             AppError::new(
                 "SHELL_EXECUTABLE_UNAVAILABLE",
-                "PowerShell executable is not available on this machine",
+                "Windows command shell executable is not available on this machine",
             )
             .with_detail("workspaceId", workspace.id.clone())
             .with_detail("projectId", project.id.clone())
@@ -816,29 +839,8 @@ fn resolve_terminal_working_dir_for_task(
         .map_err(|error| error.with_detail("launchTaskId", task.id.clone()))
 }
 
-fn build_windows_shell_startup_command(shell_executable: &str, command_line: &str) -> Vec<String> {
-    vec![
-        shell_executable.to_string(),
-        "-NoExit".to_string(),
-        "-Command".to_string(),
-        command_line.to_string(),
-    ]
-}
-
 fn build_terminal_command_line(task: &LaunchTaskRecord) -> String {
-    let mut segments = Vec::with_capacity(task.args.len() + 2);
-    segments.push("&".to_string());
-    segments.push(quote_powershell_literal(task.command.trim()));
-    segments.extend(
-        task.args
-            .iter()
-            .map(|arg| quote_powershell_literal(arg.trim())),
-    );
-    segments.join(" ")
-}
-
-fn quote_powershell_literal(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
+    build_windows_shell_command_line(&task.command, &task.args)
 }
 
 #[cfg(test)]
@@ -851,7 +853,7 @@ mod tests {
         WorkspacePreferences,
     };
 
-    use super::{build_terminal_command_line, quote_powershell_literal, WorkspaceService};
+    use super::{build_terminal_command_line, strip_windows_verbatim_prefix, WorkspaceService};
 
     fn unique_db_path(name: &str) -> std::path::PathBuf {
         env::temp_dir().join(format!(
@@ -1063,6 +1065,7 @@ mod tests {
             hotkey: crate::domain::HotkeyPreferences::default(),
             tray: TrayPreferences::default(),
             diagnostics: DiagnosticsPreferences::default(),
+            codex_history: crate::domain::CodexHistoryViewPreferences::default(),
         });
 
         let workspace = service
@@ -1131,6 +1134,7 @@ mod tests {
             hotkey: crate::domain::HotkeyPreferences::default(),
             tray: TrayPreferences::default(),
             diagnostics: DiagnosticsPreferences::default(),
+            codex_history: crate::domain::CodexHistoryViewPreferences::default(),
         });
 
         let workspace = service
@@ -1197,6 +1201,7 @@ mod tests {
             hotkey: crate::domain::HotkeyPreferences::default(),
             tray: TrayPreferences::default(),
             diagnostics: DiagnosticsPreferences::default(),
+            codex_history: crate::domain::CodexHistoryViewPreferences::default(),
         });
 
         let workspace = service
@@ -1222,15 +1227,30 @@ mod tests {
     }
 
     #[test]
-    fn powershell_literal_quoting_preserves_single_quotes() {
+    fn terminal_command_line_preserves_raw_shell_command() {
+        let task = crate::domain::LaunchTaskRecord {
+            id: "task-1".into(),
+            project_id: "project-1".into(),
+            name: "Backend".into(),
+            task_type: "terminal_command".into(),
+            enabled: true,
+            command: r#"cd "D:\workspace\backend" && go run ./cmd"#.into(),
+            args: Vec::new(),
+            working_dir: r"D:\workspace".into(),
+            timeout_ms: 30_000,
+            continue_on_failure: false,
+            retry_policy: Default::default(),
+            sort_order: 0,
+        };
+
         assert_eq!(
-            quote_powershell_literal(r"C:\work\don's app"),
-            r"'C:\work\don''s app'"
+            build_terminal_command_line(&task),
+            r#"cd "D:\workspace\backend" && go run ./cmd"#
         );
     }
 
     #[test]
-    fn terminal_command_line_uses_call_operator_and_literal_arguments() {
+    fn terminal_command_line_keeps_legacy_command_args_compatible_with_cmd() {
         let task = crate::domain::LaunchTaskRecord {
             id: "task-1".into(),
             project_id: "project-1".into(),
@@ -1248,7 +1268,20 @@ mod tests {
 
         assert_eq!(
             build_terminal_command_line(&task),
-            "& 'cd' 'C:\\My App\\demo' 'say \"hi\"'"
+            r#"cd "C:\My App\demo" "say \"hi\"""#
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn terminal_path_output_strips_windows_verbatim_prefixes() {
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\D:\workspace\demo".to_string()),
+            r"D:\workspace\demo"
+        );
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\UNC\server\share\demo".to_string()),
+            r"\\server\share\demo"
         );
     }
 }

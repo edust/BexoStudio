@@ -7,6 +7,7 @@ import {
   CopyOutlined,
   DownOutlined,
   FolderOpenOutlined,
+  HistoryOutlined,
   HolderOutlined,
   PlusOutlined,
   SearchOutlined,
@@ -29,6 +30,7 @@ import {
   hasDesktopRuntime,
   listRecentRestoreTargets,
   listWorkspaces,
+  openCodexHistoryWindow,
   openWorkspaceInEditor,
   openWorkspaceTerminal,
   registerWorkspaceFolder,
@@ -152,6 +154,13 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
       toast.success(`已在终端中打开 ${variables.workspaceName}`, {
         description: result.workspacePath,
       });
+    },
+  });
+  const openCodexHistoryWindowMutation = useMutation({
+    mutationFn: ({ workspaceId }: { workspaceId: string; workspaceName: string }) =>
+      openCodexHistoryWindow(workspaceId),
+    onSuccess: (_result, variables) => {
+      toast.success(`已打开 ${variables.workspaceName} 的 Codex 历史窗口`);
     },
   });
   const openWorkspaceInEditorMutation = useMutation({
@@ -810,6 +819,28 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
     }
   }
 
+  async function handleOpenCodexHistory(workspace: WorkspaceRecord) {
+    const workspacePath = resolveWorkspacePath(workspace);
+    if (!workspacePath) {
+      toast.error("当前工作区没有可查看的目录路径");
+      return;
+    }
+
+    if (!desktopRuntimeAvailable) {
+      toast.error("当前页面需要在桌面应用中查看 Codex 历史");
+      return;
+    }
+
+    try {
+      await openCodexHistoryWindowMutation.mutateAsync({
+        workspaceId: workspace.id,
+        workspaceName: workspace.name,
+      });
+    } catch (error) {
+      toast.error(getErrorSummary(error).message);
+    }
+  }
+
   async function handleOpenWorkspaceTerminal(workspace: WorkspaceRecord) {
     try {
       await openWorkspaceTerminalMutation.mutateAsync({
@@ -1224,6 +1255,7 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
                     editorKey={resolveWorkspaceEditorKey(item.workspace, workspaceEditorOptions)}
                     editorOptions={workspaceEditorOptions}
                     onCopyPath={() => void handleCopyWorkspacePath(item.workspace)}
+                    onOpenCodexHistory={() => void handleOpenCodexHistory(item.workspace)}
                     onChangeEditor={(editorKey) =>
                       void handleWorkspaceEditorChange(item.workspace, editorKey)
                     }
@@ -1247,6 +1279,11 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
                     openInEditorLoading={
                       openWorkspaceInEditorMutation.isPending &&
                       openWorkspaceInEditorMutation.variables?.workspaceId === item.workspace.id
+                    }
+                    openCodexHistoryDisabled={openCodexHistoryWindowMutation.isPending}
+                    openCodexHistoryLoading={
+                      openCodexHistoryWindowMutation.isPending &&
+                      openCodexHistoryWindowMutation.variables?.workspaceId === item.workspace.id
                     }
                     openTerminalDisabled={openWorkspaceTerminalMutation.isPending}
                     openTerminalLoading={
@@ -1277,6 +1314,7 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
                     editorKey={resolveWorkspaceEditorKey(item.workspace, workspaceEditorOptions)}
                     editorOptions={workspaceEditorOptions}
                     onCopyPath={() => void handleCopyWorkspacePath(item.workspace)}
+                    onOpenCodexHistory={() => void handleOpenCodexHistory(item.workspace)}
                     onChangeEditor={(editorKey) =>
                       void handleWorkspaceEditorChange(item.workspace, editorKey)
                     }
@@ -1298,6 +1336,11 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
                     openInEditorLoading={
                       openWorkspaceInEditorMutation.isPending &&
                       openWorkspaceInEditorMutation.variables?.workspaceId === item.workspace.id
+                    }
+                    openCodexHistoryDisabled={openCodexHistoryWindowMutation.isPending}
+                    openCodexHistoryLoading={
+                      openCodexHistoryWindowMutation.isPending &&
+                      openCodexHistoryWindowMutation.variables?.workspaceId === item.workspace.id
                     }
                     openTerminalDisabled={openWorkspaceTerminalMutation.isPending}
                     openTerminalLoading={
@@ -1424,6 +1467,7 @@ type WorkspaceSidebarCardProps = {
   onChangeEditor: (editorKey: WorkspaceEditorKey) => void;
   onDragEnd?: () => void;
   onDragStart?: () => void;
+  onOpenCodexHistory: () => void;
   onOpenDirectory: () => void;
   onOpenInEditor: (editorKey: WorkspaceEditorKey) => void;
   onOpenTerminal: () => void;
@@ -1432,6 +1476,8 @@ type WorkspaceSidebarCardProps = {
   onSelect: () => void;
   onSelectionChange: (checked: boolean) => void;
   openInEditorLoading: boolean;
+  openCodexHistoryDisabled: boolean;
+  openCodexHistoryLoading: boolean;
   openTerminalDisabled: boolean;
   openTerminalLoading: boolean;
   editorSaving: boolean;
@@ -1454,6 +1500,7 @@ const WorkspaceSidebarCard = memo(function WorkspaceSidebarCard({
   onChangeEditor,
   onDragEnd,
   onDragStart,
+  onOpenCodexHistory,
   onOpenDirectory,
   onOpenInEditor,
   onOpenTerminal,
@@ -1462,6 +1509,8 @@ const WorkspaceSidebarCard = memo(function WorkspaceSidebarCard({
   onSelect,
   onSelectionChange,
   openInEditorLoading,
+  openCodexHistoryDisabled,
+  openCodexHistoryLoading,
   openTerminalDisabled,
   openTerminalLoading,
   editorSaving,
@@ -1489,16 +1538,17 @@ const WorkspaceSidebarCard = memo(function WorkspaceSidebarCard({
   } satisfies MenuProps;
   const preferredEditorOption =
     editorOptions.find((option) => option.key === editorKey) ?? editorOptions[0];
+  const workspacePath = resolveWorkspacePath(workspaceItem.workspace);
   const openEditorTooltip = !desktopRuntimeAvailable
     ? "请在桌面应用中打开工作区编辑器"
-    : !resolveWorkspacePath(workspaceItem.workspace)
+    : !workspacePath
       ? "当前工作区没有可打开的目录路径"
       : preferredEditorOption?.available
         ? `使用 ${preferredEditorOption.label} 打开工作区`
         : preferredEditorOption?.message ?? "当前默认编辑器不可用";
   const openEditorDisabled =
     !desktopRuntimeAvailable ||
-    !resolveWorkspacePath(workspaceItem.workspace) ||
+    !workspacePath ||
     !preferredEditorOption?.available;
   const editorMenuItems = editorOptions.map((option) => ({
     key: option.key,
@@ -1567,11 +1617,27 @@ const WorkspaceSidebarCard = memo(function WorkspaceSidebarCard({
             最后运行：{formatLastRunAt(workspaceItem.recentRestoreTarget)}
           </Typography.Text>
           <div className="mt-1 flex items-center gap-1">
+            <Tooltip placement="bottom" title="查看 Codex 会话历史">
+              <span onClick={(event) => event.stopPropagation()}>
+                <Button
+                  className="!h-6 !w-6 !min-w-6 !p-0"
+                  disabled={!desktopRuntimeAvailable || openCodexHistoryDisabled || !workspacePath}
+                  icon={<HistoryOutlined />}
+                  loading={openCodexHistoryLoading}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onOpenCodexHistory();
+                  }}
+                  size="small"
+                  type="text"
+                />
+              </span>
+            </Tooltip>
             <Tooltip placement="bottom" title="复制工作区绝对路径">
               <span onClick={(event) => event.stopPropagation()}>
                 <Button
                   className="!h-6 !w-6 !min-w-6 !p-0"
-                  disabled={!resolveWorkspacePath(workspaceItem.workspace)}
+                  disabled={!workspacePath}
                   icon={<CopyOutlined />}
                   onClick={(event) => {
                     event.stopPropagation();
@@ -1589,7 +1655,7 @@ const WorkspaceSidebarCard = memo(function WorkspaceSidebarCard({
                   disabled={
                     !desktopRuntimeAvailable ||
                     openTerminalDisabled ||
-                    !resolveWorkspacePath(workspaceItem.workspace)
+                    !workspacePath
                   }
                   icon={<CodeOutlined />}
                   loading={openTerminalLoading}
@@ -1606,7 +1672,7 @@ const WorkspaceSidebarCard = memo(function WorkspaceSidebarCard({
               <span onClick={(event) => event.stopPropagation()}>
                 <Button
                   className="!h-6 !w-6 !min-w-6 !p-0"
-                  disabled={!desktopRuntimeAvailable || !resolveWorkspacePath(workspaceItem.workspace)}
+                  disabled={!desktopRuntimeAvailable || !workspacePath}
                   icon={<FolderOpenOutlined />}
                   onClick={(event) => {
                     event.stopPropagation();
@@ -1751,6 +1817,8 @@ const WorkspaceSidebarCard = memo(function WorkspaceSidebarCard({
   previous.dragging === next.dragging &&
   previous.editorKey === next.editorKey &&
   previous.openInEditorLoading === next.openInEditorLoading &&
+  previous.openCodexHistoryDisabled === next.openCodexHistoryDisabled &&
+  previous.openCodexHistoryLoading === next.openCodexHistoryLoading &&
   previous.openTerminalDisabled === next.openTerminalDisabled &&
   previous.openTerminalLoading === next.openTerminalLoading &&
   previous.editorSaving === next.editorSaving &&

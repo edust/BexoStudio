@@ -13,6 +13,7 @@ export function PrimaryRail() {
   const toggleThemeMode = useShellStore((state) => state.toggleThemeMode);
   const isDark = themeMode === "dark";
   const homeItem = primaryNavigation.find((item) => item.key === "home");
+  const middleItems = primaryNavigation.filter((item) => item.key !== "home" && item.key !== "settings");
   const settingsItem = primaryNavigation.find((item) => item.key === "settings");
 
   return (
@@ -38,6 +39,14 @@ export function PrimaryRail() {
             themeMode={themeMode}
           />
         ) : null}
+        {middleItems.map((item) => (
+          <PrimaryRailButton
+            active={location.pathname === item.href || location.pathname.startsWith(`${item.href}/`)}
+            item={item}
+            key={item.key}
+            themeMode={themeMode}
+          />
+        ))}
       </div>
 
       <div className="mt-auto flex w-full flex-col items-center gap-0.5">

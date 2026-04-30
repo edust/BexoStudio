@@ -1,7 +1,7 @@
 mod tray;
 mod window;
 
-use std::{fs, path::PathBuf};
+use std::{ffi::OsStr, fs, path::PathBuf};
 
 use crate::{commands, domain::SCREENSHOT_OVERLAY_WINDOW_LABEL, logging};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -28,11 +28,18 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            log::info!(
-                target: "bexo::app",
-                "blocked second instance launch and redirected focus to the running instance"
-            );
-            focus_main_window(app);
+            if args_indicate_autostart(&_argv) {
+                log::info!(
+                    target: "bexo::app",
+                    "blocked autostart second instance without focusing the running instance"
+                );
+            } else {
+                log::info!(
+                    target: "bexo::app",
+                    "blocked second instance launch and redirected focus to the running instance"
+                );
+                focus_main_window(app);
+            }
         }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_store::Builder::default().build())
@@ -108,6 +115,7 @@ pub fn run() {
             app.manage(crate::services::ResourceBrowserService::new(
                 database.clone(),
             ));
+            app.manage(crate::services::CodexHistoryService::new(database.clone()));
             app.manage(crate::services::ProfileService::new(database.clone()));
             app.manage(crate::services::PlannerService::new(
                 database.clone(),
@@ -134,13 +142,20 @@ pub fn run() {
                     crate::error::AppError::plugin_init("autostart", error.to_string())
                 })?;
 
+            if let Err(error) = app
+                .state::<crate::services::PreferencesService>()
+                .sync_launch_at_login(&app.handle())
+            {
+                log::warn!(
+                    target: "bexo::app",
+                    "sync autostart state from saved preferences failed: {}",
+                    error
+                );
+            }
+
             tray::create_tray(app)?;
 
-            let launched_from_autostart = app
-                .env()
-                .args_os
-                .iter()
-                .any(|arg| arg.to_string_lossy() == "--autostart");
+            let launched_from_autostart = args_indicate_autostart(&app.env().args_os);
             let start_silently = app
                 .state::<crate::services::PreferencesService>()
                 .get_preferences()
@@ -173,6 +188,10 @@ pub fn run() {
             commands::preferences::update_app_preferences,
             commands::preferences::get_codex_home_directory,
             commands::preferences::detect_editors_from_path,
+            commands::codex_history::open_codex_history_window,
+            commands::codex_history::list_codex_history_sessions,
+            commands::codex_history::list_all_codex_history_sessions,
+            commands::codex_history::get_codex_history_messages,
             commands::workspace::list_workspaces,
             commands::workspace::upsert_workspace,
             commands::workspace::delete_workspace,
@@ -418,5 +437,34 @@ fn focus_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     }
     if let Err(error) = window.set_focus() {
         log::warn!(target: "bexo::app", "failed to focus main window: {error}");
+    }
+}
+
+fn args_indicate_autostart<T: AsRef<OsStr>>(args: &[T]) -> bool {
+    args.iter()
+        .any(|arg| arg.as_ref().to_string_lossy() == "--autostart")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use super::args_indicate_autostart;
+
+    #[test]
+    fn args_indicate_autostart_detects_plugin_argument() {
+        let args = vec![
+            OsString::from("bexo-studio.exe"),
+            OsString::from("--autostart"),
+        ];
+
+        assert!(args_indicate_autostart(&args));
+    }
+
+    #[test]
+    fn args_indicate_autostart_ignores_manual_launch() {
+        let args = vec![OsString::from("bexo-studio.exe")];
+
+        assert!(!args_indicate_autostart(&args));
     }
 }

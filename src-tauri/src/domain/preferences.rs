@@ -4,6 +4,7 @@ pub const DEFAULT_SCREENSHOT_CAPTURE_HOTKEY: &str = "Ctrl+Shift+X";
 pub const PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY: &str = "Ctrl+Shift+1";
 pub const EARLIER_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY: &str = "Ctrl+Shift+4";
 pub const LEGACY_SCREENSHOT_CAPTURE_HOTKEY: &str = "Ctrl+Alt+A";
+pub const DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE: i32 = 12;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
@@ -15,6 +16,7 @@ pub struct AppPreferences {
     pub hotkey: HotkeyPreferences,
     pub tray: TrayPreferences,
     pub diagnostics: DiagnosticsPreferences,
+    pub codex_history: CodexHistoryViewPreferences,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,6 +125,27 @@ impl Default for DiagnosticsPreferences {
         Self {
             show_adapter_sources: true,
             show_executable_paths: true,
+        }
+    }
+}
+
+fn default_codex_history_message_font_size() -> i32 {
+    DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CodexHistoryViewPreferences {
+    pub message_font_family: String,
+    #[serde(default = "default_codex_history_message_font_size")]
+    pub message_font_size: i32,
+}
+
+impl Default for CodexHistoryViewPreferences {
+    fn default() -> Self {
+        Self {
+            message_font_family: String::new(),
+            message_font_size: default_codex_history_message_font_size(),
         }
     }
 }

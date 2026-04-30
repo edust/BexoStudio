@@ -8,6 +8,10 @@ import type {
   CancelRestoreActionResult,
   CancelRestoreRunResult,
   CodexHomeDirectoryInfo,
+  CodexHistoryGlobalSessionsResponse,
+  CodexHistoryMessagesPage,
+  CodexHistoryMessagesPayload,
+  CodexHistorySessionsResponse,
   CopyScreenshotSelectionResult,
   CreateSnapshotPayload,
   CodexProfileRecord,
@@ -25,6 +29,7 @@ import type {
   NativeInteractionStateView,
   NativeInteractionStateUpdatedEvent,
   OpenLogDirectoryResult,
+  OpenCodexHistoryWindowResult,
   OpenWorkspaceInEditorResult,
   OpenWorkspaceTerminalResult,
   SaveScreenshotSelectionResult,
@@ -229,6 +234,24 @@ export function listCodexProfiles() {
 
 export function upsertCodexProfile(input: UpsertCodexProfilePayload) {
   return invokeCommand<CodexProfileRecord>("upsert_codex_profile", { input });
+}
+
+export function openCodexHistoryWindow(workspaceId: string) {
+  return invokeCommand<OpenCodexHistoryWindowResult>("open_codex_history_window", { workspaceId });
+}
+
+export function listCodexHistorySessions(workspaceId: string) {
+  return invokeCommand<CodexHistorySessionsResponse>("list_codex_history_sessions", {
+    input: { workspaceId },
+  });
+}
+
+export function listAllCodexHistorySessions() {
+  return invokeCommand<CodexHistoryGlobalSessionsResponse>("list_all_codex_history_sessions");
+}
+
+export function getCodexHistoryMessages(input: CodexHistoryMessagesPayload) {
+  return invokeCommand<CodexHistoryMessagesPage>("get_codex_history_messages", { input });
 }
 
 export function listSnapshots(workspaceId?: string) {

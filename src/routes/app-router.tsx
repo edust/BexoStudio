@@ -5,6 +5,7 @@ import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom"
 import { AppShell } from "@/layouts/app-shell";
 
 const HomePage = lazy(() => import("@/pages/home-page"));
+const HistoryPage = lazy(() => import("@/pages/history-page"));
 const WorkspacesPage = lazy(() => import("@/pages/workspaces-page"));
 const SnapshotsPage = lazy(() => import("@/pages/snapshots-page"));
 const ProfilesPage = lazy(() => import("@/pages/profiles-page"));
@@ -38,6 +39,7 @@ const router = createBrowserRouter([
     element: <AppShell />,
     children: [
       { index: true, element: withFallback(<HomePage />) },
+      { path: "history", element: withFallback(<HistoryPage />) },
       { path: "workspaces", element: withFallback(<WorkspacesPage />) },
       { path: "snapshots", element: withFallback(<SnapshotsPage />) },
       { path: "profiles", element: withFallback(<ProfilesPage />) },

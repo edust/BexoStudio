@@ -1,5 +1,26 @@
 # progress
 
+## 2026-04-21
+- 初始化 `scripts/work/2026-04-21-terminal-verbatim-path-fix/`：
+  - `task_plan.md`
+  - `notes.md`
+  - `deliverable.md`
+- 已完成首轮定位：
+  - `src-tauri/src/services/workspace_service.rs` 内部 `canonicalize()` 在 Windows 下返回 `\\?\` verbatim path
+  - 该路径被直接传给 Windows Terminal `-d`，导致 PowerShell prompt 显示 provider-qualified path
+- 当前修复方向：
+  - 内部校验继续使用 canonical path
+  - 外部终端启动路径和返回前端的路径先去掉 Windows verbatim 前缀
+- 已完成实现：
+  - `src-tauri/src/services/workspace_service.rs`
+    - 新增输出给外部终端前的 Windows verbatim path stripping
+    - `\\?\D:\...` -> `D:\...`
+    - `\\?\UNC\server\share` -> `\\server\share`
+    - 补充 Windows 单元测试覆盖字符串转换
+- 验证结果：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"` 通过
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"` 通过
+
 ## 2026-04-20
 - 初始化 `scripts/work/2026-04-20-workspace-pin-context-menu/`：
   - `task_plan.md`
@@ -1704,6 +1725,41 @@ pm run web:build。
 - 2026-03-17 20:15 修复截图态从 shape 工具切回“选区”后无响应：调整 [screenshot-overlay-page.tsx](D:/Desktop/rust/BexoStudio/src/pages/screenshot-overlay-page.tsx) 的 Native/WebView 同步策略。切回 `select` 时清 shape 选中；selection drag 期间暂停 `shapeCandidates` 回写；仅在 Native 进入 shape 编辑拖拽时同步 `activeShape` 到前端。
 - 验证：`npm run web:build`，`cargo check --manifest-path "D:\Desktop\rust\BexoStudio\src-tauri\Cargo.toml"`。
 - 2026-03-17 20:26 调整 [native_interaction_backend_windows.rs](D:/Desktop/rust/BexoStudio/src-tauri/src/services/native_interaction_backend_windows.rs)：selection create/move/resize 的 `handle_mouse_move()` 不再在拖拽过程中持续调用 `sync_window_input_region()` / `SetWindowRgn`。窗口输入区域仍在 `mouse down` 起始和 `mouse up` 提交后同步，避免拖拽中改 region 导致卡死或丢失后续消息。
+# 2026-04-30 启动项与静默启动修复
+
+- 已初始化规划文件：
+  - `scripts/work/2026-04-30-startup-silent-launch-fix/task_plan.md`
+  - `scripts/work/2026-04-30-startup-silent-launch-fix/notes.md`
+  - `scripts/work/2026-04-30-startup-silent-launch-fix/deliverable.md`
+- 已完成代码检索：
+  - `src/pages/settings-page.tsx` 已确认两个 Switch 调用 `update_app_preferences`。
+  - `src-tauri/src/services/preferences_service.rs` 已确认偏好更新时会同步 autostart。
+  - `src-tauri/src/app/mod.rs` 已确认 app 启动时检测 `--autostart` 和 `startSilently`。
+  - 本地依赖 `auto-launch 0.5.0` 确认 Windows Run 值未给 exe 路径加引号。
+- 已完成实现：
+  - `src-tauri/src/services/preferences_service.rs`
+    - Windows 下改为直接写入 `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run`。
+    - Run 值使用带引号 exe 路径并携带 `"--autostart"`。
+    - 更新 `StartupApproved\Run` 为启用状态，避免任务管理器禁用状态残留。
+    - 应用偏好更新失败时会回滚 autostart 到原状态。
+  - `src-tauri/src/app/mod.rs`
+    - 启动时根据已保存偏好重新同步 autostart。
+    - `--autostart` 二次实例不再强制聚焦主窗口。
+    - `--autostart` 参数判断抽成共享 helper 并加测试。
+  - `src-tauri/tauri.conf.json`
+    - 主窗口从默认 `visible=true` 改为 `visible=false`，由 setup 显式显示或保持隐藏。
+  - `docs/technical-architecture.md`
+    - 同步 Windows autostart 注册表写入和静默启动显示策略。
+- 验证：
+  - `cargo fmt --manifest-path "src-tauri\Cargo.toml"` 通过。
+  - `cargo check --manifest-path "src-tauri\Cargo.toml"` 通过。
+  - `npm run web:build` 通过，只有既有 Vite 大 chunk 警告。
+  - `cargo test --manifest-path "src-tauri\Cargo.toml" --lib --no-run` 通过。
+  - `npm run desktop:build:debug` 通过，已生成 debug MSI/NSIS 包。
+  - `cargo test --manifest-path "src-tauri\Cargo.toml" args_indicate_autostart --lib` 编译通过，运行阶段命中仓库已知 `STATUS_ENTRYPOINT_NOT_FOUND`。
+
+---
+
 - 验证：`cargo check --manifest-path "D:\Desktop\rust\BexoStudio\src-tauri\Cargo.toml"`。
 - 2026-03-17 21:42 调整 [screenshot-overlay-page.tsx](D:/Desktop/rust/BexoStudio/src/pages/screenshot-overlay-page.tsx)：当 `nativeInteractionState.dragMode` 非空时，跳过 `updateNativeInteractionRuntime(...)` 前端回写。验证：`npm run web:build`，`cargo check --manifest-path "D:\Desktop\rust\BexoStudio\src-tauri\Cargo.toml"`。
 - 2026-03-17 21:55 继续收口跨 session runtime 更新。修改 [screenshot-overlay-page.tsx](D:/Desktop/rust/BexoStudio/src/pages/screenshot-overlay-page.tsx)：
@@ -1890,4 +1946,122 @@ pm run web:build。
 - 最新验证通过：
   - `cargo fmt --manifest-path "D:\\Desktop\\rust\\BexoStudio\\src-tauri\\Cargo.toml"`
   - `cargo check --manifest-path "D:\\Desktop\\rust\\BexoStudio\\src-tauri\\Cargo.toml"`
+  - `npm run web:build`
+
+## 2026-04-21 Terminal Command Shell Quoting Fix
+
+- 已初始化规划文件：
+  - `scripts/work/2026-04-21-terminal-command-shell-quoting/task_plan.md`
+  - `scripts/work/2026-04-21-terminal-command-shell-quoting/notes.md`
+  - `scripts/work/2026-04-21-terminal-command-shell-quoting/deliverable.md`
+- 当前待执行：
+  - 定位 Home 终端命令编辑/保存链路
+  - 定位 Rust Windows Terminal adapter 命令组装链路
+  - 修复引号保真与 PowerShell/cmd 兼容启动
+- 已完成实现：
+  - `src/pages/home-page.tsx`
+    - Home 终端命令保存时不再调用 `parseTerminalCommandLine()` 拆分命令。
+    - 新保存的 `terminal_command` 使用原始 `commandLine` 写入 `command`，`args=[]`。
+  - `src/lib/terminal-command.ts`
+    - `buildTerminalCommandLine()` 对 `args=[]` 的记录直接返回原始命令，保证重新编辑和列表展示不丢引号。
+  - `src-tauri/src/adapters/terminal.rs`
+    - 新增 Windows shell 命令行构造 helper。
+    - shell 探测改为优先 `COMSPEC` / `cmd.exe`。
+    - Windows Terminal 可见 tab 使用 `cmd.exe /D /K <commandLine>`。
+  - `src-tauri/src/services/workspace_service.rs`
+    - Home 单条运行与运行全部改用新的 `cmd.exe /D /K` 启动语义。
+    - 旧 `command + args` 记录会拼回 cmd shell 命令行，`&&` 不再作为普通参数传给 `cd`。
+  - `src-tauri/src/services/restore_service.rs`
+    - restore 中的 `terminal_command` 使用同一命令行构造，并通过 `cmd.exe /D /C` 后台执行。
+  - `docs/technical-architecture.md`
+    - 补充 `terminal_command` 原始单行命令保存语义和 Windows Terminal shell 启动约定。
+- 验证：
+  - `npm run web:build` 通过。
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"` 通过。
+  - `cargo test --manifest-path "src-tauri/Cargo.toml" --lib --no-run` 通过。
+  - `cargo test --manifest-path "src-tauri/Cargo.toml" shell_command_line --lib` 测试二进制编译成功，但运行阶段命中仓库已知 `STATUS_ENTRYPOINT_NOT_FOUND`。
+
+## 2026-04-30 Codex History View
+
+- 已初始化规划文件：
+  - `scripts/work/2026-04-30-codex-history-view/task_plan.md`
+  - `scripts/work/2026-04-30-codex-history-view/notes.md`
+  - `scripts/work/2026-04-30-codex-history-view/deliverable.md`
+- 已完成 Rust 只读历史链路：
+  - 新增 `src-tauri/src/domain/codex_history.rs`
+  - 新增 `src-tauri/src/services/codex_history_service.rs`
+  - 新增 `src-tauri/src/commands/codex_history.rs`
+  - 注册 `open_codex_history_window / list_codex_history_sessions / get_codex_history_messages`
+  - 动态窗口 label 使用 `codex_history_<workspace_id>` 安全变体
+  - session 列表按 `session_meta.cwd` 过滤到工作区路径内
+  - 消息详情从 JSONL 文件尾部反向分页读取，避免全文件加载
+- 已完成前端入口与独立窗口：
+  - `src/components/shell/section-sidebar.tsx` 在复制路径按钮前新增 Codex 历史按钮
+  - `src/app/app.tsx` 新增 `?window=codex-history` 分支
+  - `src/pages/codex-history-window-page.tsx` 新增独立窗口页面
+  - 左侧 session 列表支持搜索、刷新和虚拟滚动
+  - 右侧消息流初始加载最新页，向上滚动加载更早消息并保持滚动位置
+- 已同步文档：
+  - `README.md`
+  - `docs/ui-system.md`
+  - `docs/product-requirements.md`
+  - `docs/technical-architecture.md`
+  - `docs/implementation-roadmap.md`
+- 验证：
+  - `cargo fmt --manifest-path "D:\Desktop\rust\BexoStudio\src-tauri\Cargo.toml"` 通过。
+  - `cargo check --manifest-path "D:\Desktop\rust\BexoStudio\src-tauri\Cargo.toml"` 通过。
+  - `cargo test --manifest-path "D:\Desktop\rust\BexoStudio\src-tauri\Cargo.toml" --lib --no-run` 通过。
+  - `npm run web:build` 通过。
+- 待手工回归：
+  - 桌面 runtime 中点击 Workbench 历史按钮能打开/聚焦窗口。
+  - 多个工作区可并行打开各自历史窗口。
+  - 真实 Codex JSONL session 的路径过滤和向上滚动分页符合预期。
+
+## 2026-04-30 Global Codex History Page
+
+- 用户指出左侧主导航红框处缺少总 Session/History 页面；确认上一轮只完成了工作区级历史入口。
+- 已初始化规划文件：
+  - `scripts/work/2026-04-30-global-codex-history-page/task_plan.md`
+  - `scripts/work/2026-04-30-global-codex-history-page/notes.md`
+  - `scripts/work/2026-04-30-global-codex-history-page/deliverable.md`
+- 已完成后端补充：
+  - 新增 `CodexHistoryGlobalSessionsResponse`
+  - 新增 `list_all_codex_history_sessions()`
+  - `get_codex_history_messages` 支持可选 `workspaceId`
+- 已完成前端补充：
+  - 主导航新增 `Session / History` 项
+  - `/history` 路由和 `src/pages/history-page.tsx`
+  - 页面支持全局 session 列表、工作区路径筛选、搜索、刷新和消息向上分页
+- 已同步文档：
+  - `README.md`
+  - `docs/ui-system.md`
+  - `docs/product-requirements.md`
+  - `docs/technical-architecture.md`
+  - `docs/implementation-roadmap.md`
+- 当前验证：
+  - `cargo fmt --manifest-path "D:\Desktop\rust\BexoStudio\src-tauri\Cargo.toml"` 通过。
+  - `cargo check --manifest-path "D:\Desktop\rust\BexoStudio\src-tauri\Cargo.toml"` 通过。
+  - `cargo test --manifest-path "D:\Desktop\rust\BexoStudio\src-tauri\Cargo.toml" --lib --no-run` 通过。
+  - `npm run web:build` 通过。
+- 2026-04-30 消息折叠 refinement：
+  - 新增 `src/features/codex-history/codex-history-message-block.tsx` 作为全局页和独立窗口共用消息气泡。
+  - 用户消息和 Codex `message` 最终回复默认展开。
+  - 新增 `src/features/codex-history/codex-history-message-rules.ts` 统一判断最终消息与技术项。
+  - `function_call`、`function_call_output`、`reasoning`、`web_search_call` 等非最终项默认隐藏。
+  - 用户角色中的 AGENTS/context 规则块默认归入技术项隐藏。
+  - 全局 History 页和独立 Codex 历史窗口均新增 `显示技术项` checkbox；勾选后技术项出现，并继续默认折叠。
+  - `npm run web:build` 通过。
+- 待手工回归：
+  - 桌面 runtime 下手工点击左侧主导航 History 入口。
+  - 使用真实 Codex sessions 验证全局列表、工作区筛选和向上加载旧消息。
+## 2026-05-01 Codex History Font Settings
+
+- Added `codexHistory` typography preferences with default `messageFontSize: 12` and empty `messageFontFamily`.
+- Added backend validation/repair for Codex history font family and font size.
+- Added Settings > General controls for Codex 对话字体 and Codex 对话字号.
+- Wired global Session / History and independent Codex history windows to use the saved typography preferences.
+- Verification passed:
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo test --manifest-path "src-tauri/Cargo.toml" --lib --no-run`
   - `npm run web:build`

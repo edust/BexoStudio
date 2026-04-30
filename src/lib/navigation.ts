@@ -1,9 +1,10 @@
-import { HomeOutlined, SettingOutlined } from "@ant-design/icons";
+import { HistoryOutlined, HomeOutlined, SettingOutlined } from "@ant-design/icons";
 
 import type { AppRouteKey, PrimaryNavItem, SectionSidebarContent } from "@/types/navigation";
 
 export const primaryNavigation: PrimaryNavItem[] = [
   { key: "home", label: "Workbench", href: "/", icon: HomeOutlined },
+  { key: "history", label: "Session / History", href: "/history", icon: HistoryOutlined },
   { key: "settings", label: "Settings", href: "/settings", icon: SettingOutlined },
 ];
 
@@ -15,6 +16,21 @@ export const sidebarContentByRoute: Record<AppRouteKey, SectionSidebarContent> =
     searchPlaceholder: "搜索工作区名称...",
     dataSource: "workspaces",
     items: [],
+  },
+  history: {
+    eyebrow: "SESSION / HISTORY",
+    title: "",
+    description: "全局只读查看 Codex 会话历史，可按工作区路径筛选。",
+    searchPlaceholder: "搜索历史视图...",
+    items: [
+      {
+        key: "codex-history",
+        label: "Codex History",
+        description: "读取本机 Codex sessions",
+        badge: "read",
+        href: "/history",
+      },
+    ],
   },
   settings: {
     eyebrow: "SETTINGS",
@@ -42,6 +58,7 @@ export const sidebarContentByRoute: Record<AppRouteKey, SectionSidebarContent> =
 };
 
 export function routeKeyFromPathname(pathname: string): AppRouteKey {
+  if (pathname.startsWith("/history")) return "history";
   if (pathname.startsWith("/settings")) return "settings";
   if (
     pathname.startsWith("/workspaces") ||

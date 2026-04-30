@@ -116,6 +116,7 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
   - 列表显示最近运行时间
   - 列表支持安全移除，并明确“不删除磁盘上的文件夹”
   - 工作区项支持：
+    - 只读查看该工作区路径下的 Codex 历史会话
     - 复制绝对路径
     - 在该目录打开终端
     - 使用默认编辑器打开工作区
@@ -155,6 +156,11 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
   - 没有工作区时显示空状态
   - 模板配置不再前端写死，统一存入本地偏好
   - 首页模板下拉按设置页保存的模板顺序展示
+- Session / History：
+  - 左侧主导航提供全局 Session/History 入口
+  - 页面只读展示本机 Codex sessions
+  - 支持按已注册工作区路径筛选
+  - 点击 session 后读取最近对话，向上滚动加载更早消息
 - Dev Inspector Baseline：
   - 已接入 `code-inspector-plugin`
   - 在 `Vite serve` 开发模式下默认启用

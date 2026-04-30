@@ -15,6 +15,7 @@ import {
   Button,
   Empty,
   Input,
+  InputNumber,
   Modal,
   Popconfirm,
   Spin,
@@ -55,6 +56,7 @@ import {
 import type {
   AdapterAvailability,
   AppPreferences,
+  CodexHistoryViewPreferences,
   CustomEditorRecord,
   EditorPathDetectionResult,
   TerminalCommandTemplateRecord,
@@ -65,6 +67,9 @@ type SettingsSection = "general" | "hotkeys";
 type HotkeyRecorderStatus = "idle" | "recording" | "saving" | "error";
 
 const DEFAULT_SCREENSHOT_CAPTURE_HOTKEY = "Ctrl+Shift+X";
+const CODEX_HISTORY_FONT_SIZE_MIN = 10;
+const CODEX_HISTORY_FONT_SIZE_MAX = 24;
+const CODEX_HISTORY_FONT_FAMILY_MAX_LENGTH = 160;
 const HOTKEY_MODIFIER_TOKENS = new Set([
   "Ctrl",
   "Alt",
@@ -86,6 +91,7 @@ export default function SettingsPage() {
   const [pathInlineError, setPathInlineError] = useState<string | null>(null);
   const [startupInlineError, setStartupInlineError] = useState<string | null>(null);
   const [codexHomeInlineError, setCodexHomeInlineError] = useState<string | null>(null);
+  const [codexHistoryInlineError, setCodexHistoryInlineError] = useState<string | null>(null);
   const [templateInlineError, setTemplateInlineError] = useState<string | null>(null);
   const [editorInlineError, setEditorInlineError] = useState<string | null>(null);
   const [hotkeyInlineError, setHotkeyInlineError] = useState<string | null>(null);
@@ -105,6 +111,9 @@ export default function SettingsPage() {
     jetbrains: "",
   });
   const [customEditorsDraft, setCustomEditorsDraft] = useState<CustomEditorRecord[]>([]);
+  const [codexHistoryFontFamilyDraft, setCodexHistoryFontFamilyDraft] = useState(
+    defaultAppPreferences.codexHistory.messageFontFamily,
+  );
 
   const desktopRuntimeAvailable = hasDesktopRuntime();
   const queryClient = useQueryClient();
@@ -138,6 +147,11 @@ export default function SettingsPage() {
   const windowsTerminalPath = resolvedPreferences.terminal.windowsTerminalPath?.trim() ?? "";
   const vscodePath = resolvedPreferences.ide.vscodePath?.trim() ?? "";
   const jetbrainsPath = resolvedPreferences.ide.jetbrainsPath?.trim() ?? "";
+  const codexHistoryPreferences = resolveCodexHistoryPreferences(resolvedPreferences);
+  const codexHistoryFontFamily = codexHistoryPreferences.messageFontFamily.trim();
+  const codexHistoryFontSize = normalizeCodexHistoryFontSize(
+    codexHistoryPreferences.messageFontSize,
+  );
   const screenshotCaptureHotkey =
     resolvedPreferences.hotkey.screenshotCapture?.trim() || DEFAULT_SCREENSHOT_CAPTURE_HOTKEY;
   const screenshotHotkeyUsesCtrlAlt = isRiskyCtrlAltHotkey(screenshotCaptureHotkey);
@@ -174,11 +188,17 @@ export default function SettingsPage() {
       : preferencesQuery.isLoading;
   const hotkeyActionsDisabled =
     !desktopRuntimeAvailable || preferencesQuery.isError || updatePreferencesMutation.isPending;
+  const preferenceActionsDisabled =
+    !desktopRuntimeAvailable || preferencesQuery.isError || updatePreferencesMutation.isPending;
 
   useEffect(() => {
     setOrderedTemplates(terminalTemplates);
     latestOrderedTemplatesRef.current = terminalTemplates;
   }, [terminalTemplates]);
+
+  useEffect(() => {
+    setCodexHistoryFontFamilyDraft(codexHistoryFontFamily);
+  }, [codexHistoryFontFamily]);
 
   useEffect(() => {
     if (!isEditorManagerOpen) {
@@ -768,6 +788,103 @@ export default function SettingsPage() {
     await applyRecordedScreenshotHotkey(DEFAULT_SCREENSHOT_CAPTURE_HOTKEY);
   }
 
+  async function handleSaveCodexHistoryFontFamily(
+    nextValue = codexHistoryFontFamilyDraft,
+  ) {
+    if (preferenceActionsDisabled) {
+      return;
+    }
+
+    const normalizedFontFamily = nextValue.trim();
+    if (normalizedFontFamily.length > CODEX_HISTORY_FONT_FAMILY_MAX_LENGTH) {
+      const message = "Codex 历史字体名称不能超过 160 个字符";
+      setCodexHistoryInlineError(message);
+      toast.error(message);
+      return;
+    }
+    if (containsControlCharacter(normalizedFontFamily)) {
+      const message = "Codex 历史字体名称不能包含换行或控制字符";
+      setCodexHistoryInlineError(message);
+      toast.error(message);
+      return;
+    }
+
+    setCodexHistoryFontFamilyDraft(normalizedFontFamily);
+    if (normalizedFontFamily === codexHistoryFontFamily) {
+      return;
+    }
+
+    setCodexHistoryInlineError(null);
+
+    try {
+      const currentPreferences =
+        queryClient.getQueryData<AppPreferences>(appPreferencesQueryKey) ??
+        resolvedPreferences;
+      await persistPreferences({
+        ...currentPreferences,
+        codexHistory: {
+          ...resolveCodexHistoryPreferences(currentPreferences),
+          messageFontFamily: normalizedFontFamily,
+        },
+      });
+      toast.success(
+        normalizedFontFamily
+          ? "Codex 历史字体已保存"
+          : "Codex 历史字体已恢复系统默认",
+      );
+    } catch (error) {
+      const summary = getErrorSummary(error);
+      setCodexHistoryInlineError(summary.message);
+      toast.error(summary.message);
+    }
+  }
+
+  async function handleSaveCodexHistoryFontSize(value: number | string | null) {
+    if (preferenceActionsDisabled || value === null) {
+      return;
+    }
+
+    const numericValue = typeof value === "number" ? value : Number(value);
+    if (!Number.isFinite(numericValue)) {
+      return;
+    }
+
+    const nextFontSize = Math.round(numericValue);
+    if (
+      nextFontSize < CODEX_HISTORY_FONT_SIZE_MIN ||
+      nextFontSize > CODEX_HISTORY_FONT_SIZE_MAX
+    ) {
+      const message = `Codex 历史字号必须在 ${CODEX_HISTORY_FONT_SIZE_MIN}px 到 ${CODEX_HISTORY_FONT_SIZE_MAX}px 之间`;
+      setCodexHistoryInlineError(message);
+      toast.error(message);
+      return;
+    }
+
+    if (nextFontSize === codexHistoryFontSize) {
+      return;
+    }
+
+    setCodexHistoryInlineError(null);
+
+    try {
+      const currentPreferences =
+        queryClient.getQueryData<AppPreferences>(appPreferencesQueryKey) ??
+        resolvedPreferences;
+      await persistPreferences({
+        ...currentPreferences,
+        codexHistory: {
+          ...resolveCodexHistoryPreferences(currentPreferences),
+          messageFontSize: nextFontSize,
+        },
+      });
+      toast.success(`Codex 历史字号已设为 ${nextFontSize}px`);
+    } catch (error) {
+      const summary = getErrorSummary(error);
+      setCodexHistoryInlineError(summary.message);
+      toast.error(summary.message);
+    }
+  }
+
   useEffect(() => {
     if (hotkeyRecorderStatus !== "recording") {
       return;
@@ -1028,6 +1145,18 @@ export default function SettingsPage() {
               />
             ) : null}
 
+            {codexHistoryInlineError ? (
+              <Alert
+                className="mb-4"
+                closable
+                message="Codex 历史字体设置失败"
+                onClose={() => setCodexHistoryInlineError(null)}
+                showIcon
+                type="error"
+                description={codexHistoryInlineError}
+              />
+            ) : null}
+
             {desktopRuntimeAvailable && settingsPageLoading ? (
               <div className="flex min-h-0 flex-1 items-center justify-center">
                 <Spin size="small" />
@@ -1229,6 +1358,77 @@ export default function SettingsPage() {
                     >
                       管理编辑器
                     </Button>
+                  </div>
+                </div>
+
+                <div className="rounded-[0] border border-[#eef2f6] bg-white">
+                  <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
+                    <div className="min-w-0">
+                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
+                        Codex 对话字体
+                      </Typography.Text>
+                    </div>
+
+                    <div className="min-w-0">
+                      <Input
+                        allowClear
+                        className="max-w-[420px]"
+                        disabled={preferenceActionsDisabled}
+                        onBlur={() => void handleSaveCodexHistoryFontFamily()}
+                        onChange={(event) =>
+                          setCodexHistoryFontFamilyDraft(event.target.value)
+                        }
+                        onPressEnter={(event) => event.currentTarget.blur()}
+                        placeholder="系统默认"
+                        size="small"
+                        value={codexHistoryFontFamilyDraft}
+                      />
+                      <Typography.Text className="mt-1 block text-[11px] text-[#667085]">
+                        留空使用系统默认字体，影响 Session / History 和独立 Codex 历史窗口。
+                      </Typography.Text>
+                    </div>
+
+                    <Button
+                      className="!h-[32px] !px-3 !text-[12px]"
+                      disabled={preferenceActionsDisabled || !codexHistoryFontFamily}
+                      onClick={() => {
+                        setCodexHistoryFontFamilyDraft("");
+                        void handleSaveCodexHistoryFontFamily("");
+                      }}
+                      size="small"
+                    >
+                      恢复默认
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="rounded-[0] border border-[#eef2f6] bg-white">
+                  <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
+                    <div className="min-w-0">
+                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
+                        Codex 对话字号
+                      </Typography.Text>
+                    </div>
+
+                    <div className="min-w-0">
+                      <Typography.Text className="block text-[11px] text-[#667085]">
+                        默认 12px，可设置 {CODEX_HISTORY_FONT_SIZE_MIN}px 到{" "}
+                        {CODEX_HISTORY_FONT_SIZE_MAX}px。
+                      </Typography.Text>
+                    </div>
+
+                    <InputNumber
+                      className="!w-[120px]"
+                      controls
+                      disabled={preferenceActionsDisabled}
+                      max={CODEX_HISTORY_FONT_SIZE_MAX}
+                      min={CODEX_HISTORY_FONT_SIZE_MIN}
+                      onChange={(value) => void handleSaveCodexHistoryFontSize(value)}
+                      precision={0}
+                      size="small"
+                      addonAfter="px"
+                      value={codexHistoryFontSize}
+                    />
                   </div>
                 </div>
               </div>
@@ -1959,6 +2159,39 @@ function formatHotkeyErrorSummary(summary: ReturnType<typeof getErrorSummary>) {
   }
 
   return summary.message;
+}
+
+function resolveCodexHistoryPreferences(
+  preferences: AppPreferences,
+): CodexHistoryViewPreferences {
+  return {
+    ...defaultAppPreferences.codexHistory,
+    ...(preferences.codexHistory ?? {}),
+    messageFontFamily:
+      preferences.codexHistory?.messageFontFamily?.trim() ??
+      defaultAppPreferences.codexHistory.messageFontFamily,
+    messageFontSize: normalizeCodexHistoryFontSize(
+      preferences.codexHistory?.messageFontSize,
+    ),
+  };
+}
+
+function normalizeCodexHistoryFontSize(value?: number | null) {
+  if (!Number.isFinite(value)) {
+    return defaultAppPreferences.codexHistory.messageFontSize;
+  }
+  const rounded = Math.round(value as number);
+  if (
+    rounded < CODEX_HISTORY_FONT_SIZE_MIN ||
+    rounded > CODEX_HISTORY_FONT_SIZE_MAX
+  ) {
+    return defaultAppPreferences.codexHistory.messageFontSize;
+  }
+  return rounded;
+}
+
+function containsControlCharacter(value: string) {
+  return /[\u0000-\u001f\u007f]/.test(value);
 }
 
 function keyboardEventToHotkeyToken(event: KeyboardEvent): string | null {

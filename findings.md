@@ -1,5 +1,12 @@
 # findings
 
+## 2026-04-21
+- “打开工作区终端后 PowerShell prompt 显示 `Microsoft.PowerShell.Core\FileSystem::\\?\D:\...`”的来源在 Rust `workspace_service.rs`：
+  - `open_workspace_terminal_at_path()` 会先调用 `canonicalize_existing_directory()`
+  - Windows 下 `std::fs::canonicalize()` 返回 verbatim path，例如 `\\?\D:\...`
+  - 当前代码把 `workspace_root.display().to_string()` / `target_directory.display().to_string()` 直接传给 Windows Terminal `-d`
+- 修复边界应保持内部 canonical path 不变，只在传给外部终端和返回前端前去掉 Windows verbatim 前缀。
+
 ## 2026-04-20
 - 当前代码里工作区只有 `sortOrder`，没有任何“置顶状态”字段；如果只靠改排序来实现“置顶”，程序无法稳定区分“普通排在前面”和“被置顶”，因此也没法正确支持“取消置顶”。
 - 更合理的落点是 `AppPreferences.workspace.pinnedWorkspaceIds`：
@@ -430,6 +437,17 @@
   - `NativePreviewWindow` 负责底图显示
   - `NativeInteractionWindow` 负责选区和高频交互
   - `NativeToolbarWindow` 负责截图运行时小工具栏
+# 2026-04-30 Findings: Windows autostart registry quoting and silent launch
+
+- Settings 页两个开关的前端链路存在，`handleToggleStartupSetting()` 会通过 `update_app_preferences` 保存 `startup.launchAtLogin / startup.startSilently`。
+- Rust 侧也已接入 `tauri-plugin-autostart`，并配置了 `--autostart` 参数；app setup 中已有 `--autostart + startSilently` 的隐藏主窗口判断。
+- 真实失效点在 Windows autostart 写入格式：本地依赖 `auto-launch 0.5.0` 在 Windows 下写 `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run` 时直接拼接 `app_path + args`，没有给 exe 路径加引号。
+- 对 `Bexo Studio.exe` 或安装目录包含空格的路径，这会导致 Windows 登录启动时无法按预期启动目标 exe，进而 `--autostart` 不会可靠进入进程，`静默启动` 也就看起来无效。
+- 另一个可靠性缺口是 `tauri.conf.json` 中主窗口默认 `visible=true`；即使 setup 后续隐藏窗口，也可能在静默启动场景先闪出主窗口。
+- 最终修复采用 Windows 专用注册表写入：Run 值格式为 `"完整\Bexo Studio.exe" "--autostart"`，并在应用启动时按保存偏好重新同步系统 autostart 状态；主窗口改为默认隐藏，由 setup 决定显示或保持隐藏。
+
+---
+
   - `Tauri/WebView` 只保留非高频配置 UI
 - 若直接一步把全部交互都改成 native，风险过大；更稳的路径是：
   - 先原生化底图
@@ -643,3 +661,29 @@ ativeToolbarActive（native 已确认 visible 且 session 有效）时，才隐�
   - `src-tauri/src/domain/preferences.rs` / `src-tauri/src/services/preferences_service.rs` 的持久化、修复和冲突校验
 - 如果只隐藏设置页区块，会留下 `hotkey.screenshotTools` 的前后端字段和 overlay 运行时依赖，属于未彻底移除。
 - 当前最合理的收口方式是：删除“可配置化能力”，overlay 恢复固定工具热键；旧偏好中的 `screenshotTools` 交给 serde 当未知字段忽略，不需要额外迁移。
+
+## 2026-04-21 Findings: Terminal command quote loss and PowerShell chain semantics
+- 用户复现说明里包含两条独立信号：编辑框原本输入 `cd "D:\...\backend" && go run ./cmd`，保存后展示变成 `cd D:\...\backend && go run ./cmd`，说明保存链路可能做了破坏性命令解析或格式化。
+- Windows Terminal 中的错误来自 PowerShell `Set-Location`，并且报 `&&` 不能作为参数，这说明当前启动语义等价于把 cmd 风格链式命令直接交给 PowerShell 处理。
+- 本轮需要同时修“命令文本保真”和“Windows shell 兼容启动”；只修任意一边都会留下复现路径。
+- 最终修复确认：Home 新保存的终端命令不再拆分成 argv，而是保存原始单行命令；Rust 可见终端启动切到 `cmd.exe /D /K`，restore 后台执行切到 `cmd.exe /D /C`，同时兼容旧的 `command + args` 记录。
+
+## 2026-04-30 Codex History View
+- CC Switch 的 Codex history 解析核心是读 `~/.codex/sessions/**/*.jsonl`，以 `session_meta.cwd` 判定项目归属，并把 `response_item` 中的 `message/function_call/function_call_output/reasoning` 转为展示消息。
+- 本机 `~\.codex\sessions` 存在数百个 JSONL，且有 GB 级大文件；Bexo Studio 不能全量读取 session 文件。
+- Bexo 的正确边界是 Rust 侧做路径校验、session 根解析、工作区范围过滤和分页读取；前端只拿已校验的只读数据。
+- Workbench 工作区卡片的快捷动作位于 `src/components/shell/section-sidebar.tsx` 的 `WorkspaceSidebarCard`，新历史按钮应插入复制路径按钮之前。
+- 现有 `src/app/app.tsx` 已通过 query 参数区分 screenshot overlay；Codex history 独立窗口可复用 `?window=codex-history&workspaceId=<id>` 分支，不需要新增主路由。
+
+## 2026-04-30 Global Codex History Page
+- 主导航并不是从 `primaryNavigation` 全量 map 渲染：`PrimaryRail` 之前只手动取 `home/settings`，所以即使新增 navigation item 也不会自动显示，必须同步改 rail 渲染逻辑。
+- `/history` 需要独立 `AppRouteKey`，否则 `routeKeyFromPathname()` 会回落到 `home`，导致中间栏仍显示 WORKBENCH。
+- 全局 History 不能复用 `list_codex_history_sessions(workspaceId)`；需要一个不按 workspace 过滤的后端列表命令。
+- `get_codex_history_messages` 可以安全改成 `workspaceId` 可选：工作区窗口继续传 workspaceId 并做归属校验；全局页面不传 workspaceId，仅校验 sourcePath 位于已知 Codex sessions roots 内。
+- Codex JSONL 解析后可直接用 `itemType` 区分展示意图：`message` 是用户/assistant 普通对话，`function_call`、`function_call_output`、`reasoning`、`web_search_call` 属于中间过程。仅折叠仍会占据阅读空间，因此默认应隐藏这些技术项，用户勾选后再显示。
+- 用户角色里也会出现 Codex 注入的长规则块，例如 `# AGENTS.md instructions`、`<INSTRUCTIONS>`、`<environment_context>` 等；这些不是普通提问，应归入技术项默认隐藏，避免把结果阅读区撑开。
+## 2026-05-01 Codex History Font Settings
+
+- Codex history typography should live in `AppPreferences` rather than local component state because Settings, global History, and independent History windows already share the same preference query/cache path.
+- The backend preference model uses serde defaults, so adding `codexHistory` is backward-compatible with existing `settings/preferences.json` files that do not yet contain the field.
+- Empty `messageFontFamily` is the cleanest persisted representation for "system default"; storing a long CSS font stack as user data would make the setting harder to inspect and reset.

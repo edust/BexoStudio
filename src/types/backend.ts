@@ -107,6 +107,56 @@ export type CodexProfileRecord = {
   updatedAt: string;
 };
 
+export type OpenCodexHistoryWindowResult = {
+  workspaceId: string;
+  windowLabel: string;
+};
+
+export type CodexHistorySession = {
+  providerId: string;
+  sessionId: string;
+  title?: string | null;
+  summary?: string | null;
+  projectDir?: string | null;
+  createdAt?: string | null;
+  lastActiveAt?: string | null;
+  sourcePath: string;
+  fileSizeBytes: number;
+};
+
+export type CodexHistorySessionsResponse = {
+  workspaceId: string;
+  workspacePath: string;
+  codexRoots: string[];
+  sessions: CodexHistorySession[];
+};
+
+export type CodexHistoryGlobalSessionsResponse = {
+  codexRoots: string[];
+  sessions: CodexHistorySession[];
+};
+
+export type CodexHistoryMessage = {
+  role: string;
+  content: string;
+  timestamp?: string | null;
+  itemType: string;
+  truncated: boolean;
+};
+
+export type CodexHistoryMessagesPayload = {
+  workspaceId?: string | null;
+  sourcePath: string;
+  cursor?: string | null;
+  limit?: number;
+};
+
+export type CodexHistoryMessagesPage = {
+  messages: CodexHistoryMessage[];
+  olderCursor?: string | null;
+  hasMore: boolean;
+};
+
 export type RestoreMode = "full" | "terminals_only" | "ide_only" | "codex_only";
 
 export type SnapshotCodexProfilePayload = {
@@ -369,6 +419,11 @@ export type DiagnosticsPreferences = {
   showExecutablePaths: boolean;
 };
 
+export type CodexHistoryViewPreferences = {
+  messageFontFamily: string;
+  messageFontSize: number;
+};
+
 export type StartupPreferences = {
   launchAtLogin: boolean;
   startSilently: boolean;
@@ -388,6 +443,7 @@ export type AppPreferences = {
   hotkey: HotkeyPreferences;
   tray: TrayPreferences;
   diagnostics: DiagnosticsPreferences;
+  codexHistory: CodexHistoryViewPreferences;
 };
 
 export type OpenLogDirectoryResult = {

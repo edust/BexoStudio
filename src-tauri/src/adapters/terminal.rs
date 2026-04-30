@@ -1,4 +1,4 @@
-use std::{path::PathBuf, time::Duration};
+use std::{env, path::PathBuf, time::Duration};
 
 use chrono::Utc;
 
@@ -8,6 +8,44 @@ use crate::{
 };
 
 use super::process::{find_first_executable, resolve_configured_executable, LaunchCommand};
+
+pub fn build_windows_shell_command_line(command: &str, args: &[String]) -> String {
+    let command = command.trim();
+    if args.is_empty() {
+        return command.to_string();
+    }
+
+    let mut segments = Vec::with_capacity(args.len() + 1);
+    segments.push(quote_cmd_argument(command));
+    segments.extend(args.iter().filter_map(|arg| {
+        let trimmed = arg.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        if is_cmd_control_operator(trimmed) {
+            Some(trimmed.to_string())
+        } else {
+            Some(quote_cmd_argument(trimmed))
+        }
+    }));
+    segments.join(" ")
+}
+
+pub fn build_windows_command_shell_startup_command(
+    shell_executable: &str,
+    command_line: &str,
+) -> Vec<String> {
+    vec![
+        shell_executable.to_string(),
+        "/D".to_string(),
+        "/K".to_string(),
+        command_line.to_string(),
+    ]
+}
+
+pub fn build_windows_command_shell_run_args(command_line: &str) -> Vec<String> {
+    vec!["/D".to_string(), "/C".to_string(), command_line.to_string()]
+}
 
 pub trait TerminalAdapter {
     fn detect(&self, configured_path: Option<&str>) -> AdapterAvailability;
@@ -164,13 +202,58 @@ impl WindowsTerminalAdapter {
     }
 
     pub fn detect_shell_executable(&self) -> Option<PathBuf> {
-        find_first_executable(&["pwsh.exe", "pwsh", "powershell.exe", "powershell"])
+        env::var_os("COMSPEC")
+            .map(PathBuf::from)
+            .filter(|path| path.is_file())
+            .or_else(|| find_first_executable(&["cmd.exe", "cmd"]))
     }
+}
+
+fn quote_cmd_argument(value: &str) -> String {
+    if value.is_empty() {
+        return "\"\"".to_string();
+    }
+
+    if !requires_cmd_quotes(value) {
+        return value.to_string();
+    }
+
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('"');
+    for character in value.chars() {
+        if character == '"' {
+            quoted.push_str("\\\"");
+        } else {
+            quoted.push(character);
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
+fn requires_cmd_quotes(value: &str) -> bool {
+    value
+        .chars()
+        .any(|character| character.is_whitespace() || is_cmd_metacharacter(character))
+}
+
+fn is_cmd_metacharacter(character: char) -> bool {
+    matches!(character, '&' | '|' | '<' | '>' | '^' | '(' | ')' | '"')
+}
+
+fn is_cmd_control_operator(value: &str) -> bool {
+    matches!(value, "&&" | "||" | "|" | "&")
+        || value.starts_with('>')
+        || value.starts_with('<')
+        || value.starts_with("2>")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{WindowsTerminalAdapter, WindowsTerminalTabLaunchInput};
+    use super::{
+        build_windows_command_shell_run_args, build_windows_command_shell_startup_command,
+        build_windows_shell_command_line, WindowsTerminalAdapter, WindowsTerminalTabLaunchInput,
+    };
 
     #[test]
     fn tab_launch_plan_uses_fixed_title_when_title_is_provided() {
@@ -198,5 +281,59 @@ mod tests {
         assert!(launch_command
             .args
             .contains(&"--suppressApplicationTitle".to_string()));
+    }
+
+    #[test]
+    fn shell_command_line_preserves_raw_command_when_args_are_empty() {
+        let command = r#"cd "D:\Desktop\a\StarExpoHub\go-lottery\backend" && go run ./cmd"#;
+
+        assert_eq!(build_windows_shell_command_line(command, &[]), command);
+    }
+
+    #[test]
+    fn shell_command_line_keeps_legacy_control_operators_unquoted() {
+        assert_eq!(
+            build_windows_shell_command_line(
+                "cd",
+                &[
+                    r"D:\Desktop\a\StarExpoHub\go-lottery\backend".to_string(),
+                    "&&".to_string(),
+                    "go".to_string(),
+                    "run".to_string(),
+                    "./cmd".to_string(),
+                ],
+            ),
+            r"cd D:\Desktop\a\StarExpoHub\go-lottery\backend && go run ./cmd"
+        );
+    }
+
+    #[test]
+    fn shell_command_line_quotes_legacy_arguments_for_cmd() {
+        assert_eq!(
+            build_windows_shell_command_line(
+                r"C:\Tools\My App\tool.exe",
+                &[r#"say "hi""#.to_string()],
+            ),
+            r#""C:\Tools\My App\tool.exe" "say \"hi\"""#
+        );
+    }
+
+    #[test]
+    fn command_shell_startup_uses_cmd_keep_open_semantics() {
+        let command = r#"cd "D:\workspace\backend" && go run ./cmd"#;
+
+        assert_eq!(
+            build_windows_command_shell_startup_command("cmd.exe", command),
+            vec![
+                "cmd.exe".to_string(),
+                "/D".to_string(),
+                "/K".to_string(),
+                command.to_string(),
+            ]
+        );
+        assert_eq!(
+            build_windows_command_shell_run_args(command),
+            vec!["/D".to_string(), "/C".to_string(), command.to_string()]
+        );
     }
 }

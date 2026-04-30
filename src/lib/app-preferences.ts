@@ -32,4 +32,8 @@ export const defaultAppPreferences: AppPreferences = {
     showAdapterSources: true,
     showExecutablePaths: true,
   },
+  codexHistory: {
+    messageFontFamily: "",
+    messageFontSize: 12,
+  },
 };
