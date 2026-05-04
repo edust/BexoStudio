@@ -56,6 +56,7 @@ import {
 import type {
   AdapterAvailability,
   AppPreferences,
+  CodexAuthPreferences,
   CodexHistoryViewPreferences,
   CustomEditorRecord,
   EditorPathDetectionResult,
@@ -70,6 +71,8 @@ const DEFAULT_SCREENSHOT_CAPTURE_HOTKEY = "Ctrl+Shift+X";
 const CODEX_HISTORY_FONT_SIZE_MIN = 10;
 const CODEX_HISTORY_FONT_SIZE_MAX = 24;
 const CODEX_HISTORY_FONT_FAMILY_MAX_LENGTH = 160;
+const CODEX_AUTH_QUOTA_REFRESH_INTERVAL_MIN = 10;
+const CODEX_AUTH_QUOTA_REFRESH_INTERVAL_MAX = 3600;
 const HOTKEY_MODIFIER_TOKENS = new Set([
   "Ctrl",
   "Alt",
@@ -92,6 +95,7 @@ export default function SettingsPage() {
   const [startupInlineError, setStartupInlineError] = useState<string | null>(null);
   const [codexHomeInlineError, setCodexHomeInlineError] = useState<string | null>(null);
   const [codexHistoryInlineError, setCodexHistoryInlineError] = useState<string | null>(null);
+  const [codexAuthInlineError, setCodexAuthInlineError] = useState<string | null>(null);
   const [templateInlineError, setTemplateInlineError] = useState<string | null>(null);
   const [editorInlineError, setEditorInlineError] = useState<string | null>(null);
   const [hotkeyInlineError, setHotkeyInlineError] = useState<string | null>(null);
@@ -152,6 +156,9 @@ export default function SettingsPage() {
   const codexHistoryFontSize = normalizeCodexHistoryFontSize(
     codexHistoryPreferences.messageFontSize,
   );
+  const codexAuthPreferences = resolveCodexAuthPreferences(resolvedPreferences);
+  const codexAuthQuotaRefreshIntervalSeconds =
+    codexAuthPreferences.quotaRefreshIntervalSeconds;
   const screenshotCaptureHotkey =
     resolvedPreferences.hotkey.screenshotCapture?.trim() || DEFAULT_SCREENSHOT_CAPTURE_HOTKEY;
   const screenshotHotkeyUsesCtrlAlt = isRiskyCtrlAltHotkey(screenshotCaptureHotkey);
@@ -885,6 +892,52 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleSaveCodexAuthQuotaRefreshInterval(value: number | string | null) {
+    if (preferenceActionsDisabled || value === null) {
+      return;
+    }
+
+    const numericValue = typeof value === "number" ? value : Number(value);
+    if (!Number.isFinite(numericValue)) {
+      return;
+    }
+
+    const nextIntervalSeconds = Math.round(numericValue);
+    if (
+      nextIntervalSeconds < CODEX_AUTH_QUOTA_REFRESH_INTERVAL_MIN ||
+      nextIntervalSeconds > CODEX_AUTH_QUOTA_REFRESH_INTERVAL_MAX
+    ) {
+      const message = `Codex Auth 额度刷新间隔必须在 ${CODEX_AUTH_QUOTA_REFRESH_INTERVAL_MIN} 秒到 ${CODEX_AUTH_QUOTA_REFRESH_INTERVAL_MAX} 秒之间`;
+      setCodexAuthInlineError(message);
+      toast.error(message);
+      return;
+    }
+
+    if (nextIntervalSeconds === codexAuthQuotaRefreshIntervalSeconds) {
+      return;
+    }
+
+    setCodexAuthInlineError(null);
+
+    try {
+      const currentPreferences =
+        queryClient.getQueryData<AppPreferences>(appPreferencesQueryKey) ??
+        resolvedPreferences;
+      await persistPreferences({
+        ...currentPreferences,
+        codexAuth: {
+          ...resolveCodexAuthPreferences(currentPreferences),
+          quotaRefreshIntervalSeconds: nextIntervalSeconds,
+        },
+      });
+      toast.success(`Codex Auth 额度刷新间隔已设为 ${nextIntervalSeconds} 秒`);
+    } catch (error) {
+      const summary = getErrorSummary(error);
+      setCodexAuthInlineError(summary.message);
+      toast.error(summary.message);
+    }
+  }
+
   useEffect(() => {
     if (hotkeyRecorderStatus !== "recording") {
       return;
@@ -1154,6 +1207,18 @@ export default function SettingsPage() {
                 showIcon
                 type="error"
                 description={codexHistoryInlineError}
+              />
+            ) : null}
+
+            {codexAuthInlineError ? (
+              <Alert
+                className="mb-4"
+                closable
+                message="Codex Auth 设置失败"
+                onClose={() => setCodexAuthInlineError(null)}
+                showIcon
+                type="error"
+                description={codexAuthInlineError}
               />
             ) : null}
 
@@ -1428,6 +1493,39 @@ export default function SettingsPage() {
                       size="small"
                       addonAfter="px"
                       value={codexHistoryFontSize}
+                    />
+                  </div>
+                </div>
+
+                <div className="rounded-[0] border border-[#eef2f6] bg-white">
+                  <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
+                    <div className="min-w-0">
+                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
+                        Codex Auth 额度刷新间隔
+                      </Typography.Text>
+                    </div>
+
+                    <div className="min-w-0">
+                      <Typography.Text className="block text-[11px] text-[#667085]">
+                        自动按队列刷新全部 Codex Auth 授权额度；默认 60 秒，范围{" "}
+                        {CODEX_AUTH_QUOTA_REFRESH_INTERVAL_MIN} 到{" "}
+                        {CODEX_AUTH_QUOTA_REFRESH_INTERVAL_MAX} 秒。
+                      </Typography.Text>
+                    </div>
+
+                    <InputNumber
+                      className="!w-[132px]"
+                      controls
+                      disabled={preferenceActionsDisabled}
+                      max={CODEX_AUTH_QUOTA_REFRESH_INTERVAL_MAX}
+                      min={CODEX_AUTH_QUOTA_REFRESH_INTERVAL_MIN}
+                      onChange={(value) =>
+                        void handleSaveCodexAuthQuotaRefreshInterval(value)
+                      }
+                      precision={0}
+                      size="small"
+                      addonAfter="秒"
+                      value={codexAuthQuotaRefreshIntervalSeconds}
                     />
                   </div>
                 </div>
@@ -2186,6 +2284,30 @@ function normalizeCodexHistoryFontSize(value?: number | null) {
     rounded > CODEX_HISTORY_FONT_SIZE_MAX
   ) {
     return defaultAppPreferences.codexHistory.messageFontSize;
+  }
+  return rounded;
+}
+
+function resolveCodexAuthPreferences(preferences: AppPreferences): CodexAuthPreferences {
+  return {
+    ...defaultAppPreferences.codexAuth,
+    ...(preferences.codexAuth ?? {}),
+    quotaRefreshIntervalSeconds: normalizeCodexAuthQuotaRefreshInterval(
+      preferences.codexAuth?.quotaRefreshIntervalSeconds,
+    ),
+  };
+}
+
+function normalizeCodexAuthQuotaRefreshInterval(value?: number | null) {
+  if (!Number.isFinite(value)) {
+    return defaultAppPreferences.codexAuth.quotaRefreshIntervalSeconds;
+  }
+  const rounded = Math.round(value as number);
+  if (
+    rounded < CODEX_AUTH_QUOTA_REFRESH_INTERVAL_MIN ||
+    rounded > CODEX_AUTH_QUOTA_REFRESH_INTERVAL_MAX
+  ) {
+    return defaultAppPreferences.codexAuth.quotaRefreshIntervalSeconds;
   }
   return rounded;
 }

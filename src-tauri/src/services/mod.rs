@@ -1,3 +1,4 @@
+mod codex_auth_service;
 mod codex_history_service;
 mod desktop_duplication_capture;
 mod hotkey_service;
@@ -17,6 +18,7 @@ mod wgc_capture;
 mod windows_hook_hotkey;
 mod workspace_service;
 
+pub use codex_auth_service::CodexAuthService;
 pub use codex_history_service::CodexHistoryService;
 pub use hotkey_service::HotkeyService;
 pub use native_interaction_service::{

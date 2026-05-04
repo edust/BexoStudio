@@ -116,6 +116,7 @@ pub fn run() {
                 database.clone(),
             ));
             app.manage(crate::services::CodexHistoryService::new(database.clone()));
+            app.manage(crate::services::CodexAuthService::new(database.clone()));
             app.manage(crate::services::ProfileService::new(database.clone()));
             app.manage(crate::services::PlannerService::new(
                 database.clone(),
@@ -192,6 +193,13 @@ pub fn run() {
             commands::codex_history::list_codex_history_sessions,
             commands::codex_history::list_all_codex_history_sessions,
             commands::codex_history::get_codex_history_messages,
+            commands::codex_auth::list_codex_auth_profiles,
+            commands::codex_auth::import_current_codex_auth_profile,
+            commands::codex_auth::upsert_codex_auth_profile,
+            commands::codex_auth::delete_codex_auth_profile,
+            commands::codex_auth::switch_codex_auth_profile,
+            commands::codex_auth::query_codex_auth_quota,
+            commands::codex_auth::refresh_all_codex_auth_quotas,
             commands::workspace::list_workspaces,
             commands::workspace::upsert_workspace,
             commands::workspace::delete_workspace,

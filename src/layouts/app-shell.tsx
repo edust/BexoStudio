@@ -11,7 +11,8 @@ export function AppShell() {
   const location = useLocation();
   const routeKey = routeKeyFromPathname(location.pathname);
   const sidebarContent = sidebarContentByRoute[routeKey];
-  const showSectionSidebar = routeKey !== "history";
+  const showSectionSidebar = routeKey !== "history" && routeKey !== "codexAuth";
+  const routeOwnsScroll = routeKey === "history" || routeKey === "codexAuth";
 
   return (
     <div className="h-screen overflow-hidden bg-background p-2">
@@ -24,8 +25,14 @@ export function AppShell() {
       >
         <PrimaryRail />
         {showSectionSidebar ? <SectionSidebar content={sidebarContent} /> : null}
-        <Layout className="bexo-shell-surface min-h-0 overflow-hidden rounded-[16px]">
-          <Content className="min-h-0 overflow-y-auto px-0 py-0">
+        <Layout className="bexo-shell-surface h-full min-h-0 overflow-hidden rounded-[16px]">
+          <Content
+            className={
+              routeOwnsScroll
+                ? "h-full min-h-0 overflow-hidden px-0 py-0"
+                : "h-full min-h-0 overflow-y-auto px-0 py-0"
+            }
+          >
             <Outlet />
           </Content>
         </Layout>

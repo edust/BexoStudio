@@ -1,5 +1,12 @@
 # findings
 
+## 2026-05-04
+- Codex Auth 单账号额度查询已经集中在 Rust `CodexAuthService::query_quota`，结果持久化到 `codex_auth_profiles.last_quota_json` / `last_quota_checked_at`，因此批量刷新不应在前端直接散写 HTTP 请求。
+- Settings 当前通过 `AppPreferences` / `PreferencesService` / `tauri-plugin-store` 持久化，新增自动刷新间隔应进入 `AppPreferences.codexAuth`，而不是 SQLite 或页面 local state。
+- 直接用 `setInterval` 做自动刷新存在重叠风险：当一轮 quota 请求慢于间隔时，下一轮会并发进入；正确实现应为 `批量刷新完成 -> 倒计时 -> 下一轮`。
+- 偏好加载完成导致 React effect 重启时也可能制造第二轮并发请求，因此需要前端 in-flight guard；Rust 批量 command 也加 mutex，保证即使 UI 重启或重复调用也不会批量重叠。
+- 自动刷新当前设计为 Codex Auth 页面作用域，不做全局后台刷新，避免用户离开页面后继续调用外部额度接口。
+
 ## 2026-04-21
 - “打开工作区终端后 PowerShell prompt 显示 `Microsoft.PowerShell.Core\FileSystem::\\?\D:\...`”的来源在 Rust `workspace_service.rs`：
   - `open_workspace_terminal_at_path()` 会先调用 `canonicalize_existing_directory()`
@@ -687,3 +694,11 @@ ativeToolbarActive（native 已确认 visible 且 session 有效）时，才隐�
 - Codex history typography should live in `AppPreferences` rather than local component state because Settings, global History, and independent History windows already share the same preference query/cache path.
 - The backend preference model uses serde defaults, so adding `codexHistory` is backward-compatible with existing `settings/preferences.json` files that do not yet contain the field.
 - Empty `messageFontFamily` is the cleanest persisted representation for "system default"; storing a long CSS font stack as user data would make the setting harder to inspect and reset.
+
+## 2026-05-04 Codex Auth Manager
+
+- CC Switch 的 Codex 控制核心可以拆成两部分：`auth.json/config.toml` 的本地配置切换，以及 ChatGPT OAuth 登录/refresh token 托管。本轮用户明确只要前者和额度查询，登录托管不应混入。
+- CC Switch 的额度查询路径是读取 `auth.json` 中 `auth_mode=chatgpt` 的 OAuth token，然后请求 `https://chatgpt.com/backend-api/wham/usage`；API key 模式不等价，应该返回不支持额度查询而不是伪造余额。
+- Bexo 的边界必须保持 Rust owned：授权文件读写、TOML/JSON 校验、quota HTTP 请求和 rollback 都在 Rust 侧完成，前端只提交表单和展示结果。
+- Fresh Codex installs may not yet have `config.toml`; importing such configs should save empty TOML and later switch 时创建空 `config.toml`，否则用户无法导入只有 `auth.json` 的真实环境。
+- `reqwest 0.13.x` 的 TLS feature 是 `rustls`，不是 `rustls-tls`；新增依赖时已用 `cargo info reqwest@0.13.2` 校验。

@@ -1,4 +1,5 @@
 pub mod bootstrap;
+pub mod codex_auth;
 pub mod codex_history;
 pub mod codex_profile;
 pub mod launch_task;

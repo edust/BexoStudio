@@ -14,8 +14,9 @@ use tauri_plugin_store::{Store, StoreExt};
 use crate::{
     adapters::{resolve_configured_executable, IdeAdapter, JetBrainsAdapter, VSCodeAdapter},
     domain::{
-        AppPreferences, CodexHistoryViewPreferences, EditorPathDetectionResult, HotkeyAction,
-        HotkeyPreferences, DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE,
+        AppPreferences, CodexAuthPreferences, CodexHistoryViewPreferences,
+        EditorPathDetectionResult, HotkeyAction, HotkeyPreferences,
+        DEFAULT_CODEX_AUTH_QUOTA_REFRESH_INTERVAL_SECONDS, DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE,
         DEFAULT_SCREENSHOT_CAPTURE_HOTKEY, EARLIER_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
         LEGACY_SCREENSHOT_CAPTURE_HOTKEY, PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
     },
@@ -30,6 +31,8 @@ const PREFERENCES_STORE_KEY: &str = "appPreferences";
 const CODEX_HISTORY_MIN_MESSAGE_FONT_SIZE: i32 = 10;
 const CODEX_HISTORY_MAX_MESSAGE_FONT_SIZE: i32 = 24;
 const CODEX_HISTORY_MAX_FONT_FAMILY_LENGTH: usize = 160;
+const CODEX_AUTH_MIN_QUOTA_REFRESH_INTERVAL_SECONDS: i32 = 10;
+const CODEX_AUTH_MAX_QUOTA_REFRESH_INTERVAL_SECONDS: i32 = 3600;
 
 #[derive(Debug, Clone)]
 pub struct PreferencesService {
@@ -256,10 +259,14 @@ fn repair_invalid_preferences(mut preferences: AppPreferences) -> PreferenceRepa
     preferences.hotkey = repaired_hotkeys.preferences;
     let repaired_codex_history = sanitize_codex_history_view_preferences(preferences.codex_history);
     preferences.codex_history = repaired_codex_history.preferences;
+    let repaired_codex_auth = sanitize_codex_auth_preferences(preferences.codex_auth);
+    preferences.codex_auth = repaired_codex_auth.preferences;
 
     PreferenceRepairResult {
         preferences,
-        changed: repaired_hotkeys.changed || repaired_codex_history.changed,
+        changed: repaired_hotkeys.changed
+            || repaired_codex_history.changed
+            || repaired_codex_auth.changed,
     }
 }
 
@@ -435,6 +442,38 @@ fn sanitize_codex_history_view_preferences(
         preferences: CodexHistoryViewPreferences {
             message_font_family,
             message_font_size,
+        },
+        changed,
+    }
+}
+
+#[derive(Debug)]
+struct CodexAuthPreferenceRepairResult {
+    preferences: CodexAuthPreferences,
+    changed: bool,
+}
+
+fn sanitize_codex_auth_preferences(input: CodexAuthPreferences) -> CodexAuthPreferenceRepairResult {
+    let mut changed = false;
+
+    let quota_refresh_interval_seconds = if (CODEX_AUTH_MIN_QUOTA_REFRESH_INTERVAL_SECONDS
+        ..=CODEX_AUTH_MAX_QUOTA_REFRESH_INTERVAL_SECONDS)
+        .contains(&input.quota_refresh_interval_seconds)
+    {
+        input.quota_refresh_interval_seconds
+    } else {
+        log::warn!(
+            target: "bexo::service::preferences",
+            "repair codex auth quota refresh interval value={}",
+            input.quota_refresh_interval_seconds
+        );
+        changed = true;
+        DEFAULT_CODEX_AUTH_QUOTA_REFRESH_INTERVAL_SECONDS
+    };
+
+    CodexAuthPreferenceRepairResult {
+        preferences: CodexAuthPreferences {
+            quota_refresh_interval_seconds,
         },
         changed,
     }
@@ -870,6 +909,7 @@ fn validate_preferences(input: AppPreferences) -> AppResult<AppPreferences> {
         tray: input.tray,
         diagnostics: input.diagnostics,
         codex_history: validate_codex_history_view_preferences(input.codex_history)?,
+        codex_auth: validate_codex_auth_preferences(input.codex_auth)?,
     })
 }
 
@@ -911,6 +951,27 @@ fn validate_codex_history_message_font_size(input: i32) -> AppResult<i32> {
         return Err(
             AppError::validation("Codex 历史字号必须在 10px 到 24px 之间")
                 .with_detail("field", "codexHistory.messageFontSize"),
+        );
+    }
+    Ok(input)
+}
+
+fn validate_codex_auth_preferences(input: CodexAuthPreferences) -> AppResult<CodexAuthPreferences> {
+    Ok(CodexAuthPreferences {
+        quota_refresh_interval_seconds: validate_codex_auth_quota_refresh_interval_seconds(
+            input.quota_refresh_interval_seconds,
+        )?,
+    })
+}
+
+fn validate_codex_auth_quota_refresh_interval_seconds(input: i32) -> AppResult<i32> {
+    if !(CODEX_AUTH_MIN_QUOTA_REFRESH_INTERVAL_SECONDS
+        ..=CODEX_AUTH_MAX_QUOTA_REFRESH_INTERVAL_SECONDS)
+        .contains(&input)
+    {
+        return Err(
+            AppError::validation("Codex Auth 额度刷新间隔必须在 10 秒到 3600 秒之间")
+                .with_detail("field", "codexAuth.quotaRefreshIntervalSeconds"),
         );
     }
     Ok(input)
@@ -1454,14 +1515,15 @@ mod tests {
 
     use super::{
         build_codex_home_directory_info, migrate_legacy_preferences,
-        sanitize_codex_history_view_preferences, sanitize_hotkey_preferences,
+        sanitize_codex_auth_preferences, sanitize_codex_history_view_preferences,
+        sanitize_hotkey_preferences, validate_codex_auth_quota_refresh_interval_seconds,
         validate_codex_history_message_font_size, validate_hotkey_shortcut,
     };
     use crate::domain::{
-        AppPreferences, CodexHistoryViewPreferences, HotkeyAction,
-        DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE, DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
-        EARLIER_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY, LEGACY_SCREENSHOT_CAPTURE_HOTKEY,
-        PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
+        AppPreferences, CodexAuthPreferences, CodexHistoryViewPreferences, HotkeyAction,
+        DEFAULT_CODEX_AUTH_QUOTA_REFRESH_INTERVAL_SECONDS, DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE,
+        DEFAULT_SCREENSHOT_CAPTURE_HOTKEY, EARLIER_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
+        LEGACY_SCREENSHOT_CAPTURE_HOTKEY, PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
     };
 
     #[test]
@@ -1551,6 +1613,44 @@ mod tests {
         assert_eq!(
             repaired.preferences.message_font_size,
             DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE
+        );
+    }
+
+    #[test]
+    fn codex_auth_quota_refresh_interval_default_is_sixty_seconds() {
+        let preferences = CodexAuthPreferences::default();
+        assert_eq!(
+            preferences.quota_refresh_interval_seconds,
+            DEFAULT_CODEX_AUTH_QUOTA_REFRESH_INTERVAL_SECONDS
+        );
+        assert_eq!(preferences.quota_refresh_interval_seconds, 60);
+    }
+
+    #[test]
+    fn codex_auth_quota_refresh_interval_validation_rejects_out_of_range_values() {
+        let error = validate_codex_auth_quota_refresh_interval_seconds(9)
+            .expect_err("refresh interval below range should be rejected");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert_eq!(
+            error
+                .details
+                .as_ref()
+                .and_then(|details| details.get("field"))
+                .map(String::as_str),
+            Some("codexAuth.quotaRefreshIntervalSeconds")
+        );
+    }
+
+    #[test]
+    fn codex_auth_preferences_repair_restores_invalid_interval() {
+        let repaired = sanitize_codex_auth_preferences(CodexAuthPreferences {
+            quota_refresh_interval_seconds: 0,
+        });
+
+        assert!(repaired.changed);
+        assert_eq!(
+            repaired.preferences.quota_refresh_interval_seconds,
+            DEFAULT_CODEX_AUTH_QUOTA_REFRESH_INTERVAL_SECONDS
         );
     }
 

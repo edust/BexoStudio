@@ -1,10 +1,11 @@
-import { HistoryOutlined, HomeOutlined, SettingOutlined } from "@ant-design/icons";
+import { HistoryOutlined, HomeOutlined, KeyOutlined, SettingOutlined } from "@ant-design/icons";
 
 import type { AppRouteKey, PrimaryNavItem, SectionSidebarContent } from "@/types/navigation";
 
 export const primaryNavigation: PrimaryNavItem[] = [
   { key: "home", label: "Workbench", href: "/", icon: HomeOutlined },
   { key: "history", label: "Session / History", href: "/history", icon: HistoryOutlined },
+  { key: "codexAuth", label: "Codex Auth", href: "/codex-auth", icon: KeyOutlined },
   { key: "settings", label: "Settings", href: "/settings", icon: SettingOutlined },
 ];
 
@@ -29,6 +30,21 @@ export const sidebarContentByRoute: Record<AppRouteKey, SectionSidebarContent> =
         description: "读取本机 Codex sessions",
         badge: "read",
         href: "/history",
+      },
+    ],
+  },
+  codexAuth: {
+    eyebrow: "CODEX AUTH",
+    title: "",
+    description: "只管理 Codex auth.json 与 config.toml 授权配置。",
+    searchPlaceholder: "搜索 Codex 授权...",
+    items: [
+      {
+        key: "codex-auth",
+        label: "Codex Auth",
+        description: "管理本机 Codex 授权配置",
+        badge: "local",
+        href: "/codex-auth",
       },
     ],
   },
@@ -59,6 +75,7 @@ export const sidebarContentByRoute: Record<AppRouteKey, SectionSidebarContent> =
 
 export function routeKeyFromPathname(pathname: string): AppRouteKey {
   if (pathname.startsWith("/history")) return "history";
+  if (pathname.startsWith("/codex-auth")) return "codexAuth";
   if (pathname.startsWith("/settings")) return "settings";
   if (
     pathname.startsWith("/workspaces") ||

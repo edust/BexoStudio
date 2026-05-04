@@ -91,6 +91,8 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
   - 当前壳层改为 `Ant Design + compact theme + Tailwind` 的混合方案
   - 一级导航已收敛为：
     - `Home`
+    - `Session / History`
+    - `Codex Auth`
     - `Settings`
   - `Workspaces / Snapshots / Profiles / Logs` 已退出主导航并冻结为占位页
   - `Home` 已改成只保留工作台画布和 panel 占位的紧凑框架页
@@ -161,6 +163,12 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
   - 页面只读展示本机 Codex sessions
   - 支持按已注册工作区路径筛选
   - 点击 session 后读取最近对话，向上滚动加载更早消息
+- Codex Auth：
+  - 左侧主导航提供 Codex 授权管理入口
+  - 只管理 Codex `auth.json` 与 `config.toml`
+  - 支持导入当前 Codex 配置、保存多套授权、查询 OAuth 额度和切换当前授权
+  - 支持按设置的秒数自动队列刷新所有授权额度，默认 `60s`
+  - 不包含 ChatGPT 登录托管、refresh token 自动维护或其他 AI CLI 控制
 - Dev Inspector Baseline：
   - 已接入 `code-inspector-plugin`
   - 在 `Vite serve` 开发模式下默认启用
@@ -180,6 +188,7 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
 - 恢复快照与一键恢复
 - 终端编排与附加命令启动
 - Codex Profile / `CODEX_HOME` 管理
+- Codex `auth.json` / `config.toml` 授权管理与切换
 - VS Code / IDEA 启动
 - 托盘化运行、窗口恢复、日志与通知
 

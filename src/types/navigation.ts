@@ -3,11 +3,12 @@ import type { ComponentType } from "react";
 export type AppRouteKey =
   | "home"
   | "history"
+  | "codexAuth"
   | "settings"
   | "frozen";
 
 export type PrimaryNavItem = {
-  key: "home" | "history" | "settings";
+  key: "home" | "history" | "codexAuth" | "settings";
   label: string;
   href: string;
   icon: ComponentType<{ className?: string }>;

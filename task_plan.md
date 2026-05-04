@@ -1,5 +1,35 @@
 # task_plan
 
+## 2026-05-04 Codex Auth 自动额度刷新
+- 目标：给 Codex Auth 增加按秒数自动刷新所有账号额度的能力，刷新必须按队列逐个账号执行，并且一轮全部完成后才开始下一轮倒计时。
+- 范围：
+  - `src-tauri/src/domain/preferences.rs`
+  - `src-tauri/src/services/preferences_service.rs`
+  - `src-tauri/src/domain/codex_auth.rs`
+  - `src-tauri/src/services/codex_auth_service.rs`
+  - `src-tauri/src/commands/codex_auth.rs`
+  - `src-tauri/src/app/mod.rs`
+  - `src/types/backend.ts`
+  - `src/lib/app-preferences.ts`
+  - `src/lib/command-client.ts`
+  - `src/queries/codex-auth.ts`
+  - `src/pages/settings-page.tsx`
+  - `src/pages/codex-auth-page.tsx`
+  - `docs/*`
+  - `scripts/work/2026-05-04-codex-auth-auto-quota-refresh/`
+- 方案：
+  - 新增 `AppPreferences.codexAuth.quotaRefreshIntervalSeconds`，默认 `60`，Rust 校验范围 `10..=3600`。
+  - Settings > General 新增 `Codex Auth 额度刷新间隔` 秒数设置。
+  - Rust 新增 `refresh_all_codex_auth_quotas` 批量命令，按 profile 顺序逐个查询并分别持久化结果。
+  - 前端 Codex Auth 页使用 `batch -> countdown -> next batch` 链式循环，不用 `setInterval`。
+  - 前端和 Rust service 均加单飞/互斥保护，避免批量刷新重叠。
+- 验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo test --manifest-path "src-tauri/Cargo.toml" --lib --no-run`
+  - `npm run web:build`
+- 状态：已完成代码实现、文档同步和自动验证；待桌面应用内手工确认计时与真实账号额度刷新。
+
 ## 2026-04-30 启动项与静默启动修复
 - 目标：修复 Settings > General 中 `随系统启动` 与 `静默启动` 看起来可切换但实际不生效的问题。
 - 范围：
@@ -1876,3 +1906,32 @@ ativeToolbarActive 时才隐藏 WebView 主行，避免多次截图后工具整�
   - `cargo check --manifest-path "D:\Desktop\rust\BexoStudio\src-tauri\Cargo.toml"`
   - `npm run web:build`
 - 状态：实现与自动验证已完成，待桌面 UI 手工回归设置保存和 History 字体展示。
+
+## 2026-05-04 Codex Auth Manager
+- 目标：新增只管理 Codex `auth.json` / `config.toml` 的授权管理页，支持添加、修改、导入当前配置、查询 OAuth 额度和切换当前授权。
+- 范围：
+  - `src-tauri/Cargo.toml`
+  - `src-tauri/src/domain/codex_auth.rs`
+  - `src-tauri/src/persistence/schema.rs`
+  - `src-tauri/src/persistence/codex_auth_repo.rs`
+  - `src-tauri/src/services/codex_auth_service.rs`
+  - `src-tauri/src/commands/codex_auth.rs`
+  - `src-tauri/src/app/mod.rs`
+  - `src/types/backend.ts`
+  - `src/lib/command-client.ts`
+  - `src/queries/codex-auth.ts`
+  - `src/lib/navigation.ts`
+  - `src/routes/app-router.tsx`
+  - `src/pages/codex-auth-page.tsx`
+  - `scripts/work/2026-05-04-codex-auth-manager/*`
+- 方案：
+  - 新增 `codex_auth_profiles` SQLite 表保存多套授权配置和最近额度结果。
+  - Rust 侧负责 JSON/TOML 校验、磁盘写入、回滚、额度 HTTP 查询和错误映射。
+  - 前端新增左侧 primary rail 的 Codex Auth 入口，页面采用列表 + 编辑器布局。
+  - 额度查询仅支持 `auth_mode=chatgpt` 的 Codex OAuth；不实现 ChatGPT 登录托管或 refresh token 自动维护。
+- 验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo test --manifest-path "src-tauri/Cargo.toml" --lib --no-run`
+  - `npm run web:build`
+- 状态：代码实现与自动验证已完成；真实导入、切换 live 文件和非过期 OAuth 额度查询仍需桌面手工回归。

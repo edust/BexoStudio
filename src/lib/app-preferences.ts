@@ -36,4 +36,7 @@ export const defaultAppPreferences: AppPreferences = {
     messageFontFamily: "",
     messageFontSize: 12,
   },
+  codexAuth: {
+    quotaRefreshIntervalSeconds: 60,
+  },
 };

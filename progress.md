@@ -1,5 +1,43 @@
 # progress
 
+## 2026-05-04
+- 初始化 `scripts/work/2026-05-04-codex-auth-auto-quota-refresh/`：
+  - `task_plan.md`
+  - `notes.md`
+  - `deliverable.md`
+- 已完成偏好模型扩展：
+  - Rust `AppPreferences.codex_auth.quota_refresh_interval_seconds`
+  - TS `AppPreferences.codexAuth.quotaRefreshIntervalSeconds`
+  - 默认值 `60`
+  - Rust 校验/修复范围 `10..=3600`
+- 已完成 Settings UI：
+  - `Settings > General` 新增 `Codex Auth 额度刷新间隔`
+  - 使用 `InputNumber`，单位为秒
+  - 保存后复用现有偏好持久化链路和 toast/error 状态
+- 已完成批量刷新后端：
+  - 新增 `CodexAuthQuotaRefreshBatchResult`
+  - 新增 `refresh_all_codex_auth_quotas`
+  - Rust 按 profile 顺序逐个查询额度并分别写回 SQLite
+  - 单个账号查询失败不会中断队列
+  - Rust service 增加 mutex，避免批量刷新重叠
+- 已完成 Codex Auth 页面自动刷新：
+  - 页面挂载后自动执行一轮批量刷新
+  - 整轮完成后才开始倒计时
+  - 倒计时结束后开始下一轮
+  - 顶部展示刷新中、下次刷新秒数和上轮成功/失败汇总
+  - 前端增加 in-flight guard，避免 effect 重启造成重叠批量请求
+- 文档同步：
+  - `README.md`
+  - `docs/product-requirements.md`
+  - `docs/technical-architecture.md`
+  - `docs/ui-system.md`
+  - `docs/implementation-roadmap.md`
+- 验证通过：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo test --manifest-path "src-tauri/Cargo.toml" --lib --no-run`
+  - `npm run web:build`
+
 ## 2026-04-21
 - 初始化 `scripts/work/2026-04-21-terminal-verbatim-path-fix/`：
   - `task_plan.md`
@@ -100,6 +138,7 @@
     - 纯外部点击 `pointerup` 仅清空 pending 状态，不改变当前选区和对象
 - 验证通过：
   - `npm run web:build`
+
 - 用户回归后确认：即使“不加对象，只拉一个选区再点外部”也会死。
 - 已复盘最新 `runtime-logs/log.log`：
   - 冻结前最后关键链路为
@@ -2065,3 +2104,36 @@ pm run web:build。
   - `cargo check --manifest-path "src-tauri/Cargo.toml"`
   - `cargo test --manifest-path "src-tauri/Cargo.toml" --lib --no-run`
   - `npm run web:build`
+
+## 2026-05-04 Codex Auth Manager
+
+- 已初始化规划文件：
+  - `scripts/work/2026-05-04-codex-auth-manager/task_plan.md`
+  - `scripts/work/2026-05-04-codex-auth-manager/notes.md`
+  - `scripts/work/2026-05-04-codex-auth-manager/deliverable.md`
+- 已完成后端实现：
+  - 新增 `codex_auth_profiles` SQLite 表。
+  - 新增 Codex Auth domain / persistence / service / command。
+  - 新增导入当前配置、保存授权、删除记录、切换授权、查询额度命令。
+  - 切换写入 `auth.json` / `config.toml` 时支持失败回滚。
+  - 额度查询使用 10 秒 HTTP timeout，且不记录 token。
+- 已完成前端实现：
+  - 左侧 primary rail 新增 `Codex Auth` 按钮。
+  - 新增 `/codex-auth` 路由和页面。
+  - 页面支持 profile 搜索、导入当前、保存、查询额度、切换使用和删除。
+  - TypeScript backend types、command wrappers 与 TanStack Query helper 已接通。
+- 已同步文档：
+  - `README.md`
+  - `docs/product-requirements.md`
+  - `docs/technical-architecture.md`
+  - `docs/ui-system.md`
+  - `docs/implementation-roadmap.md`
+- 验证通过：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo test --manifest-path "src-tauri/Cargo.toml" --lib --no-run`
+  - `npm run web:build`
+- 待手工回归：
+  - 导入本机真实 Codex `auth.json/config.toml`。
+  - 切换授权后确认目标 Codex 配置目录文件内容正确。
+  - 使用非过期 `auth_mode=chatgpt` OAuth token 查询额度。

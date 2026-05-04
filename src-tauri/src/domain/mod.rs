@@ -1,4 +1,5 @@
 mod adapter;
+mod codex_auth;
 mod codex_history;
 mod codex_profile;
 mod hotkey;
@@ -22,6 +23,11 @@ pub use adapter::{
     OpenWorkspaceInEditorResult, OpenWorkspaceTerminalResult, RestoreCapabilities,
     RunWorkspaceTerminalCommandResult, RunWorkspaceTerminalCommandsResult, StartRestoreRunInput,
 };
+pub use codex_auth::{
+    ensure_absolute_path, validate_codex_auth_json, validate_codex_config_toml, CodexAuthJson,
+    CodexAuthProfileRecord, CodexAuthQuotaRefreshBatchResult, CodexAuthQuotaResult,
+    CodexAuthQuotaTier, CodexAuthSwitchResult, UpsertCodexAuthProfileInput,
+};
 pub use codex_history::{
     CodexHistoryGlobalSessionsResponse, CodexHistoryMessage, CodexHistoryMessagesInput,
     CodexHistoryMessagesPage, CodexHistorySession, CodexHistorySessionsResponse,
@@ -42,9 +48,10 @@ pub use native_interaction::{
 };
 #[allow(unused_imports)]
 pub use preferences::{
-    AppPreferences, CodexHistoryViewPreferences, CodexHomeDirectoryInfo, CustomEditorPreference,
-    DiagnosticsPreferences, HotkeyPreferences, IdePreferences, StartupPreferences,
-    TerminalCommandTemplate, TerminalPreferences, TrayPreferences, WorkspacePreferences,
+    AppPreferences, CodexAuthPreferences, CodexHistoryViewPreferences, CodexHomeDirectoryInfo,
+    CustomEditorPreference, DiagnosticsPreferences, HotkeyPreferences, IdePreferences,
+    StartupPreferences, TerminalCommandTemplate, TerminalPreferences, TrayPreferences,
+    WorkspacePreferences, DEFAULT_CODEX_AUTH_QUOTA_REFRESH_INTERVAL_SECONDS,
     DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE, DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
     EARLIER_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY, LEGACY_SCREENSHOT_CAPTURE_HOTKEY,
     PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,

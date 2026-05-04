@@ -6,6 +6,7 @@ import { AppShell } from "@/layouts/app-shell";
 
 const HomePage = lazy(() => import("@/pages/home-page"));
 const HistoryPage = lazy(() => import("@/pages/history-page"));
+const CodexAuthPage = lazy(() => import("@/pages/codex-auth-page"));
 const WorkspacesPage = lazy(() => import("@/pages/workspaces-page"));
 const SnapshotsPage = lazy(() => import("@/pages/snapshots-page"));
 const ProfilesPage = lazy(() => import("@/pages/profiles-page"));
@@ -40,6 +41,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: withFallback(<HomePage />) },
       { path: "history", element: withFallback(<HistoryPage />) },
+      { path: "codex-auth", element: withFallback(<CodexAuthPage />) },
       { path: "workspaces", element: withFallback(<WorkspacesPage />) },
       { path: "snapshots", element: withFallback(<SnapshotsPage />) },
       { path: "profiles", element: withFallback(<ProfilesPage />) },

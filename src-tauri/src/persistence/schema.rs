@@ -25,6 +25,20 @@ CREATE TABLE IF NOT EXISTS codex_profiles (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS codex_auth_profiles (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  description TEXT,
+  codex_home TEXT NOT NULL,
+  auth_json TEXT NOT NULL,
+  config_toml TEXT NOT NULL,
+  is_active INTEGER NOT NULL DEFAULT 0,
+  last_quota_json TEXT,
+  last_quota_checked_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL,
@@ -112,4 +126,7 @@ CREATE INDEX IF NOT EXISTS idx_restore_runs_started_at
 
 CREATE INDEX IF NOT EXISTS idx_restore_run_tasks_restore_run_id
   ON restore_run_tasks(restore_run_id);
+
+CREATE INDEX IF NOT EXISTS idx_codex_auth_profiles_active_updated
+  ON codex_auth_profiles(is_active DESC, updated_at DESC);
 "#;

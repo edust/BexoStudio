@@ -107,6 +107,51 @@ export type CodexProfileRecord = {
   updatedAt: string;
 };
 
+export type CodexAuthQuotaTier = {
+  name: string;
+  utilization: number;
+  resetsAt?: string | null;
+};
+
+export type CodexAuthQuotaResult = {
+  profileId: string;
+  success: boolean;
+  credentialStatus: string;
+  credentialMessage?: string | null;
+  tiers: CodexAuthQuotaTier[];
+  error?: string | null;
+  queriedAt: string;
+};
+
+export type CodexAuthProfileRecord = {
+  id: string;
+  name: string;
+  description?: string | null;
+  codexHome: string;
+  authJson: string;
+  configToml: string;
+  isActive: boolean;
+  lastQuota?: CodexAuthQuotaResult | null;
+  lastQuotaCheckedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CodexAuthSwitchResult = {
+  profile: CodexAuthProfileRecord;
+  authPath: string;
+  configPath: string;
+};
+
+export type CodexAuthQuotaRefreshBatchResult = {
+  total: number;
+  refreshed: number;
+  failed: number;
+  startedAt: string;
+  finishedAt: string;
+  profiles: CodexAuthProfileRecord[];
+};
+
 export type OpenCodexHistoryWindowResult = {
   workspaceId: string;
   windowLabel: string;
@@ -424,6 +469,10 @@ export type CodexHistoryViewPreferences = {
   messageFontSize: number;
 };
 
+export type CodexAuthPreferences = {
+  quotaRefreshIntervalSeconds: number;
+};
+
 export type StartupPreferences = {
   launchAtLogin: boolean;
   startSilently: boolean;
@@ -444,6 +493,7 @@ export type AppPreferences = {
   tray: TrayPreferences;
   diagnostics: DiagnosticsPreferences;
   codexHistory: CodexHistoryViewPreferences;
+  codexAuth: CodexAuthPreferences;
 };
 
 export type OpenLogDirectoryResult = {
@@ -758,6 +808,15 @@ export type UpsertCodexProfilePayload = {
   resumeStrategy: string;
   defaultArgs: string[];
   isDefault?: boolean;
+};
+
+export type UpsertCodexAuthProfilePayload = {
+  id?: string;
+  name: string;
+  description?: string;
+  codexHome: string;
+  authJson: string;
+  configToml: string;
 };
 
 export type CreateSnapshotPayload = {

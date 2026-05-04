@@ -12,6 +12,9 @@ import type {
   CodexHistoryMessagesPage,
   CodexHistoryMessagesPayload,
   CodexHistorySessionsResponse,
+  CodexAuthProfileRecord,
+  CodexAuthQuotaRefreshBatchResult,
+  CodexAuthSwitchResult,
   CopyScreenshotSelectionResult,
   CreateSnapshotPayload,
   CodexProfileRecord,
@@ -54,6 +57,7 @@ import type {
   StartRestoreRunPayload,
   UpdateSnapshotPayload,
   UpsertCodexProfilePayload,
+  UpsertCodexAuthProfilePayload,
   UpsertLaunchTaskPayload,
   UpsertProjectPayload,
   UpsertWorkspacePayload,
@@ -234,6 +238,34 @@ export function listCodexProfiles() {
 
 export function upsertCodexProfile(input: UpsertCodexProfilePayload) {
   return invokeCommand<CodexProfileRecord>("upsert_codex_profile", { input });
+}
+
+export function listCodexAuthProfiles() {
+  return invokeCommand<CodexAuthProfileRecord[]>("list_codex_auth_profiles");
+}
+
+export function importCurrentCodexAuthProfile() {
+  return invokeCommand<CodexAuthProfileRecord>("import_current_codex_auth_profile");
+}
+
+export function upsertCodexAuthProfile(input: UpsertCodexAuthProfilePayload) {
+  return invokeCommand<CodexAuthProfileRecord>("upsert_codex_auth_profile", { input });
+}
+
+export function deleteCodexAuthProfile(id: string) {
+  return invokeCommand<DeleteResult>("delete_codex_auth_profile", { id });
+}
+
+export function switchCodexAuthProfile(id: string) {
+  return invokeCommand<CodexAuthSwitchResult>("switch_codex_auth_profile", { id });
+}
+
+export function queryCodexAuthQuota(id: string) {
+  return invokeCommand<CodexAuthProfileRecord>("query_codex_auth_quota", { id });
+}
+
+export function refreshAllCodexAuthQuotas() {
+  return invokeCommand<CodexAuthQuotaRefreshBatchResult>("refresh_all_codex_auth_quotas");
 }
 
 export function openCodexHistoryWindow(workspaceId: string) {

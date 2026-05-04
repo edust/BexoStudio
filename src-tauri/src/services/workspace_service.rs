@@ -1066,6 +1066,7 @@ mod tests {
             tray: TrayPreferences::default(),
             diagnostics: DiagnosticsPreferences::default(),
             codex_history: crate::domain::CodexHistoryViewPreferences::default(),
+            codex_auth: crate::domain::CodexAuthPreferences::default(),
         });
 
         let workspace = service
@@ -1135,6 +1136,7 @@ mod tests {
             tray: TrayPreferences::default(),
             diagnostics: DiagnosticsPreferences::default(),
             codex_history: crate::domain::CodexHistoryViewPreferences::default(),
+            codex_auth: crate::domain::CodexAuthPreferences::default(),
         });
 
         let workspace = service
@@ -1202,6 +1204,7 @@ mod tests {
             tray: TrayPreferences::default(),
             diagnostics: DiagnosticsPreferences::default(),
             codex_history: crate::domain::CodexHistoryViewPreferences::default(),
+            codex_auth: crate::domain::CodexAuthPreferences::default(),
         });
 
         let workspace = service

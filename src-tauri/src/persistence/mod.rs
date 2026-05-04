@@ -1,3 +1,4 @@
+mod codex_auth_repo;
 mod codex_profile_repo;
 mod launch_task_repo;
 mod project_repo;
@@ -7,6 +8,10 @@ mod snapshot_repo;
 mod sqlite;
 mod workspace_repo;
 
+pub use codex_auth_repo::{
+    delete_codex_auth_profile, get_codex_auth_profile, list_codex_auth_profiles,
+    mark_codex_auth_profile_active, update_codex_auth_profile_quota, upsert_codex_auth_profile,
+};
 pub use codex_profile_repo::{list_codex_profiles, upsert_codex_profile};
 pub use launch_task_repo::{
     delete_launch_task, list_all_launch_tasks, list_launch_tasks, upsert_launch_task,
