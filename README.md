@@ -103,6 +103,7 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
       - `静默启动`（Switch，仅在 `--autostart` 场景生效）
     - `Windows Terminal` 路径
     - 通过目录选择器手动选择并即时保存
+    - 终端命令 Shell 可选 `PowerShell 7` / `cmd.exe`，默认优先 `PowerShell 7`
     - 终端模板管理
     - 通过弹窗管理模板的保存、删除、更新与拖拽排序
   - 当前阶段重点是统一桌面框架，而不是继续做业务内容
@@ -168,6 +169,7 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
   - 只管理 Codex `auth.json` 与 `config.toml`
   - 支持导入当前 Codex 配置、保存多套授权、查询 OAuth 额度和切换当前授权
   - 支持按设置的秒数自动队列刷新所有授权额度，默认 `60s`
+  - 支持为额度查询配置系统代理、手动 HTTP/SOCKS 代理或禁用代理
   - 不包含 ChatGPT 登录托管、refresh token 自动维护或其他 AI CLI 控制
 - Dev Inspector Baseline：
   - 已接入 `code-inspector-plugin`
@@ -277,6 +279,7 @@ npm run release:build
   - `open_path`
   - `ide`
   - `codex`
+- Home 终端命令组默认使用 `PowerShell 7(pwsh)` 执行启动命令；可在 `Settings / General` 切换回 `cmd.exe`
 - 恢复运行中支持从 Snapshots / Logs 触发 run 级与 action 级取消
 - 最近一次实机验证已确认：
   - `builtin:terminal_context` 使用 `wt.exe`

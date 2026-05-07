@@ -5,10 +5,9 @@ use std::{
 
 use crate::{
     adapters::{
-        build_windows_command_shell_startup_command, build_windows_shell_command_line,
-        find_first_executable, run_launch_command, IdeAdapter, JetBrainsAdapter, LaunchCommand,
-        TerminalAdapter, TerminalLaunchInput, VSCodeAdapter, WindowsTerminalAdapter,
-        WindowsTerminalTabLaunchInput,
+        build_windows_shell_command_line, find_first_executable, run_launch_command, IdeAdapter,
+        JetBrainsAdapter, LaunchCommand, TerminalAdapter, TerminalLaunchInput, VSCodeAdapter,
+        WindowsShellLaunchPlan, WindowsTerminalAdapter, WindowsTerminalTabLaunchInput,
     },
     domain::{
         ensure_absolute_directory, AdapterAvailability, DeleteResult, LaunchTaskRecord,
@@ -195,14 +194,19 @@ impl WorkspaceService {
         let launch_context =
             resolve_terminal_launch_context(preferences_service, &workspace, &project, &task)?;
         let command_line = build_terminal_command_line(&task);
+        let startup_command = build_terminal_startup_command(
+            &launch_context.terminal_adapter,
+            launch_context.shell_plan.shell,
+            &command_line,
+            &workspace.id,
+            &project.id,
+            &task.id,
+        )?;
         let launch_command = launch_context.terminal_adapter.build_tab_launch_plan(
             &launch_context.executable_path,
             WindowsTerminalTabLaunchInput {
                 project_path: launch_context.working_dir.clone(),
-                startup_command: Some(build_windows_command_shell_startup_command(
-                    &launch_context.shell_executable,
-                    &command_line,
-                )),
+                startup_command: Some(startup_command),
                 envs: Vec::new(),
                 window_target: Some("new".to_string()),
                 title: Some(task.name.clone()),
@@ -266,14 +270,19 @@ impl WorkspaceService {
             }
 
             let command_line = build_terminal_command_line(task);
+            let startup_command = build_terminal_startup_command(
+                &launch_context.terminal_adapter,
+                launch_context.shell_plan.shell,
+                &command_line,
+                &workspace.id,
+                &project.id,
+                &task.id,
+            )?;
             let launch_command = launch_context.terminal_adapter.build_tab_launch_plan(
                 &launch_context.executable_path,
                 WindowsTerminalTabLaunchInput {
                     project_path: resolve_terminal_working_dir_for_task(task, &project)?,
-                    startup_command: Some(build_windows_command_shell_startup_command(
-                        &launch_context.shell_executable,
-                        &command_line,
-                    )),
+                    startup_command: Some(startup_command),
                     envs: Vec::new(),
                     window_target: Some(window_target.clone()),
                     title: Some(task.name.clone()),
@@ -334,7 +343,7 @@ impl WorkspaceService {
 struct TerminalLaunchContext {
     terminal_adapter: WindowsTerminalAdapter,
     executable_path: String,
-    shell_executable: String,
+    shell_plan: WindowsShellLaunchPlan,
     working_dir: String,
 }
 
@@ -802,27 +811,43 @@ fn resolve_terminal_launch_context(
         .with_detail("adapter", "windows_terminal")
         .with_detail("workspaceId", workspace.id.clone())
     })?;
-    let shell_executable = terminal_adapter
-        .detect_shell_executable()
-        .ok_or_else(|| {
-            AppError::new(
-                "SHELL_EXECUTABLE_UNAVAILABLE",
-                "Windows command shell executable is not available on this machine",
-            )
-            .with_detail("workspaceId", workspace.id.clone())
-            .with_detail("projectId", project.id.clone())
-            .with_detail("launchTaskId", task.id.clone())
-        })?
-        .display()
-        .to_string();
+    let shell_plan = terminal_adapter
+        .resolve_shell_launch_plan(preferences.terminal.command_shell, "")
+        .map_err(|error| {
+            error
+                .with_detail("workspaceId", workspace.id.clone())
+                .with_detail("projectId", project.id.clone())
+                .with_detail("launchTaskId", task.id.clone())
+        })?;
     let working_dir = resolve_terminal_working_dir_for_task(task, project)?;
 
     Ok(TerminalLaunchContext {
         terminal_adapter,
         executable_path,
-        shell_executable,
+        shell_plan,
         working_dir,
     })
+}
+
+fn build_terminal_startup_command(
+    terminal_adapter: &WindowsTerminalAdapter,
+    preferred_shell: crate::domain::TerminalCommandShell,
+    command_line: &str,
+    workspace_id: &str,
+    project_id: &str,
+    launch_task_id: &str,
+) -> AppResult<Vec<String>> {
+    let shell_plan = terminal_adapter
+        .resolve_shell_launch_plan(preferred_shell, command_line)
+        .map_err(|error| {
+            error
+                .with_detail("workspaceId", workspace_id.to_string())
+                .with_detail("projectId", project_id.to_string())
+                .with_detail("launchTaskId", launch_task_id.to_string())
+        })?;
+    let mut startup_command = vec![shell_plan.executable_path.display().to_string()];
+    startup_command.extend(shell_plan.startup_args);
+    Ok(startup_command)
 }
 
 fn resolve_terminal_working_dir_for_task(
@@ -1057,6 +1082,7 @@ mod tests {
             terminal: TerminalPreferences {
                 windows_terminal_path: Some(shim_directory.display().to_string()),
                 codex_cli_path: None,
+                command_shell: crate::domain::TerminalCommandShell::Cmd,
                 command_templates: Vec::new(),
             },
             ide: IdePreferences::default(),
@@ -1127,6 +1153,7 @@ mod tests {
             terminal: TerminalPreferences {
                 windows_terminal_path: Some(shim_directory.display().to_string()),
                 codex_cli_path: None,
+                command_shell: crate::domain::TerminalCommandShell::Cmd,
                 command_templates: Vec::new(),
             },
             ide: IdePreferences::default(),

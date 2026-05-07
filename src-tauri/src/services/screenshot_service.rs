@@ -89,6 +89,7 @@ struct ScreenshotState {
     overlay_prewarmed: bool,
     overlay_event_suppressed_until: Option<Instant>,
     overlay_focus_drift_compensation: Option<OverlayFocusDriftCompensation>,
+    escape_cancel_hook_registered: bool,
 }
 
 #[derive(Default)]
@@ -3546,6 +3547,7 @@ impl ScreenshotService {
         app: &AppHandle<R>,
     ) -> AppResult<StartScreenshotSessionResult> {
         let started_at = Instant::now();
+        self.clear_escape_cancel_hook(app);
         if let Err(error) = hide_and_clear_native_preview(app) {
             log::warn!(
                 target: "bexo::service::screenshot",
@@ -4107,8 +4109,7 @@ impl ScreenshotService {
                     .with_detail("reason", error.to_string())
             })?;
 
-        let _ = app;
-        let _ = self.clear_active_session(Some(session_id));
+        let _ = self.clear_active_session(app, Some(session_id));
 
         Ok(CopyScreenshotSelectionResult {
             session_id: session.id,
@@ -4153,8 +4154,7 @@ impl ScreenshotService {
                 .with_detail("reason", error.to_string())
         })?;
 
-        let _ = app;
-        let _ = self.clear_active_session(Some(session_id));
+        let _ = self.clear_active_session(app, Some(session_id));
 
         Ok(SaveScreenshotSelectionResult {
             session_id: session.id,
@@ -4169,8 +4169,7 @@ impl ScreenshotService {
         app: &AppHandle<R>,
         session_id: &str,
     ) -> AppResult<CancelScreenshotSessionResult> {
-        let _ = app;
-        let cancelled = self.clear_active_session(Some(session_id))?;
+        let cancelled = self.clear_active_session(app, Some(session_id))?;
         Ok(CancelScreenshotSessionResult {
             session_id: session_id.to_string(),
             cancelled,
@@ -4185,7 +4184,7 @@ impl ScreenshotService {
             return Ok(None);
         };
         let session_id = session.id.clone();
-        if !self.clear_active_session(Some(session_id.as_str()))? {
+        if !self.clear_active_session(app, Some(session_id.as_str()))? {
             return Ok(None);
         }
 
@@ -4222,13 +4221,19 @@ impl ScreenshotService {
         Ok(Some(session_id))
     }
 
-    pub fn clear_active_session(&self, session_id: Option<&str>) -> AppResult<bool> {
+    pub fn clear_active_session<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        session_id: Option<&str>,
+    ) -> AppResult<bool> {
         let mut guard = self
             .state
             .lock()
             .map_err(|_| AppError::new("SCREENSHOT_SESSION_LOCK_FAILED", "读取截图会话状态失败"))?;
 
         let Some(active) = guard.active_session.as_ref() else {
+            drop(guard);
+            self.clear_escape_cancel_hook(app);
             return Ok(false);
         };
 
@@ -4244,7 +4249,7 @@ impl ScreenshotService {
             .map(|value| value.as_ref().clone());
         guard.active_session = None;
         drop(guard);
-        self.clear_escape_cancel_hook();
+        self.clear_escape_cancel_hook(app);
         cleanup_preview_file(stale_preview_path.as_deref());
         Ok(true)
     }
@@ -4258,7 +4263,7 @@ impl ScreenshotService {
 
         #[cfg(target_os = "windows")]
         {
-            let _ = app.global_shortcut().unregister("Escape");
+            self.clear_escape_cancel_hook(app);
 
             let app_handle = app.clone();
             app.global_shortcut()
@@ -4314,6 +4319,10 @@ impl ScreenshotService {
                     AppError::new("SCREENSHOT_ESCAPE_HOOK_REGISTER_FAILED", "注册截图态 Esc 取消热键失败")
                         .with_detail("reason", error.to_string())
                 })?;
+            if let Err(error) = self.set_escape_cancel_hook_registered(true) {
+                let _ = app.global_shortcut().unregister("Escape");
+                return Err(error);
+            }
 
             log::info!(
                 target: "bexo::service::screenshot",
@@ -4323,12 +4332,72 @@ impl ScreenshotService {
         }
     }
 
-    fn clear_escape_cancel_hook(&self) {
+    fn clear_escape_cancel_hook<R: Runtime>(&self, app: &AppHandle<R>) {
         self.escape_hook_manager.clear_bindings();
+        #[cfg(target_os = "windows")]
+        {
+            let should_unregister = match self.take_escape_cancel_hook_registered() {
+                Ok(value) => value,
+                Err(error) => {
+                    log::warn!(
+                        target: "bexo::service::screenshot",
+                        "escape_hook_state_clear_failed shortcut=Escape reason={}",
+                        error
+                    );
+                    true
+                }
+            };
+
+            if should_unregister {
+                match app.global_shortcut().unregister("Escape") {
+                    Ok(()) => {
+                        log::info!(
+                            target: "bexo::service::screenshot",
+                            "escape_hook_unregistered shortcut=Escape source=global_shortcut"
+                        );
+                    }
+                    Err(error) => {
+                        log::debug!(
+                            target: "bexo::service::screenshot",
+                            "escape_hook_unregister_skipped shortcut=Escape source=global_shortcut reason={}",
+                            error
+                        );
+                    }
+                }
+            } else {
+                log::debug!(
+                    target: "bexo::service::screenshot",
+                    "escape_hook_unregister_skipped shortcut=Escape source=global_shortcut reason=not_registered_by_screenshot"
+                );
+            }
+        }
         log::info!(
             target: "bexo::service::screenshot",
             "escape_hook_cleared"
         );
+    }
+
+    fn set_escape_cancel_hook_registered(&self, value: bool) -> AppResult<()> {
+        let mut guard = self.state.lock().map_err(|_| {
+            AppError::new(
+                "SCREENSHOT_SESSION_LOCK_FAILED",
+                "更新截图 Esc 热键状态失败",
+            )
+        })?;
+        guard.escape_cancel_hook_registered = value;
+        Ok(())
+    }
+
+    fn take_escape_cancel_hook_registered(&self) -> AppResult<bool> {
+        let mut guard = self.state.lock().map_err(|_| {
+            AppError::new(
+                "SCREENSHOT_SESSION_LOCK_FAILED",
+                "清理截图 Esc 热键状态失败",
+            )
+        })?;
+        let registered = guard.escape_cancel_hook_registered;
+        guard.escape_cancel_hook_registered = false;
+        Ok(registered)
     }
 
     fn is_overlay_prewarmed(&self) -> AppResult<bool> {

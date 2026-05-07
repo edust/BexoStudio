@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 pub const DEFAULT_SCREENSHOT_CAPTURE_HOTKEY: &str = "Ctrl+Shift+X";
 pub const PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY: &str = "Ctrl+Shift+1";
@@ -6,6 +6,8 @@ pub const EARLIER_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY: &str = "Ctrl+Shift+4";
 pub const LEGACY_SCREENSHOT_CAPTURE_HOTKEY: &str = "Ctrl+Alt+A";
 pub const DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE: i32 = 12;
 pub const DEFAULT_CODEX_AUTH_QUOTA_REFRESH_INTERVAL_SECONDS: i32 = 60;
+pub const DEFAULT_CODEX_AUTH_PROXY_MODE: &str = "system";
+pub const DEFAULT_TERMINAL_COMMAND_SHELL: TerminalCommandShell = TerminalCommandShell::PowerShell7;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
@@ -29,12 +31,60 @@ pub struct CodexHomeDirectoryInfo {
     pub exists: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct TerminalPreferences {
     pub windows_terminal_path: Option<String>,
     pub codex_cli_path: Option<String>,
+    #[serde(
+        default = "default_terminal_command_shell",
+        deserialize_with = "deserialize_terminal_command_shell"
+    )]
+    pub command_shell: TerminalCommandShell,
     pub command_templates: Vec<TerminalCommandTemplate>,
+}
+
+impl Default for TerminalPreferences {
+    fn default() -> Self {
+        Self {
+            windows_terminal_path: None,
+            codex_cli_path: None,
+            command_shell: DEFAULT_TERMINAL_COMMAND_SHELL,
+            command_templates: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TerminalCommandShell {
+    #[serde(rename = "powershell7")]
+    PowerShell7,
+    #[serde(rename = "cmd")]
+    Cmd,
+}
+
+impl Default for TerminalCommandShell {
+    fn default() -> Self {
+        DEFAULT_TERMINAL_COMMAND_SHELL
+    }
+}
+
+fn default_terminal_command_shell() -> TerminalCommandShell {
+    DEFAULT_TERMINAL_COMMAND_SHELL
+}
+
+fn deserialize_terminal_command_shell<'de, D>(
+    deserializer: D,
+) -> Result<TerminalCommandShell, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    Ok(match value.as_deref().map(str::trim) {
+        Some("cmd") => TerminalCommandShell::Cmd,
+        Some("powershell7") => TerminalCommandShell::PowerShell7,
+        _ => DEFAULT_TERMINAL_COMMAND_SHELL,
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -156,17 +206,40 @@ fn default_codex_auth_quota_refresh_interval_seconds() -> i32 {
     DEFAULT_CODEX_AUTH_QUOTA_REFRESH_INTERVAL_SECONDS
 }
 
+fn default_codex_auth_proxy_mode() -> String {
+    DEFAULT_CODEX_AUTH_PROXY_MODE.to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct CodexAuthPreferences {
     #[serde(default = "default_codex_auth_quota_refresh_interval_seconds")]
     pub quota_refresh_interval_seconds: i32,
+    pub proxy: CodexAuthProxyPreferences,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CodexAuthProxyPreferences {
+    #[serde(default = "default_codex_auth_proxy_mode")]
+    pub mode: String,
+    pub manual_proxy_url: String,
 }
 
 impl Default for CodexAuthPreferences {
     fn default() -> Self {
         Self {
             quota_refresh_interval_seconds: default_codex_auth_quota_refresh_interval_seconds(),
+            proxy: CodexAuthProxyPreferences::default(),
+        }
+    }
+}
+
+impl Default for CodexAuthProxyPreferences {
+    fn default() -> Self {
+        Self {
+            mode: default_codex_auth_proxy_mode(),
+            manual_proxy_url: String::new(),
         }
     }
 }

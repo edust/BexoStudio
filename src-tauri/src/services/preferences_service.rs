@@ -14,8 +14,9 @@ use tauri_plugin_store::{Store, StoreExt};
 use crate::{
     adapters::{resolve_configured_executable, IdeAdapter, JetBrainsAdapter, VSCodeAdapter},
     domain::{
-        AppPreferences, CodexAuthPreferences, CodexHistoryViewPreferences,
-        EditorPathDetectionResult, HotkeyAction, HotkeyPreferences,
+        AppPreferences, CodexAuthPreferences, CodexAuthProxyPreferences,
+        CodexHistoryViewPreferences, EditorPathDetectionResult, HotkeyAction, HotkeyPreferences,
+        TerminalCommandShell, TerminalPreferences, DEFAULT_CODEX_AUTH_PROXY_MODE,
         DEFAULT_CODEX_AUTH_QUOTA_REFRESH_INTERVAL_SECONDS, DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE,
         DEFAULT_SCREENSHOT_CAPTURE_HOTKEY, EARLIER_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
         LEGACY_SCREENSHOT_CAPTURE_HOTKEY, PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
@@ -33,6 +34,7 @@ const CODEX_HISTORY_MAX_MESSAGE_FONT_SIZE: i32 = 24;
 const CODEX_HISTORY_MAX_FONT_FAMILY_LENGTH: usize = 160;
 const CODEX_AUTH_MIN_QUOTA_REFRESH_INTERVAL_SECONDS: i32 = 10;
 const CODEX_AUTH_MAX_QUOTA_REFRESH_INTERVAL_SECONDS: i32 = 3600;
+const CODEX_AUTH_MAX_MANUAL_PROXY_URL_LENGTH: usize = 512;
 
 #[derive(Debug, Clone)]
 pub struct PreferencesService {
@@ -255,6 +257,8 @@ fn migrate_legacy_preferences(mut preferences: AppPreferences) -> PreferenceMigr
 }
 
 fn repair_invalid_preferences(mut preferences: AppPreferences) -> PreferenceRepairResult {
+    let repaired_terminal = sanitize_terminal_preferences(preferences.terminal);
+    preferences.terminal = repaired_terminal.preferences;
     let repaired_hotkeys = sanitize_hotkey_preferences(preferences.hotkey);
     preferences.hotkey = repaired_hotkeys.preferences;
     let repaired_codex_history = sanitize_codex_history_view_preferences(preferences.codex_history);
@@ -264,9 +268,42 @@ fn repair_invalid_preferences(mut preferences: AppPreferences) -> PreferenceRepa
 
     PreferenceRepairResult {
         preferences,
-        changed: repaired_hotkeys.changed
+        changed: repaired_terminal.changed
+            || repaired_hotkeys.changed
             || repaired_codex_history.changed
             || repaired_codex_auth.changed,
+    }
+}
+
+#[derive(Debug)]
+struct TerminalPreferenceRepairResult {
+    preferences: TerminalPreferences,
+    changed: bool,
+}
+
+fn sanitize_terminal_preferences(input: TerminalPreferences) -> TerminalPreferenceRepairResult {
+    let mut changed = false;
+    let command_templates = match validate_command_templates(input.command_templates.clone()) {
+        Ok(templates) => templates,
+        Err(error) => {
+            log::warn!(
+                target: "bexo::service::preferences",
+                "failed to preserve persisted terminal command templates during repair, fallback to empty templates reason={}",
+                error
+            );
+            changed = true;
+            Vec::new()
+        }
+    };
+
+    TerminalPreferenceRepairResult {
+        preferences: TerminalPreferences {
+            windows_terminal_path: input.windows_terminal_path,
+            codex_cli_path: input.codex_cli_path,
+            command_shell: input.command_shell,
+            command_templates,
+        },
+        changed,
     }
 }
 
@@ -470,10 +507,30 @@ fn sanitize_codex_auth_preferences(input: CodexAuthPreferences) -> CodexAuthPref
         changed = true;
         DEFAULT_CODEX_AUTH_QUOTA_REFRESH_INTERVAL_SECONDS
     };
+    let proxy = match validate_codex_auth_proxy_preferences(input.proxy.clone()) {
+        Ok(validated) => {
+            if validated.mode != input.proxy.mode
+                || validated.manual_proxy_url != input.proxy.manual_proxy_url
+            {
+                changed = true;
+            }
+            validated
+        }
+        Err(error) => {
+            log::warn!(
+                target: "bexo::service::preferences",
+                "repair codex auth proxy preferences reason={}",
+                error
+            );
+            changed = true;
+            CodexAuthProxyPreferences::default()
+        }
+    };
 
     CodexAuthPreferenceRepairResult {
         preferences: CodexAuthPreferences {
             quota_refresh_interval_seconds,
+            proxy,
         },
         changed,
     }
@@ -552,6 +609,7 @@ mod windows_autostart {
     const ERROR_FILE_NOT_FOUND: i32 = 2;
     const REG_SZ: u32 = 1;
     const REG_BINARY: u32 = 3;
+    const KEY_QUERY_VALUE: u32 = 0x0001;
     const KEY_SET_VALUE: u32 = 0x0002;
     const REG_OPTION_NON_VOLATILE: u32 = 0;
     const RUN_KEY: &str = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run";
@@ -590,6 +648,14 @@ mod windows_autostart {
             lp_data: *const u8,
             cb_data: u32,
         ) -> i32;
+        fn RegQueryValueExW(
+            hkey: HKey,
+            lp_value_name: *const u16,
+            lp_reserved: *mut u32,
+            lp_type: *mut u32,
+            lp_data: *mut u8,
+            lpcb_data: *mut u32,
+        ) -> i32;
         fn RegDeleteValueW(hkey: HKey, lp_value_name: *const u16) -> i32;
         fn RegCloseKey(hkey: HKey) -> i32;
     }
@@ -609,10 +675,33 @@ mod windows_autostart {
                     .with_detail("reason", error.to_string())
             })?;
             let command_line = build_registry_run_command_line(&executable, &AUTOSTART_ARGS);
-            set_registry_string_value(RUN_KEY, app_name, &command_line)?;
+            let existing_command_line = get_registry_string_value_if_exists(RUN_KEY, app_name)?;
+            if should_keep_existing_release_command(&executable, existing_command_line.as_deref()) {
+                log::info!(
+                    target: "bexo::service::preferences",
+                    "autostart sync kept existing installed release command app_name={} current_exe={} registry_command={}",
+                    app_name,
+                    executable.display(),
+                    existing_command_line.unwrap_or_default()
+                );
+            } else {
+                set_registry_string_value(RUN_KEY, app_name, &command_line)?;
+                log::info!(
+                    target: "bexo::service::preferences",
+                    "autostart sync wrote run command app_name={} current_exe={} command_line={}",
+                    app_name,
+                    executable.display(),
+                    command_line
+                );
+            }
             set_startup_approved_enabled(app_name)?;
         } else {
             delete_registry_value_if_exists(RUN_KEY, app_name)?;
+            log::info!(
+                target: "bexo::service::preferences",
+                "autostart sync removed run command app_name={}",
+                app_name
+            );
         }
 
         Ok(())
@@ -694,6 +783,76 @@ mod windows_autostart {
         }
     }
 
+    fn get_registry_string_value_if_exists(
+        key_path: &str,
+        value_name: &str,
+    ) -> AppResult<Option<String>> {
+        let key = match open_registry_key_with_access(key_path, KEY_QUERY_VALUE) {
+            Ok(key) => key,
+            Err(status) if status == ERROR_FILE_NOT_FOUND => return Ok(None),
+            Err(status) => {
+                return Err(AppError::new(
+                    "AUTOSTART_REGISTRY_OPEN_FAILED",
+                    "打开开机启动注册表失败",
+                )
+                .with_detail("reason", format!("RegOpenKeyExW returned {status}")));
+            }
+        };
+
+        let wide_name = to_wide_null(value_name);
+        let mut value_type = 0u32;
+        let mut bytes_len = 0u32;
+        let status = unsafe {
+            RegQueryValueExW(
+                key.0,
+                wide_name.as_ptr(),
+                ptr::null_mut(),
+                &mut value_type,
+                ptr::null_mut(),
+                &mut bytes_len,
+            )
+        };
+
+        if status == ERROR_FILE_NOT_FOUND {
+            return Ok(None);
+        }
+        if status != ERROR_SUCCESS {
+            return Err(
+                AppError::new("AUTOSTART_REGISTRY_READ_FAILED", "读取开机启动注册表失败")
+                    .with_detail("reason", format!("RegQueryValueExW returned {status}")),
+            );
+        }
+        if value_type != REG_SZ || bytes_len == 0 {
+            return Ok(None);
+        }
+
+        let mut buffer = vec![0u8; bytes_len as usize];
+        let status = unsafe {
+            RegQueryValueExW(
+                key.0,
+                wide_name.as_ptr(),
+                ptr::null_mut(),
+                &mut value_type,
+                buffer.as_mut_ptr(),
+                &mut bytes_len,
+            )
+        };
+        if status != ERROR_SUCCESS {
+            return Err(
+                AppError::new("AUTOSTART_REGISTRY_READ_FAILED", "读取开机启动注册表失败")
+                    .with_detail("reason", format!("RegQueryValueExW returned {status}")),
+            );
+        }
+
+        let u16_len = (bytes_len as usize) / 2;
+        let wide = unsafe { std::slice::from_raw_parts(buffer.as_ptr().cast::<u16>(), u16_len) };
+        let text = String::from_utf16_lossy(wide)
+            .trim_end_matches('\0')
+            .trim()
+            .to_string();
+        Ok((!text.is_empty()).then_some(text))
+    }
+
     fn create_registry_key(key_path: &str, error_code: &str) -> AppResult<RegistryKey> {
         let wide_path = to_wide_null(key_path);
         let mut key: HKey = 0;
@@ -720,17 +879,14 @@ mod windows_autostart {
     }
 
     fn open_registry_key(key_path: &str) -> Result<RegistryKey, i32> {
+        open_registry_key_with_access(key_path, KEY_SET_VALUE)
+    }
+
+    fn open_registry_key_with_access(key_path: &str, access: u32) -> Result<RegistryKey, i32> {
         let wide_path = to_wide_null(key_path);
         let mut key: HKey = 0;
-        let status = unsafe {
-            RegOpenKeyExW(
-                HKEY_CURRENT_USER,
-                wide_path.as_ptr(),
-                0,
-                KEY_SET_VALUE,
-                &mut key,
-            )
-        };
+        let status =
+            unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, wide_path.as_ptr(), 0, access, &mut key) };
 
         if status == ERROR_SUCCESS {
             Ok(RegistryKey(key))
@@ -743,6 +899,58 @@ mod windows_autostart {
         let mut parts = vec![quote_windows_command_arg(&app_path.display().to_string())];
         parts.extend(args.iter().map(|arg| quote_windows_command_arg(arg)));
         parts.join(" ")
+    }
+
+    fn should_keep_existing_release_command(
+        current_exe: &Path,
+        existing_command_line: Option<&str>,
+    ) -> bool {
+        if !is_development_executable(current_exe) {
+            return false;
+        }
+
+        let Some(existing_exe) = existing_command_line.and_then(extract_windows_command_executable)
+        else {
+            return false;
+        };
+
+        !is_development_executable(Path::new(&existing_exe)) && Path::new(&existing_exe).exists()
+    }
+
+    fn is_development_executable(path: &Path) -> bool {
+        let normalized = path.display().to_string().replace('/', "\\").to_lowercase();
+        normalized.contains("\\src-tauri\\target\\debug\\")
+            || normalized.contains("\\src-tauri\\target\\release\\")
+    }
+
+    fn extract_windows_command_executable(command_line: &str) -> Option<String> {
+        let trimmed = command_line.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        if let Some(rest) = trimmed.strip_prefix('"') {
+            let mut escaped = false;
+            let mut executable = String::new();
+            for character in rest.chars() {
+                if escaped {
+                    executable.push(character);
+                    escaped = false;
+                    continue;
+                }
+                match character {
+                    '\\' => {
+                        escaped = true;
+                        executable.push(character);
+                    }
+                    '"' => return Some(executable),
+                    _ => executable.push(character),
+                }
+            }
+            return None;
+        }
+
+        trimmed.split_whitespace().next().map(str::to_string)
     }
 
     fn quote_windows_command_arg(value: &str) -> String {
@@ -791,7 +999,11 @@ mod windows_autostart {
     mod tests {
         use std::path::Path;
 
-        use super::{build_registry_run_command_line, quote_windows_command_arg};
+        use super::{
+            build_registry_run_command_line, extract_windows_command_executable,
+            is_development_executable, quote_windows_command_arg,
+            should_keep_existing_release_command,
+        };
 
         #[test]
         fn registry_run_command_quotes_executable_path_and_autostart_arg() {
@@ -813,28 +1025,54 @@ mod windows_autostart {
                 r#""C:\Path With \"Quote\"\\""#
             );
         }
+
+        #[test]
+        fn command_executable_extracts_quoted_path() {
+            assert_eq!(
+                extract_windows_command_executable(
+                    r#""C:\Users\aka86\AppData\Local\Bexo Studio\bexo-studio.exe" "--autostart""#
+                )
+                .as_deref(),
+                Some(r"C:\Users\aka86\AppData\Local\Bexo Studio\bexo-studio.exe")
+            );
+        }
+
+        #[test]
+        fn development_executable_detects_tauri_target_paths() {
+            assert!(is_development_executable(Path::new(
+                r"D:\Desktop\rust\BexoStudio\src-tauri\target\debug\bexo-studio.exe"
+            )));
+            assert!(!is_development_executable(Path::new(
+                r"C:\Users\aka86\AppData\Local\Bexo Studio\bexo-studio.exe"
+            )));
+        }
+
+        #[test]
+        fn development_build_keeps_existing_installed_autostart_command() {
+            let fake_install_dir =
+                std::env::temp_dir().join(format!("bexo-autostart-test-{}", std::process::id()));
+            std::fs::create_dir_all(&fake_install_dir).expect("create temp install dir");
+            let fake_install_exe = fake_install_dir.join("bexo-studio.exe");
+            std::fs::write(&fake_install_exe, []).expect("create fake installed exe");
+
+            let current =
+                Path::new(r"D:\Desktop\rust\BexoStudio\src-tauri\target\debug\bexo-studio.exe");
+            let existing = build_registry_run_command_line(&fake_install_exe, &["--autostart"]);
+
+            assert!(should_keep_existing_release_command(
+                current,
+                Some(existing.as_str())
+            ));
+
+            let _ = std::fs::remove_file(&fake_install_exe);
+            let _ = std::fs::remove_dir(&fake_install_dir);
+        }
     }
 }
 
 fn validate_preferences(input: AppPreferences) -> AppResult<AppPreferences> {
     Ok(AppPreferences {
-        terminal: crate::domain::TerminalPreferences {
-            windows_terminal_path: validate_tool_path(
-                "terminal.windowsTerminalPath",
-                input.terminal.windows_terminal_path,
-                &["wt.exe", "wt.cmd", "wt.bat"],
-                "WINDOWS_TERMINAL_PATH_INVALID",
-                "Windows Terminal",
-            )?,
-            codex_cli_path: validate_tool_path(
-                "terminal.codexCliPath",
-                input.terminal.codex_cli_path,
-                &["codex.exe", "codex.cmd", "codex.bat"],
-                "CODEX_PATH_INVALID",
-                "Codex CLI",
-            )?,
-            command_templates: validate_command_templates(input.terminal.command_templates)?,
-        },
+        terminal: validate_terminal_preferences(input.terminal)?,
         ide: crate::domain::IdePreferences {
             vscode_path: validate_tool_path(
                 "ide.vscodePath",
@@ -913,6 +1151,31 @@ fn validate_preferences(input: AppPreferences) -> AppResult<AppPreferences> {
     })
 }
 
+fn validate_terminal_preferences(input: TerminalPreferences) -> AppResult<TerminalPreferences> {
+    Ok(TerminalPreferences {
+        windows_terminal_path: validate_tool_path(
+            "terminal.windowsTerminalPath",
+            input.windows_terminal_path,
+            &["wt.exe", "wt.cmd", "wt.bat"],
+            "WINDOWS_TERMINAL_PATH_INVALID",
+            "Windows Terminal",
+        )?,
+        codex_cli_path: validate_tool_path(
+            "terminal.codexCliPath",
+            input.codex_cli_path,
+            &["codex.exe", "codex.cmd", "codex.bat"],
+            "CODEX_PATH_INVALID",
+            "Codex CLI",
+        )?,
+        command_shell: validate_terminal_command_shell(input.command_shell),
+        command_templates: validate_command_templates(input.command_templates)?,
+    })
+}
+
+fn validate_terminal_command_shell(input: TerminalCommandShell) -> TerminalCommandShell {
+    input
+}
+
 fn validate_startup_preferences(
     input: crate::domain::StartupPreferences,
 ) -> AppResult<crate::domain::StartupPreferences> {
@@ -961,6 +1224,7 @@ fn validate_codex_auth_preferences(input: CodexAuthPreferences) -> AppResult<Cod
         quota_refresh_interval_seconds: validate_codex_auth_quota_refresh_interval_seconds(
             input.quota_refresh_interval_seconds,
         )?,
+        proxy: validate_codex_auth_proxy_preferences(input.proxy)?,
     })
 }
 
@@ -975,6 +1239,58 @@ fn validate_codex_auth_quota_refresh_interval_seconds(input: i32) -> AppResult<i
         );
     }
     Ok(input)
+}
+
+fn validate_codex_auth_proxy_preferences(
+    input: CodexAuthProxyPreferences,
+) -> AppResult<CodexAuthProxyPreferences> {
+    let mode = input.mode.trim().to_ascii_lowercase();
+    if !matches!(mode.as_str(), "system" | "manual" | "disabled") {
+        return Err(AppError::validation("Codex Auth 额度代理模式无效")
+            .with_detail("field", "codexAuth.proxy.mode")
+            .with_detail("allowed", "system, manual, disabled"));
+    }
+
+    let manual_proxy_url = input.manual_proxy_url.trim().to_string();
+    if manual_proxy_url.chars().count() > CODEX_AUTH_MAX_MANUAL_PROXY_URL_LENGTH {
+        return Err(
+            AppError::validation("Codex Auth 手动代理地址不能超过 512 个字符")
+                .with_detail("field", "codexAuth.proxy.manualProxyUrl"),
+        );
+    }
+    if manual_proxy_url.chars().any(char::is_control) {
+        return Err(
+            AppError::validation("Codex Auth 手动代理地址不能包含换行或控制字符")
+                .with_detail("field", "codexAuth.proxy.manualProxyUrl"),
+        );
+    }
+
+    if mode == "manual" && manual_proxy_url.is_empty() {
+        return Err(AppError::validation("手动代理模式必须填写代理地址")
+            .with_detail("field", "codexAuth.proxy.manualProxyUrl"));
+    }
+    if !manual_proxy_url.is_empty() {
+        let lower_proxy_url = manual_proxy_url.to_ascii_lowercase();
+        if !lower_proxy_url.starts_with("http://")
+            && !lower_proxy_url.starts_with("https://")
+            && !lower_proxy_url.starts_with("socks5://")
+            && !lower_proxy_url.starts_with("socks5h://")
+        {
+            return Err(AppError::validation(
+                "Codex Auth 手动代理只支持 http、https、socks5、socks5h",
+            )
+            .with_detail("field", "codexAuth.proxy.manualProxyUrl"));
+        }
+    }
+
+    Ok(CodexAuthProxyPreferences {
+        mode: if mode.is_empty() {
+            DEFAULT_CODEX_AUTH_PROXY_MODE.to_string()
+        } else {
+            mode
+        },
+        manual_proxy_url,
+    })
 }
 
 fn validate_workspace_preferences(
@@ -1516,11 +1832,13 @@ mod tests {
     use super::{
         build_codex_home_directory_info, migrate_legacy_preferences,
         sanitize_codex_auth_preferences, sanitize_codex_history_view_preferences,
-        sanitize_hotkey_preferences, validate_codex_auth_quota_refresh_interval_seconds,
+        sanitize_hotkey_preferences, validate_codex_auth_proxy_preferences,
+        validate_codex_auth_quota_refresh_interval_seconds,
         validate_codex_history_message_font_size, validate_hotkey_shortcut,
     };
     use crate::domain::{
-        AppPreferences, CodexAuthPreferences, CodexHistoryViewPreferences, HotkeyAction,
+        AppPreferences, CodexAuthPreferences, CodexAuthProxyPreferences,
+        CodexHistoryViewPreferences, HotkeyAction, DEFAULT_CODEX_AUTH_PROXY_MODE,
         DEFAULT_CODEX_AUTH_QUOTA_REFRESH_INTERVAL_SECONDS, DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE,
         DEFAULT_SCREENSHOT_CAPTURE_HOTKEY, EARLIER_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
         LEGACY_SCREENSHOT_CAPTURE_HOTKEY, PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
@@ -1645,12 +1963,52 @@ mod tests {
     fn codex_auth_preferences_repair_restores_invalid_interval() {
         let repaired = sanitize_codex_auth_preferences(CodexAuthPreferences {
             quota_refresh_interval_seconds: 0,
+            proxy: CodexAuthProxyPreferences::default(),
         });
 
         assert!(repaired.changed);
         assert_eq!(
             repaired.preferences.quota_refresh_interval_seconds,
             DEFAULT_CODEX_AUTH_QUOTA_REFRESH_INTERVAL_SECONDS
+        );
+    }
+
+    #[test]
+    fn codex_auth_proxy_default_uses_system_proxy() {
+        let preferences = CodexAuthProxyPreferences::default();
+        assert_eq!(preferences.mode, DEFAULT_CODEX_AUTH_PROXY_MODE);
+        assert_eq!(preferences.mode, "system");
+        assert!(preferences.manual_proxy_url.is_empty());
+    }
+
+    #[test]
+    fn codex_auth_proxy_validation_accepts_manual_http_proxy() {
+        let validated = validate_codex_auth_proxy_preferences(CodexAuthProxyPreferences {
+            mode: "manual".to_string(),
+            manual_proxy_url: "  http://127.0.0.1:7890  ".to_string(),
+        })
+        .expect("manual HTTP proxy should be valid");
+
+        assert_eq!(validated.mode, "manual");
+        assert_eq!(validated.manual_proxy_url, "http://127.0.0.1:7890");
+    }
+
+    #[test]
+    fn codex_auth_proxy_validation_rejects_manual_proxy_without_supported_scheme() {
+        let error = validate_codex_auth_proxy_preferences(CodexAuthProxyPreferences {
+            mode: "manual".to_string(),
+            manual_proxy_url: "127.0.0.1:7890".to_string(),
+        })
+        .expect_err("manual proxy without scheme should be rejected");
+
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert_eq!(
+            error
+                .details
+                .as_ref()
+                .and_then(|details| details.get("field"))
+                .map(String::as_str),
+            Some("codexAuth.proxy.manualProxyUrl")
         );
     }
 

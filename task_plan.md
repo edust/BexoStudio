@@ -1,5 +1,97 @@
 # task_plan
 
+## 2026-05-06 Terminal Shell Preference
+- 目标：让 Home 终端命令组和 restore `terminal_command` 支持用户选择 PowerShell 7，不再把所有一键命令固定到 `cmd.exe`。
+- 范围：
+  - `src-tauri/src/domain/preferences.rs`
+  - `src-tauri/src/services/preferences_service.rs`
+  - `src-tauri/src/adapters/terminal.rs`
+  - `src-tauri/src/services/workspace_service.rs`
+  - `src-tauri/src/services/restore_service.rs`
+  - `src/types/backend.ts`
+  - `src/lib/app-preferences.ts`
+  - `src/pages/settings-page.tsx`
+  - `docs/*`
+  - `scripts/work/2026-05-06-terminal-shell-preference/`
+- 方案：
+  - `AppPreferences.terminal` 新增 `commandShell`，允许 `powershell7 / cmd`，默认 `powershell7`。
+  - Windows Terminal tab 根据偏好传入 `pwsh.exe -NoLogo -NoExit -Command <command>` 或 `cmd.exe /D /K <command>`。
+  - restore 后台 `terminal_command` 根据偏好传入 `pwsh.exe -NoLogo -NoProfile -Command <command>` 或 `cmd.exe /D /C <command>`。
+  - 选择 PowerShell 7 但未探测到 `pwsh` 时回退到 `cmd.exe`，避免命令入口直接不可用。
+- 验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"` 通过。
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"` 通过。
+  - `cargo test --manifest-path "src-tauri/Cargo.toml" --lib --no-run` 通过。
+  - `npm run web:build` 通过，仍有既有 Vite large chunk warning。
+- 状态：实现与自动验证已完成，待桌面手工回归 PowerShell 7 启动、`Ctrl+C` 后上翻历史和 cmd 兼容模式。
+
+## 2026-05-06 自启动可靠性修复
+- 目标：排查并修复 `随系统启动` 显示已注册但重启后看起来未启动/疑似闪退的问题。
+- 范围：
+  - `src-tauri/src/services/preferences_service.rs`
+  - `src-tauri/src/app/mod.rs`
+  - `scripts/work/2026-05-06-autostart-reliability-fix/`
+- 查因结论：
+  - 本机 `Bexo Studio` Run 项与 `StartupApproved` 均存在且处于启用状态。
+  - 安装版 `C:\Users\aka86\AppData\Local\Bexo Studio\bexo-studio.exe --autostart` 可手动启动并常驻，没有 Windows 崩溃事件。
+  - 当前偏好为 `launchAtLogin=true` 且 `startSilently=true`，日志显示自启动后主窗口按设计隐藏到后台。
+  - 发现真实可靠性风险：开发版运行时会按偏好重新同步 autostart，把安装版 Run 值覆盖到 `src-tauri\target\debug\bexo-studio.exe`，下次登录可能指向不稳定开发路径。
+- 方案：
+  - Windows 自启动同步时，如果当前 exe 是 `src-tauri\target\debug/release` 开发路径，且注册表已有存在的安装版 exe，则保留安装版 Run 命令，不再用开发路径覆盖。
+  - 启动时记录 `launched_from_autostart / start_silently / should_show_main_window / current_exe`，便于区分静默隐藏和真正失败。
+- 验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo test --manifest-path "src-tauri/Cargo.toml" --lib --no-run`
+  - `npm run web:build`
+- 状态：实现与自动验证已完成，待 Windows 重启手工回归。
+
+## 2026-05-06 截图 Esc 热键释放修复
+- 目标：修复截图态注册 `Escape` 取消热键后未释放，导致其他程序无法使用 `Esc` 的问题。
+- 范围：
+  - `src-tauri/src/services/screenshot_service.rs`
+  - `src-tauri/src/app/window.rs`
+  - `scripts/work/2026-05-06-screenshot-escape-hotkey-release/`
+- 方案：
+  - `apply_escape_cancel_hook()` 继续只在截图会话活跃时注册 `Escape`。
+  - `clear_active_session()` 改为带 `AppHandle`，统一释放截图 session 与 `global_shortcut` 的 `Escape` 注册。
+  - 增加 `escape_cancel_hook_registered` 状态，避免误注销非截图服务持有的 `Escape`。
+  - 新截图启动前先做一次幂等清理，处理 stale 注册。
+- 验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo test --manifest-path "src-tauri/Cargo.toml" --lib --no-run`
+  - `npm run web:build`
+- 状态：实现与自动验证已完成，待桌面手工回归确认外部程序 `Esc` 不再被占用。
+
+## 2026-05-05 Codex Auth Proxy Support
+- 目标：修复 Codex Auth 额度查询在需要代理访问 ChatGPT API 时失败的问题，并提供系统代理/手动代理/禁用代理配置。
+- 范围：
+  - `src-tauri/Cargo.toml`
+  - `src-tauri/Cargo.lock`
+  - `src-tauri/src/domain/preferences.rs`
+  - `src-tauri/src/services/preferences_service.rs`
+  - `src-tauri/src/services/codex_auth_service.rs`
+  - `src/types/backend.ts`
+  - `src/lib/app-preferences.ts`
+  - `src/pages/settings-page.tsx`
+  - `scripts/work/2026-05-05-codex-auth-proxy-support/`
+- 方案：
+  - `AppPreferences.codexAuth` 新增代理设置：`system / manual / disabled`。
+  - `manual` 模式支持显式代理 URL，优先用于 Codex Auth 额度请求。
+  - Rust 侧校验代理模式和 URL；额度 HTTP client 按偏好构建，保留 10s timeout。
+  - Settings > General 增加 Codex Auth 代理设置。
+- 验证：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo test --manifest-path "src-tauri/Cargo.toml" --lib --no-run`
+  - `npm run web:build`
+- 状态：实现与自动验证已完成，待桌面环境手工回归真实额度查询。
+  - `codexAuth.proxy.mode` 支持 `system`、`manual`、`disabled`。
+  - `codexAuth.proxy.manualProxyUrl` 支持 HTTP/SOCKS 代理 URL。
+  - Codex Auth 额度请求按当前偏好逐次构造 HTTP client。
+  - 自动验证已通过 `cargo fmt`、`cargo check`、`cargo test --lib --no-run`、`npm run web:build`。
+
 ## 2026-05-04 Codex Auth 自动额度刷新
 - 目标：给 Codex Auth 增加按秒数自动刷新所有账号额度的能力，刷新必须按队列逐个账号执行，并且一轮全部完成后才开始下一轮倒计时。
 - 范围：

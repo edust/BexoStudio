@@ -12,8 +12,9 @@ use serde::Deserialize;
 use crate::{
     domain::{
         validate_codex_auth_json, validate_codex_config_toml, CodexAuthJson,
-        CodexAuthProfileRecord, CodexAuthQuotaRefreshBatchResult, CodexAuthQuotaResult,
-        CodexAuthQuotaTier, CodexAuthSwitchResult, DeleteResult, UpsertCodexAuthProfileInput,
+        CodexAuthProfileRecord, CodexAuthProxyPreferences, CodexAuthQuotaRefreshBatchResult,
+        CodexAuthQuotaResult, CodexAuthQuotaTier, CodexAuthSwitchResult, DeleteResult,
+        UpsertCodexAuthProfileInput,
     },
     error::{AppError, AppResult},
     persistence::{
@@ -30,15 +31,15 @@ const CODEX_QUOTA_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Debug, Clone)]
 pub struct CodexAuthService {
     database: Database,
-    http_client: reqwest::Client,
+    preferences_service: PreferencesService,
     refresh_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl CodexAuthService {
-    pub fn new(database: Database) -> Self {
+    pub fn new(database: Database, preferences_service: PreferencesService) -> Self {
         Self {
             database,
-            http_client: reqwest::Client::new(),
+            preferences_service,
             refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
@@ -240,8 +241,36 @@ impl CodexAuthService {
         };
 
         let (access_token, account_id, stale_message) = credentials;
-        let mut request = self
-            .http_client
+        let preferences = match self.preferences_service.get_preferences() {
+            Ok(value) => value,
+            Err(error) => {
+                return CodexAuthQuotaResult {
+                    profile_id: profile.id.clone(),
+                    success: false,
+                    credential_status: "valid".to_string(),
+                    credential_message: stale_message,
+                    tiers: vec![],
+                    error: Some(format!("Codex Auth proxy preferences unavailable: {error}")),
+                    queried_at,
+                };
+            }
+        };
+        let http_client = match build_codex_quota_http_client(&preferences.codex_auth.proxy) {
+            Ok(value) => value,
+            Err(error) => {
+                return CodexAuthQuotaResult {
+                    profile_id: profile.id.clone(),
+                    success: false,
+                    credential_status: "valid".to_string(),
+                    credential_message: stale_message,
+                    tiers: vec![],
+                    error: Some(format!("Codex Auth proxy configuration error: {error}")),
+                    queried_at,
+                };
+            }
+        };
+
+        let mut request = http_client
             .get(CODEX_QUOTA_ENDPOINT)
             .timeout(CODEX_QUOTA_TIMEOUT)
             .header("Authorization", format!("Bearer {access_token}"))
@@ -319,6 +348,55 @@ impl CodexAuthService {
             queried_at,
         }
     }
+}
+
+fn build_codex_quota_http_client(proxy: &CodexAuthProxyPreferences) -> AppResult<reqwest::Client> {
+    let mode = proxy.mode.trim().to_ascii_lowercase();
+    let mut builder = reqwest::Client::builder();
+
+    match mode.as_str() {
+        "system" => {}
+        "disabled" => {
+            builder = builder.no_proxy();
+        }
+        "manual" => {
+            let manual_proxy_url = proxy.manual_proxy_url.trim();
+            if manual_proxy_url.is_empty() {
+                return Err(AppError::validation("手动代理模式必须填写代理地址")
+                    .with_detail("field", "codexAuth.proxy.manualProxyUrl"));
+            }
+            let lower_proxy_url = manual_proxy_url.to_ascii_lowercase();
+            if !lower_proxy_url.starts_with("http://")
+                && !lower_proxy_url.starts_with("https://")
+                && !lower_proxy_url.starts_with("socks5://")
+                && !lower_proxy_url.starts_with("socks5h://")
+            {
+                return Err(AppError::validation(
+                    "Codex Auth 手动代理只支持 http、https、socks5、socks5h",
+                )
+                .with_detail("field", "codexAuth.proxy.manualProxyUrl"));
+            }
+            let manual_proxy = reqwest::Proxy::all(manual_proxy_url).map_err(|error| {
+                AppError::validation("Codex Auth 手动代理地址无效")
+                    .with_detail("field", "codexAuth.proxy.manualProxyUrl")
+                    .with_detail("reason", error.to_string())
+            })?;
+            builder = builder.no_proxy().proxy(manual_proxy);
+        }
+        _ => {
+            return Err(AppError::validation("Codex Auth 额度代理模式无效")
+                .with_detail("field", "codexAuth.proxy.mode")
+                .with_detail("allowed", "system, manual, disabled"));
+        }
+    }
+
+    builder.build().map_err(|error| {
+        AppError::new(
+            "CODEX_AUTH_HTTP_CLIENT_FAILED",
+            "failed to build Codex Auth quota HTTP client",
+        )
+        .with_detail("reason", error.to_string())
+    })
 }
 
 fn build_imported_profile_name(auth_json: &str, codex_home: &str) -> String {

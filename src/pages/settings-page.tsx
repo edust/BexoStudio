@@ -18,6 +18,7 @@ import {
   InputNumber,
   Modal,
   Popconfirm,
+  Select,
   Spin,
   Switch,
   Typography,
@@ -57,9 +58,12 @@ import type {
   AdapterAvailability,
   AppPreferences,
   CodexAuthPreferences,
+  CodexAuthProxyMode,
+  CodexAuthProxyPreferences,
   CodexHistoryViewPreferences,
   CustomEditorRecord,
   EditorPathDetectionResult,
+  TerminalCommandShell,
   TerminalCommandTemplateRecord,
 } from "@/types/backend";
 
@@ -73,6 +77,22 @@ const CODEX_HISTORY_FONT_SIZE_MAX = 24;
 const CODEX_HISTORY_FONT_FAMILY_MAX_LENGTH = 160;
 const CODEX_AUTH_QUOTA_REFRESH_INTERVAL_MIN = 10;
 const CODEX_AUTH_QUOTA_REFRESH_INTERVAL_MAX = 3600;
+const CODEX_AUTH_MANUAL_PROXY_URL_MAX_LENGTH = 512;
+const CODEX_AUTH_PROXY_OPTIONS: Array<{
+  label: string;
+  value: CodexAuthProxyMode;
+}> = [
+  { label: "系统代理", value: "system" },
+  { label: "手动代理", value: "manual" },
+  { label: "不使用代理", value: "disabled" },
+];
+const TERMINAL_COMMAND_SHELL_OPTIONS: Array<{
+  label: string;
+  value: TerminalCommandShell;
+}> = [
+  { label: "PowerShell 7", value: "powershell7" },
+  { label: "cmd.exe", value: "cmd" },
+];
 const HOTKEY_MODIFIER_TOKENS = new Set([
   "Ctrl",
   "Alt",
@@ -118,6 +138,9 @@ export default function SettingsPage() {
   const [codexHistoryFontFamilyDraft, setCodexHistoryFontFamilyDraft] = useState(
     defaultAppPreferences.codexHistory.messageFontFamily,
   );
+  const [codexAuthManualProxyUrlDraft, setCodexAuthManualProxyUrlDraft] = useState(
+    defaultAppPreferences.codexAuth.proxy.manualProxyUrl,
+  );
 
   const desktopRuntimeAvailable = hasDesktopRuntime();
   const queryClient = useQueryClient();
@@ -149,6 +172,8 @@ export default function SettingsPage() {
   const launchAtLoginEnabled = resolvedPreferences.startup.launchAtLogin;
   const startSilentlyEnabled = resolvedPreferences.startup.startSilently;
   const windowsTerminalPath = resolvedPreferences.terminal.windowsTerminalPath?.trim() ?? "";
+  const terminalCommandShell =
+    resolvedPreferences.terminal.commandShell ?? defaultAppPreferences.terminal.commandShell;
   const vscodePath = resolvedPreferences.ide.vscodePath?.trim() ?? "";
   const jetbrainsPath = resolvedPreferences.ide.jetbrainsPath?.trim() ?? "";
   const codexHistoryPreferences = resolveCodexHistoryPreferences(resolvedPreferences);
@@ -159,6 +184,11 @@ export default function SettingsPage() {
   const codexAuthPreferences = resolveCodexAuthPreferences(resolvedPreferences);
   const codexAuthQuotaRefreshIntervalSeconds =
     codexAuthPreferences.quotaRefreshIntervalSeconds;
+  const codexAuthProxyPreferences = resolveCodexAuthProxyPreferences(
+    codexAuthPreferences.proxy,
+  );
+  const codexAuthProxyMode = codexAuthProxyPreferences.mode;
+  const codexAuthManualProxyUrl = codexAuthProxyPreferences.manualProxyUrl;
   const screenshotCaptureHotkey =
     resolvedPreferences.hotkey.screenshotCapture?.trim() || DEFAULT_SCREENSHOT_CAPTURE_HOTKEY;
   const screenshotHotkeyUsesCtrlAlt = isRiskyCtrlAltHotkey(screenshotCaptureHotkey);
@@ -206,6 +236,10 @@ export default function SettingsPage() {
   useEffect(() => {
     setCodexHistoryFontFamilyDraft(codexHistoryFontFamily);
   }, [codexHistoryFontFamily]);
+
+  useEffect(() => {
+    setCodexAuthManualProxyUrlDraft(codexAuthManualProxyUrl);
+  }, [codexAuthManualProxyUrl]);
 
   useEffect(() => {
     if (!isEditorManagerOpen) {
@@ -692,6 +726,32 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleSaveTerminalCommandShell(value: TerminalCommandShell) {
+    if (value === terminalCommandShell || preferenceActionsDisabled) {
+      return;
+    }
+
+    try {
+      await persistPreferences({
+        ...resolvedPreferences,
+        terminal: {
+          ...resolvedPreferences.terminal,
+          commandShell: value,
+        },
+      });
+      setPathInlineError(null);
+      toast.success(
+        value === "powershell7"
+          ? "终端命令 Shell 已切换为 PowerShell 7"
+          : "终端命令 Shell 已切换为 cmd.exe",
+      );
+    } catch (error) {
+      const summary = getErrorSummary(error);
+      setPathInlineError(summary.message);
+      toast.error(summary.message);
+    }
+  }
+
   async function handleOpenCodexHomeDirectory() {
     if (!canOpenCodexHomeDirectory) {
       return;
@@ -931,6 +991,104 @@ export default function SettingsPage() {
         },
       });
       toast.success(`Codex Auth 额度刷新间隔已设为 ${nextIntervalSeconds} 秒`);
+    } catch (error) {
+      const summary = getErrorSummary(error);
+      setCodexAuthInlineError(summary.message);
+      toast.error(summary.message);
+    }
+  }
+
+  async function handleSaveCodexAuthProxyMode(nextMode: CodexAuthProxyMode) {
+    if (preferenceActionsDisabled || nextMode === codexAuthProxyMode) {
+      return;
+    }
+
+    const nextProxy = resolveCodexAuthProxyPreferences({
+      ...codexAuthProxyPreferences,
+      mode: nextMode,
+    });
+
+    if (nextProxy.mode === "manual" && !nextProxy.manualProxyUrl) {
+      const message = "手动代理模式必须填写代理地址";
+      setCodexAuthInlineError(message);
+      toast.error(message);
+      return;
+    }
+
+    setCodexAuthInlineError(null);
+
+    try {
+      const currentPreferences =
+        queryClient.getQueryData<AppPreferences>(appPreferencesQueryKey) ??
+        resolvedPreferences;
+      await persistPreferences({
+        ...currentPreferences,
+        codexAuth: {
+          ...resolveCodexAuthPreferences(currentPreferences),
+          proxy: nextProxy,
+        },
+      });
+      toast.success(`Codex Auth 额度代理已切换为${formatCodexAuthProxyMode(nextMode)}`);
+    } catch (error) {
+      const summary = getErrorSummary(error);
+      setCodexAuthInlineError(summary.message);
+      toast.error(summary.message);
+    }
+  }
+
+  async function handleSaveCodexAuthManualProxyUrl(value?: string) {
+    if (preferenceActionsDisabled) {
+      return;
+    }
+
+    const nextManualProxyUrl = (value ?? codexAuthManualProxyUrlDraft).trim();
+    if (nextManualProxyUrl === codexAuthManualProxyUrl) {
+      return;
+    }
+
+    if (nextManualProxyUrl.length > CODEX_AUTH_MANUAL_PROXY_URL_MAX_LENGTH) {
+      const message = `Codex Auth 手动代理地址不能超过 ${CODEX_AUTH_MANUAL_PROXY_URL_MAX_LENGTH} 个字符`;
+      setCodexAuthInlineError(message);
+      toast.error(message);
+      return;
+    }
+    if (containsControlCharacter(nextManualProxyUrl)) {
+      const message = "Codex Auth 手动代理地址不能包含换行或控制字符";
+      setCodexAuthInlineError(message);
+      toast.error(message);
+      return;
+    }
+    if (nextManualProxyUrl && !isSupportedCodexAuthProxyUrl(nextManualProxyUrl)) {
+      const message = "Codex Auth 手动代理只支持 http、https、socks5、socks5h";
+      setCodexAuthInlineError(message);
+      toast.error(message);
+      return;
+    }
+    if (codexAuthProxyMode === "manual" && !nextManualProxyUrl) {
+      const message = "手动代理模式必须填写代理地址";
+      setCodexAuthInlineError(message);
+      toast.error(message);
+      return;
+    }
+
+    setCodexAuthInlineError(null);
+
+    try {
+      const currentPreferences =
+        queryClient.getQueryData<AppPreferences>(appPreferencesQueryKey) ??
+        resolvedPreferences;
+      await persistPreferences({
+        ...currentPreferences,
+        codexAuth: {
+          ...resolveCodexAuthPreferences(currentPreferences),
+          proxy: {
+            ...codexAuthProxyPreferences,
+            manualProxyUrl: nextManualProxyUrl,
+          },
+        },
+      });
+      setCodexAuthManualProxyUrlDraft(nextManualProxyUrl);
+      toast.success("Codex Auth 手动代理地址已保存");
     } catch (error) {
       const summary = getErrorSummary(error);
       setCodexAuthInlineError(summary.message);
@@ -1343,6 +1501,32 @@ export default function SettingsPage() {
                   <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
                     <div className="min-w-0">
                       <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
+                        终端命令 Shell
+                      </Typography.Text>
+                    </div>
+
+                    <div className="min-w-0">
+                      <Typography.Text className="block text-[11px] text-[#667085]">
+                        影响首页终端命令组和恢复任务中的 terminal_command。PowerShell 7
+                        不可用时会回退到 cmd.exe。
+                      </Typography.Text>
+                    </div>
+
+                    <Select<TerminalCommandShell>
+                      className="!w-[132px]"
+                      disabled={preferenceActionsDisabled}
+                      onChange={(value) => void handleSaveTerminalCommandShell(value)}
+                      options={TERMINAL_COMMAND_SHELL_OPTIONS}
+                      size="small"
+                      value={terminalCommandShell}
+                    />
+                  </div>
+                </div>
+
+                <div className="rounded-[0] border border-[#eef2f6] bg-white">
+                  <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
+                    <div className="min-w-0">
+                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
                         Codex 配置目录
                       </Typography.Text>
                     </div>
@@ -1527,6 +1711,69 @@ export default function SettingsPage() {
                       addonAfter="秒"
                       value={codexAuthQuotaRefreshIntervalSeconds}
                     />
+                  </div>
+                </div>
+
+                <div className="rounded-[0] border border-[#eef2f6] bg-white">
+                  <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
+                    <div className="min-w-0">
+                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
+                        Codex Auth 额度代理
+                      </Typography.Text>
+                    </div>
+
+                    <div className="min-w-0">
+                      <Typography.Text className="block text-[11px] text-[#667085]">
+                        只影响 Codex Auth 额度查询请求。系统代理读取 Windows 当前代理设置。
+                      </Typography.Text>
+                    </div>
+
+                    <Select<CodexAuthProxyMode>
+                      className="!w-[132px]"
+                      disabled={preferenceActionsDisabled}
+                      onChange={(value) => void handleSaveCodexAuthProxyMode(value)}
+                      options={CODEX_AUTH_PROXY_OPTIONS}
+                      size="small"
+                      value={codexAuthProxyMode}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 border-t border-[#eef2f6] px-4 py-4">
+                    <div className="min-w-0">
+                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
+                        手动代理地址
+                      </Typography.Text>
+                    </div>
+
+                    <Input
+                      allowClear
+                      className="min-w-0"
+                      disabled={preferenceActionsDisabled}
+                      maxLength={CODEX_AUTH_MANUAL_PROXY_URL_MAX_LENGTH}
+                      onBlur={() => void handleSaveCodexAuthManualProxyUrl()}
+                      onChange={(event) =>
+                        setCodexAuthManualProxyUrlDraft(event.currentTarget.value)
+                      }
+                      onPressEnter={(event) =>
+                        void handleSaveCodexAuthManualProxyUrl(
+                          event.currentTarget.value,
+                        )
+                      }
+                      placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:7890"
+                      size="small"
+                      value={codexAuthManualProxyUrlDraft}
+                    />
+
+                    <Button
+                      disabled={
+                        preferenceActionsDisabled ||
+                        codexAuthManualProxyUrlDraft.trim() === codexAuthManualProxyUrl
+                      }
+                      onClick={() => void handleSaveCodexAuthManualProxyUrl()}
+                      size="small"
+                    >
+                      保存代理
+                    </Button>
                   </div>
                 </div>
               </div>
@@ -2289,13 +2536,36 @@ function normalizeCodexHistoryFontSize(value?: number | null) {
 }
 
 function resolveCodexAuthPreferences(preferences: AppPreferences): CodexAuthPreferences {
+  const proxy = resolveCodexAuthProxyPreferences(preferences.codexAuth?.proxy);
   return {
     ...defaultAppPreferences.codexAuth,
     ...(preferences.codexAuth ?? {}),
+    proxy,
     quotaRefreshIntervalSeconds: normalizeCodexAuthQuotaRefreshInterval(
       preferences.codexAuth?.quotaRefreshIntervalSeconds,
     ),
   };
+}
+
+function resolveCodexAuthProxyPreferences(
+  preferences?: Partial<CodexAuthProxyPreferences> | null,
+): CodexAuthProxyPreferences {
+  const mode = normalizeCodexAuthProxyMode(preferences?.mode);
+  const manualProxyUrl = (preferences?.manualProxyUrl ?? "").trim();
+  return {
+    ...defaultAppPreferences.codexAuth.proxy,
+    mode,
+    manualProxyUrl,
+  };
+}
+
+function normalizeCodexAuthProxyMode(
+  value?: string | null,
+): CodexAuthProxyMode {
+  if (value === "manual" || value === "disabled" || value === "system") {
+    return value;
+  }
+  return defaultAppPreferences.codexAuth.proxy.mode;
 }
 
 function normalizeCodexAuthQuotaRefreshInterval(value?: number | null) {
@@ -2310,6 +2580,27 @@ function normalizeCodexAuthQuotaRefreshInterval(value?: number | null) {
     return defaultAppPreferences.codexAuth.quotaRefreshIntervalSeconds;
   }
   return rounded;
+}
+
+function formatCodexAuthProxyMode(mode: CodexAuthProxyMode) {
+  switch (mode) {
+    case "system":
+      return "系统代理";
+    case "manual":
+      return "手动代理";
+    case "disabled":
+      return "不使用代理";
+  }
+}
+
+function isSupportedCodexAuthProxyUrl(value: string) {
+  const lowerValue = value.trim().toLowerCase();
+  return (
+    lowerValue.startsWith("http://") ||
+    lowerValue.startsWith("https://") ||
+    lowerValue.startsWith("socks5://") ||
+    lowerValue.startsWith("socks5h://")
+  );
 }
 
 function containsControlCharacter(value: string) {

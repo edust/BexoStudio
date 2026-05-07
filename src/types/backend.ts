@@ -423,9 +423,12 @@ export type TerminalCommandTemplateRecord = {
   sortOrder: number;
 };
 
+export type TerminalCommandShell = "powershell7" | "cmd";
+
 export type TerminalPreferences = {
   windowsTerminalPath?: string | null;
   codexCliPath?: string | null;
+  commandShell: TerminalCommandShell;
   commandTemplates: TerminalCommandTemplateRecord[];
 };
 
@@ -469,8 +472,16 @@ export type CodexHistoryViewPreferences = {
   messageFontSize: number;
 };
 
+export type CodexAuthProxyMode = "system" | "manual" | "disabled";
+
+export type CodexAuthProxyPreferences = {
+  mode: CodexAuthProxyMode;
+  manualProxyUrl: string;
+};
+
 export type CodexAuthPreferences = {
   quotaRefreshIntervalSeconds: number;
+  proxy: CodexAuthProxyPreferences;
 };
 
 export type StartupPreferences = {

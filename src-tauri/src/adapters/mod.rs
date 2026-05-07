@@ -10,7 +10,6 @@ pub use process::{
     ChildProcessRegistry, LaunchCommand, ProcessLaunchResult, ProcessTrackingContext,
 };
 pub use terminal::{
-    build_windows_command_shell_run_args, build_windows_command_shell_startup_command,
-    build_windows_shell_command_line, TerminalAdapter, TerminalLaunchInput, WindowsTerminalAdapter,
-    WindowsTerminalTabLaunchInput,
+    build_windows_shell_command_line, TerminalAdapter, TerminalLaunchInput, WindowsShellLaunchPlan,
+    WindowsTerminalAdapter, WindowsTerminalTabLaunchInput,
 };

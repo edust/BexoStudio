@@ -1,9 +1,10 @@
 use std::{env, path::PathBuf, time::Duration};
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::Utc;
 
 use crate::{
-    domain::AdapterAvailability,
+    domain::{AdapterAvailability, TerminalCommandShell},
     error::{AppError, AppResult},
 };
 
@@ -45,6 +46,33 @@ pub fn build_windows_command_shell_startup_command(
 
 pub fn build_windows_command_shell_run_args(command_line: &str) -> Vec<String> {
     vec!["/D".to_string(), "/C".to_string(), command_line.to_string()]
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowsShellLaunchPlan {
+    pub shell: TerminalCommandShell,
+    pub executable_path: PathBuf,
+    pub startup_args: Vec<String>,
+    pub run_args: Vec<String>,
+}
+
+pub fn build_windows_powershell_startup_args(command_line: &str) -> Vec<String> {
+    let script = build_powershell_interactive_startup_script(command_line);
+    vec![
+        "-NoLogo".to_string(),
+        "-NoExit".to_string(),
+        "-EncodedCommand".to_string(),
+        encode_powershell_command(&script),
+    ]
+}
+
+pub fn build_windows_powershell_run_args(command_line: &str) -> Vec<String> {
+    vec![
+        "-NoLogo".to_string(),
+        "-NoProfile".to_string(),
+        "-EncodedCommand".to_string(),
+        encode_powershell_command(command_line),
+    ]
 }
 
 pub trait TerminalAdapter {
@@ -207,6 +235,120 @@ impl WindowsTerminalAdapter {
             .filter(|path| path.is_file())
             .or_else(|| find_first_executable(&["cmd.exe", "cmd"]))
     }
+
+    pub fn detect_powershell7_executable(&self) -> Option<PathBuf> {
+        find_first_executable(&["pwsh.exe", "pwsh"]).or_else(|| {
+            powershell7_well_known_paths()
+                .into_iter()
+                .find(|path| path.is_file())
+        })
+    }
+
+    pub fn resolve_shell_launch_plan(
+        &self,
+        preferred_shell: TerminalCommandShell,
+        command_line: &str,
+    ) -> AppResult<WindowsShellLaunchPlan> {
+        match preferred_shell {
+            TerminalCommandShell::PowerShell7 => {
+                if let Some(executable_path) = self.detect_powershell7_executable() {
+                    return Ok(WindowsShellLaunchPlan {
+                        shell: TerminalCommandShell::PowerShell7,
+                        executable_path,
+                        startup_args: build_windows_powershell_startup_args(command_line),
+                        run_args: build_windows_powershell_run_args(command_line),
+                    });
+                }
+
+                let executable_path = self.detect_shell_executable().ok_or_else(|| {
+                    AppError::new(
+                        "SHELL_EXECUTABLE_UNAVAILABLE",
+                        "neither PowerShell 7 nor Windows command shell is available on this machine",
+                    )
+                })?;
+
+                Ok(WindowsShellLaunchPlan {
+                    shell: TerminalCommandShell::Cmd,
+                    executable_path,
+                    startup_args: build_windows_command_shell_startup_command(
+                        "cmd.exe",
+                        command_line,
+                    )
+                    .into_iter()
+                    .skip(1)
+                    .collect(),
+                    run_args: build_windows_command_shell_run_args(command_line),
+                })
+            }
+            TerminalCommandShell::Cmd => {
+                let executable_path = self.detect_shell_executable().ok_or_else(|| {
+                    AppError::new(
+                        "SHELL_EXECUTABLE_UNAVAILABLE",
+                        "Windows command shell executable is not available on this machine",
+                    )
+                })?;
+
+                Ok(WindowsShellLaunchPlan {
+                    shell: TerminalCommandShell::Cmd,
+                    executable_path,
+                    startup_args: build_windows_command_shell_startup_command(
+                        "cmd.exe",
+                        command_line,
+                    )
+                    .into_iter()
+                    .skip(1)
+                    .collect(),
+                    run_args: build_windows_command_shell_run_args(command_line),
+                })
+            }
+        }
+    }
+}
+
+fn powershell7_well_known_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(program_files) = env::var_os("ProgramFiles") {
+        paths.push(PathBuf::from(program_files).join("PowerShell\\7\\pwsh.exe"));
+    }
+    if let Some(program_files_x86) = env::var_os("ProgramFiles(x86)") {
+        paths.push(PathBuf::from(program_files_x86).join("PowerShell\\7\\pwsh.exe"));
+    }
+    paths
+}
+
+fn build_powershell_interactive_startup_script(command_line: &str) -> String {
+    let trimmed = command_line.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    format!(
+        "try {{ Import-Module PSReadLine -ErrorAction SilentlyContinue; [Microsoft.PowerShell.PSConsoleReadLine]::AddToHistory({}) }} catch {{}}; {}",
+        quote_powershell_literal(trimmed),
+        command_line
+    )
+}
+
+fn quote_powershell_literal(value: &str) -> String {
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('\'');
+    for character in value.chars() {
+        if character == '\'' {
+            quoted.push_str("''");
+        } else {
+            quoted.push(character);
+        }
+    }
+    quoted.push('\'');
+    quoted
+}
+
+fn encode_powershell_command(script: &str) -> String {
+    let mut bytes = Vec::with_capacity(script.len() * 2);
+    for unit in script.encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    BASE64_STANDARD.encode(bytes)
 }
 
 fn quote_cmd_argument(value: &str) -> String {
@@ -252,6 +394,7 @@ fn is_cmd_control_operator(value: &str) -> bool {
 mod tests {
     use super::{
         build_windows_command_shell_run_args, build_windows_command_shell_startup_command,
+        build_windows_powershell_run_args, build_windows_powershell_startup_args,
         build_windows_shell_command_line, WindowsTerminalAdapter, WindowsTerminalTabLaunchInput,
     };
 
@@ -335,5 +478,34 @@ mod tests {
             build_windows_command_shell_run_args(command),
             vec!["/D".to_string(), "/C".to_string(), command.to_string()]
         );
+    }
+
+    #[test]
+    fn powershell_shell_args_use_pwsh_interactive_semantics() {
+        let command = r#"codex --dangerously-bypass-approvals-and-sandbox"#;
+
+        let startup_args = build_windows_powershell_startup_args(command);
+        assert_eq!(startup_args[0], "-NoLogo");
+        assert_eq!(startup_args[1], "-NoExit");
+        assert_eq!(startup_args[2], "-EncodedCommand");
+        assert!(!startup_args[3].contains(';'));
+        assert_eq!(
+            build_windows_powershell_run_args(command),
+            vec![
+                "-NoLogo".to_string(),
+                "-NoProfile".to_string(),
+                "-EncodedCommand".to_string(),
+                "YwBvAGQAZQB4ACAALQAtAGQAYQBuAGcAZQByAG8AdQBzAGwAeQAtAGIAeQBwAGEAcwBzAC0AYQBwAHAAcgBvAHYAYQBsAHMALQBhAG4AZAAtAHMAYQBuAGQAYgBvAHgA".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn powershell_startup_history_script_escapes_single_quotes() {
+        let command = r#"Write-Output 'ready'"#;
+        let startup_args = build_windows_powershell_startup_args(command);
+
+        assert_eq!(startup_args[2], "-EncodedCommand");
+        assert!(!startup_args[3].contains(';'));
     }
 }

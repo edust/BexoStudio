@@ -1,5 +1,32 @@
 # findings
 
+## 2026-05-06 Terminal Shell Preference
+- 当前 Home 终端命令组实际启动链路为 `wt.exe new-tab ... cmd.exe /D /K <commandLine>`，因此用户按 `Ctrl+C` 后回到的是 cmd 会话，而不是 PowerShell 7。
+- `cmd.exe /K` 的启动命令不会按用户预期进入 PowerShell/PSReadLine 历史；这解释了停止 Codex 后上翻没有熟悉历史的体验。
+- 2026-04-21 将可见终端命令切到 cmd 是为兼容旧问题：Windows PowerShell 5 对 `cd "path" && command` 支持不好。现在用户明确安装并希望使用 PowerShell 7，因此应改成可配置 shell，而不是继续硬编码 cmd。
+- restore 的 `terminal_command` 也有独立后台执行路径，当前使用 `cmd.exe /D /C`。只改 Home 可见 tab 会造成两条命令语义不一致。
+
+## 2026-05-06 自启动可靠性
+- 本机 `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run` 中 `Bexo Studio` 当前值为 `"C:\Users\aka86\AppData\Local\Bexo Studio\bexo-studio.exe" "--autostart"`，目标文件存在，版本 `0.1.11`。
+- `HKCU\...\Explorer\StartupApproved\Run` 中 `Bexo Studio` 的二进制值以 `0x02` 开头，表示 Windows 任务管理器启动项未禁用。
+- 手动执行安装版 Run 命令后，`bexo-studio` 进程保持运行；Windows Application/System 事件日志没有 Bexo 相关崩溃。
+- 安装版日志明确记录 `main window hidden on autostart due to startup.startSilently=true`，偏好文件也显示 `startup.launchAtLogin=true` 与 `startup.startSilently=true`。因此“没启动”很可能是静默启动隐藏到后台/托盘。
+- 真实缺陷在路径漂移风险：之前从开发版运行 Bexo 时，Run 值一度被同步成 `"D:\Desktop\rust\BexoStudio\src-tauri\target\debug\bexo-studio.exe" "--autostart"`。开发版路径不适合作为登录自启动目标，重启后可能表现为没启动或像闪退。
+
+## 2026-05-06
+- 截图 `Esc` 取消链路在 2026-04-20 后改为 `tauri-plugin-global-shortcut` 注册裸 `"Escape"`，以解决 WebView 焦点不稳定时无法收到 `keydown` 的问题。
+- 本轮确认直接根因：`apply_escape_cancel_hook()` 注册的是 `app.global_shortcut().on_shortcut("Escape", ...)`，但 `clear_escape_cancel_hook()` 只调用 `escape_hook_manager.clear_bindings()`，没有调用 `app.global_shortcut().unregister("Escape")`。
+- `copy_selection / save_selection / cancel_session / cancel_active_session_from_escape` 以及 overlay close 都会走 `clear_active_session()`，因此应把 `Escape` 的 global shortcut 注销放到这个统一清理路径。
+- 为避免清理时误动其他模块未来可能注册的 `Escape`，需要记录截图服务是否确实注册了 `Escape`，并只在该标记为 true 时注销。
+
+## 2026-05-05
+- Codex Auth 额度查询当前使用 Rust `reqwest::Client::new()` 发起请求，依赖配置为 `default-features = false` 且只启用 `json` / `rustls`，没有显式系统代理或手动代理配置。
+- 因为用户截图显示所有账号重启后均 `Network error: error sending request for url (https://chatgpt.com/backend-api/wham/usage)`，且该 API 在国内网络常需代理，合理根因是当前 quota 请求没有走用户系统代理。
+- 只启用系统代理能解决一部分机器，但代理工具没有写入 Windows 系统代理或需要本地 HTTP/SOCKS 端口时仍会失败；因此需要同时支持手动代理。
+- `reqwest 0.13.2` 的代理能力可以在保持 `default-features = false` 和 `rustls` 的同时启用 `system-proxy` 与 `socks`。
+- 额度 HTTP client 不应继续作为 `CodexAuthService` 的固定字段，否则 Settings 里修改代理模式后需要重启才生效；当前更合适的是按查询读取偏好并构造 client。
+- 手动代理 URL 即使当前模式不是 `manual` 也应校验协议，因为 UI 允许先保存地址再切换手动模式。
+
 ## 2026-05-04
 - Codex Auth 单账号额度查询已经集中在 Rust `CodexAuthService::query_quota`，结果持久化到 `codex_auth_profiles.last_quota_json` / `last_quota_checked_at`，因此批量刷新不应在前端直接散写 HTTP 请求。
 - Settings 当前通过 `AppPreferences` / `PreferencesService` / `tauri-plugin-store` 持久化，新增自动刷新间隔应进入 `AppPreferences.codexAuth`，而不是 SQLite 或页面 local state。

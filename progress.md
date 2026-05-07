@@ -1,5 +1,124 @@
 # progress
 
+## 2026-05-06 Terminal Shell Preference
+- 已初始化规划文件：
+  - `scripts/work/2026-05-06-terminal-shell-preference/task_plan.md`
+  - `scripts/work/2026-05-06-terminal-shell-preference/notes.md`
+  - `scripts/work/2026-05-06-terminal-shell-preference/deliverable.md`
+- 已完成初始代码定位：
+  - `src-tauri/src/adapters/terminal.rs` 当前提供 `cmd.exe /D /K` 和 `/D /C` helper。
+  - `src-tauri/src/services/workspace_service.rs` 的 Home 单条运行和运行全部都显式使用 `cmd.exe /D /K`。
+  - `src-tauri/src/services/restore_service.rs` 的 `terminal_command` 后台执行显式使用 `cmd.exe /D /C`。
+  - `AppPreferences.terminal` 当前没有 shell 选择字段。
+- 当前计划：
+  - 新增 `terminal.commandShell` 偏好，默认 `powershell7`。
+  - Settings > General 增加 shell selector。
+  - Rust 执行链路按偏好选择 `pwsh` 或 `cmd`。
+- 已完成实现：
+  - Rust `AppPreferences.terminal.commandShell` 新增 `powershell7 / cmd`。
+  - Windows Terminal 可见 tab 按偏好使用 `pwsh.exe -NoLogo -NoExit -Command ...` 或 `cmd.exe /D /K ...`。
+  - PowerShell 7 可见启动会 best-effort 调用 PSReadLine `AddToHistory`，便于停止后上翻重跑启动命令。
+  - restore 后台 `terminal_command` 按同一偏好使用 `pwsh.exe -NoLogo -NoProfile -Command ...` 或 `cmd.exe /D /C ...`。
+  - Settings > General 增加 `终端命令 Shell` 选择器。
+  - README 与 docs 已同步。
+- 用户回归发现 PowerShell 7 启动时报 `0x80070002`，原因是 WT CLI 将 `-Command` 脚本中的分号当作 Windows Terminal 命令分隔符解析。
+- 已修复 PowerShell 7 启动参数：
+  - 可见 tab 改为 `pwsh.exe -NoLogo -NoExit -EncodedCommand <...>`。
+  - 后台 restore 改为 `pwsh.exe -NoLogo -NoProfile -EncodedCommand <...>`。
+  - `EncodedCommand` 内容按 PowerShell 要求使用 UTF-16LE Base64。
+- 验证通过：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo test --manifest-path "src-tauri/Cargo.toml" --lib --no-run`
+  - `npm run web:build`
+  - `git diff --check` 无 whitespace error，仅有 LF/CRLF 提示。
+- 待手工回归：
+  - Settings 选择 `PowerShell 7` 后运行 `codex --dangerously-bypass-approvals-and-sandbox`。
+  - 确认 Windows Terminal tab 进入 `pwsh`。
+  - `Ctrl+C` 停止后确认上翻历史能看到启动命令。
+  - 切换到 `cmd.exe` 后确认旧模式仍可运行。
+
+## 2026-05-06 自启动可靠性
+- 初始化 `scripts/work/2026-05-06-autostart-reliability-fix/`：
+  - `task_plan.md`
+  - `notes.md`
+  - `deliverable.md`
+- 已完成本机诊断：
+  - Run 项存在并指向安装版 `C:\Users\aka86\AppData\Local\Bexo Studio\bexo-studio.exe --autostart`。
+  - StartupApproved 中 `Bexo Studio` 是启用状态。
+  - 手动执行 Run 命令后进程保持运行，没有 Windows 崩溃事件。
+  - 偏好文件显示 `launchAtLogin=true`、`startSilently=true`，日志显示自启动时主窗口被静默隐藏。
+- 已完成代码修复：
+  - `src-tauri/src/services/preferences_service.rs`
+    - Windows autostart 同步前读取已有 Run 命令。
+    - 当当前 exe 是开发构建路径且已有安装版 exe 命令存在时，保留安装版 Run 值，避免 debug 路径覆盖稳定自启动项。
+    - 增加命令解析、开发路径识别和相关单元测试。
+  - `src-tauri/src/app/mod.rs`
+    - 启动时记录 `launched_from_autostart / start_silently / should_show_main_window / current_exe`。
+- 验证通过：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo test --manifest-path "src-tauri/Cargo.toml" --lib --no-run`
+  - `npm run web:build`
+- 说明：
+  - `npm run web:build` 仍有 Vite large chunk warning，属于既有包体警告。
+  - 仍需真实 Windows 重启后确认自启动行为；当前手动 `--autostart` 模拟已验证进程会常驻。
+
+## 2026-05-06
+- 初始化 `scripts/work/2026-05-06-screenshot-escape-hotkey-release/`：
+  - `task_plan.md`
+  - `notes.md`
+  - `deliverable.md`
+- 已定位截图 `Esc` 占用不释放的根因：
+  - `apply_escape_cancel_hook()` 使用 `tauri-plugin-global-shortcut` 注册 `"Escape"`。
+  - `clear_escape_cancel_hook()` 只清理 legacy `WindowsHookHotkeyManager`，没有注销 global shortcut。
+- 已完成代码修复：
+  - `src-tauri/src/services/screenshot_service.rs`
+    - `clear_active_session()` 改为接收 `AppHandle`，统一清理 active session 与截图 `Escape` 注册。
+    - 新增 `escape_cancel_hook_registered` 状态，只释放截图服务自己注册的 `Escape`。
+    - `apply_escape_cancel_hook()` 注册前先做幂等清理，注册成功后记录状态。
+    - `copy / save / cancel / escape cancel` 结束路径都接入新的清理函数。
+  - `src-tauri/src/app/window.rs`
+    - overlay close 时通过 `AppHandle` 调用新的清理函数。
+- 当前待执行：
+  - 桌面手工回归：触发截图后按 `Esc` 取消，再切到其他程序确认 `Esc` 不再被 Bexo 占用。
+- 验证通过：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo test --manifest-path "src-tauri/Cargo.toml" --lib --no-run`
+  - `npm run web:build`
+- 说明：
+  - `npm run web:build` 仍有 Vite large chunk warning，属于当前前端包体既有警告，本次未新增处理。
+
+## 2026-05-05
+- 初始化 `scripts/work/2026-05-05-codex-auth-proxy-support/`：
+  - `task_plan.md`
+  - `notes.md`
+  - `deliverable.md`
+- 当前目标：给 Codex Auth 额度查询增加系统代理/手动代理/禁用代理配置，解决重启后额度查询不走代理的问题。
+- 已完成后端：
+  - 新增 `codexAuth.proxy.mode` / `codexAuth.proxy.manualProxyUrl` 偏好。
+  - Rust 偏好服务增加代理模式和 URL 校验/修复。
+  - `reqwest` 启用 `system-proxy` 和 `socks` feature。
+  - Codex Auth 额度查询按当前偏好构造 HTTP client。
+- 已完成前端：
+  - Settings > General 新增 Codex Auth 额度代理模式 Select。
+  - Settings > General 新增手动代理地址输入与保存。
+  - TS 默认偏好和后端类型已同步。
+- 已同步文档：
+  - `README.md`
+  - `docs/product-requirements.md`
+  - `docs/technical-architecture.md`
+  - `docs/ui-system.md`
+- 验证通过：
+  - `cargo fmt --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo check --manifest-path "src-tauri/Cargo.toml"`
+  - `cargo test --manifest-path "src-tauri/Cargo.toml" --lib --no-run`
+  - `npm run web:build`
+- 额外验证：
+  - 执行 `cargo test ... codex_auth_proxy --lib` 时测试二进制加载阶段返回 `STATUS_ENTRYPOINT_NOT_FOUND`。
+  - 用旧测试过滤器 `args_indicate_autostart` 复测同样失败，说明当前环境无法执行该 Rust 测试二进制，不是新增代理断言本身失败。
+
 ## 2026-05-04
 - 初始化 `scripts/work/2026-05-04-codex-auth-auto-quota-refresh/`：
   - `task_plan.md`

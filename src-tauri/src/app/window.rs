@@ -10,7 +10,7 @@ pub fn handle_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) 
         let screenshot_service = window.state::<ScreenshotService>();
         match event {
             WindowEvent::CloseRequested { .. } => {
-                match screenshot_service.clear_active_session(None) {
+                match screenshot_service.clear_active_session(&window.app_handle(), None) {
                     Ok(_) => {}
                     Err(error) => {
                         log::warn!(

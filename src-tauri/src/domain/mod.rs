@@ -48,11 +48,12 @@ pub use native_interaction::{
 };
 #[allow(unused_imports)]
 pub use preferences::{
-    AppPreferences, CodexAuthPreferences, CodexHistoryViewPreferences, CodexHomeDirectoryInfo,
-    CustomEditorPreference, DiagnosticsPreferences, HotkeyPreferences, IdePreferences,
-    StartupPreferences, TerminalCommandTemplate, TerminalPreferences, TrayPreferences,
-    WorkspacePreferences, DEFAULT_CODEX_AUTH_QUOTA_REFRESH_INTERVAL_SECONDS,
-    DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE, DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
+    AppPreferences, CodexAuthPreferences, CodexAuthProxyPreferences, CodexHistoryViewPreferences,
+    CodexHomeDirectoryInfo, CustomEditorPreference, DiagnosticsPreferences, HotkeyPreferences,
+    IdePreferences, StartupPreferences, TerminalCommandShell, TerminalCommandTemplate,
+    TerminalPreferences, TrayPreferences, WorkspacePreferences, DEFAULT_CODEX_AUTH_PROXY_MODE,
+    DEFAULT_CODEX_AUTH_QUOTA_REFRESH_INTERVAL_SECONDS, DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE,
+    DEFAULT_SCREENSHOT_CAPTURE_HOTKEY, DEFAULT_TERMINAL_COMMAND_SHELL,
     EARLIER_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY, LEGACY_SCREENSHOT_CAPTURE_HOTKEY,
     PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
 };

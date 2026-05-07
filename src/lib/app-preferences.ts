@@ -4,6 +4,7 @@ export const defaultAppPreferences: AppPreferences = {
   terminal: {
     windowsTerminalPath: null,
     codexCliPath: null,
+    commandShell: "powershell7",
     commandTemplates: [],
   },
   ide: {
@@ -38,5 +39,9 @@ export const defaultAppPreferences: AppPreferences = {
   },
   codexAuth: {
     quotaRefreshIntervalSeconds: 60,
+    proxy: {
+      mode: "system",
+      manualProxyUrl: "",
+    },
   },
 };

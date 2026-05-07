@@ -13,11 +13,10 @@ use tauri::{AppHandle, Emitter};
 
 use crate::{
     adapters::{
-        build_windows_command_shell_run_args, build_windows_shell_command_line, run_launch_command,
-        ActionProcessKey, ChildProcessRegistry, CodexAdapter, CodexLaunchInput,
-        DefaultCodexAdapter, IdeAdapter, JetBrainsAdapter, LaunchCommand, ProcessLaunchResult,
-        ProcessTrackingContext, TerminalAdapter, TerminalLaunchInput, VSCodeAdapter,
-        WindowsTerminalAdapter,
+        build_windows_shell_command_line, run_launch_command, ActionProcessKey,
+        ChildProcessRegistry, CodexAdapter, CodexLaunchInput, DefaultCodexAdapter, IdeAdapter,
+        JetBrainsAdapter, LaunchCommand, ProcessLaunchResult, ProcessTrackingContext,
+        TerminalAdapter, TerminalLaunchInput, VSCodeAdapter, WindowsTerminalAdapter,
     },
     domain::{
         ensure_absolute_directory, AppPreferences, CancelRestoreActionResult,
@@ -755,6 +754,7 @@ impl RestoreService {
                     &launch_task_row_ids,
                     project.clone(),
                     &capabilities,
+                    &preferences,
                 )
                 .await
                 .inspect_err(|error| {
@@ -1011,6 +1011,7 @@ impl RestoreService {
         launch_task_row_ids: &HashMap<String, String>,
         planned_project: RestoreProjectPlan,
         capabilities: &RestoreCapabilities,
+        preferences: &AppPreferences,
     ) -> AppResult<RestoreRunProjectRecord> {
         let mut actions = planned_project.actions.clone();
 
@@ -1116,6 +1117,7 @@ impl RestoreService {
                 &task_id,
                 launch_task_row_ids,
                 capabilities,
+                preferences,
                 &mut actions,
             )
             .await?;
@@ -1207,6 +1209,7 @@ impl RestoreService {
         project_task_id: &str,
         launch_task_row_ids: &HashMap<String, String>,
         capabilities: &RestoreCapabilities,
+        preferences: &AppPreferences,
         actions: &mut [RestoreActionPlan],
     ) -> AppResult<Option<String>> {
         let launch_task_by_id = snapshot_project
@@ -1346,6 +1349,7 @@ impl RestoreService {
                 launch_task,
                 snapshot_project,
                 capabilities,
+                preferences,
                 project_directory.as_ref(),
                 tracking,
             )
@@ -2165,6 +2169,7 @@ async fn execute_launch_task(
     launch_task: &SnapshotLaunchTaskPayload,
     snapshot_project: &SnapshotProjectPayload,
     capabilities: &RestoreCapabilities,
+    preferences: &AppPreferences,
     project_directory: Result<&String, &AppError>,
     tracking: ProcessTrackingContext,
 ) -> AppResult<ProcessLaunchResult> {
@@ -2173,18 +2178,12 @@ async fn execute_launch_task(
             let working_dir = resolve_launch_task_working_dir(launch_task, project_directory)?;
             let command_line =
                 build_windows_shell_command_line(&launch_task.command, &launch_task.args);
-            let shell_executable = WindowsTerminalAdapter
-                .detect_shell_executable()
-                .ok_or_else(|| {
-                    AppError::new(
-                        "SHELL_EXECUTABLE_UNAVAILABLE",
-                        "Windows command shell executable is not available on this machine",
-                    )
-                    .with_detail("launchTaskId", launch_task.id.clone())
-                })?;
+            let shell_plan = WindowsTerminalAdapter
+                .resolve_shell_launch_plan(preferences.terminal.command_shell, &command_line)
+                .map_err(|error| error.with_detail("launchTaskId", launch_task.id.clone()))?;
             run_launch_command(LaunchCommand {
-                executable_path: shell_executable,
-                args: build_windows_command_shell_run_args(&command_line),
+                executable_path: shell_plan.executable_path,
+                args: shell_plan.run_args,
                 current_dir: Some(PathBuf::from(working_dir)),
                 envs: Vec::new(),
                 timeout: Duration::from_millis(launch_task.timeout_ms as u64),
@@ -2945,6 +2944,7 @@ mod tests {
             terminal: TerminalPreferences {
                 windows_terminal_path: Some(wt_dir.display().to_string()),
                 codex_cli_path: Some(codex_dir.display().to_string()),
+                command_shell: crate::domain::TerminalCommandShell::PowerShell7,
                 command_templates: Vec::new(),
             },
             ide: IdePreferences {

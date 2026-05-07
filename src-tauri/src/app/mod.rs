@@ -109,14 +109,17 @@ pub fn run() {
                 );
             }
 
-            app.manage(preferences_service);
+            app.manage(preferences_service.clone());
             app.manage(hotkey_service);
             app.manage(crate::services::WorkspaceService::new(database.clone()));
             app.manage(crate::services::ResourceBrowserService::new(
                 database.clone(),
             ));
             app.manage(crate::services::CodexHistoryService::new(database.clone()));
-            app.manage(crate::services::CodexAuthService::new(database.clone()));
+            app.manage(crate::services::CodexAuthService::new(
+                database.clone(),
+                preferences_service.clone(),
+            ));
             app.manage(crate::services::ProfileService::new(database.clone()));
             app.manage(crate::services::PlannerService::new(
                 database.clone(),
@@ -163,6 +166,18 @@ pub fn run() {
                 .map(|preferences| preferences.startup.start_silently)
                 .unwrap_or(false);
             let should_show_main_window = !(launched_from_autostart && start_silently);
+            let current_exe = std::env::current_exe()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|error| format!("unavailable: {error}"));
+
+            log::info!(
+                target: "bexo::app",
+                "startup visibility resolved launched_from_autostart={} start_silently={} should_show_main_window={} current_exe={}",
+                launched_from_autostart,
+                start_silently,
+                should_show_main_window,
+                current_exe
+            );
 
             if let Some(window) = app.get_webview_window("main") {
                 if should_show_main_window {
