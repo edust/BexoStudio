@@ -12,12 +12,14 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
 
 ## Current Status
 
-当前仓库的开发优先级已切换为：
+当前版本：`0.1.15`。
 
-- 功能冻结
-- 先重构桌面 UI 框架
-- 收敛导航、页面密度和整体堆叠
-- 暂不继续扩展业务能力
+当前仓库已从框架搭建阶段进入 Windows-first 的功能完善与生产可靠性阶段，当前重点是：
+
+- 稳定 WORKBENCH、Session / History、Codex Auth 与 Prompts 主流程
+- 完善 Windows 自启动、托盘、全局热键和输入注入可靠性
+- 保持亮色/暗色主题、紧凑桌面布局与 production WebView 表现一致
+- 继续以自动测试、真实桌面运行和安装包回归作为交付门禁
 
 当前仓库已完成：
 
@@ -92,14 +94,15 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
   - 已接入 `Ant Design`
   - 当前壳层改为 `Ant Design + compact theme + Tailwind` 的混合方案
   - 一级导航已收敛为：
-    - `Home`
+    - `Workbench`（根路由 `/`）
     - `Session / History`
     - `Codex Auth`
+    - `Prompts`
     - `Settings`
   - `Workspaces / Snapshots / Profiles / Logs` 已退出主导航并冻结为占位页
-  - `Home` 已改成只保留工作台画布和 panel 占位的紧凑框架页
-  - `Settings` 已改成只保留 `General` 单项的紧凑设置页
-  - `General` 当前已接入真实设置：
+  - `Workbench` 已接入真实工作区列表、资源浏览器和终端命令组，不再使用演示面板
+  - `Settings` 使用 `General / Hotkeys` 两个紧凑设置分区
+  - `General` 已接入真实设置：
     - 启动项管理
       - `随系统启动`（Switch）
       - `静默启动`（Switch，仅在 `--autostart` 场景生效）
@@ -108,7 +111,7 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
     - 终端命令 Shell 可选 `PowerShell 7` / `cmd.exe`，默认优先 `PowerShell 7`
     - 终端模板管理
     - 通过弹窗管理模板的保存、删除、更新与拖拽排序
-  - 当前阶段重点是统一桌面框架，而不是继续做业务内容
+  - `Hotkeys` 已接入截图热键录制、注册健康状态和 5 个 Prompt 快速粘贴槽位
 - Home Workspace Picker & Safe Remove：
   - 首页左侧工作区改为真实数据源，不再展示演示列表
   - 顶部提供工作区操作菜单：
@@ -156,7 +159,6 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
       - 按排序顺序逐个打开 tabs
       - tabs 之间固定间隔 `10s`
     - 单条命令独立窗口运行
-    - 快速粘贴成功时保持静默，失败时触发系统级通知和应用内错误提示
   - 命令组只管理 `terminal_command`
   - 没有工作区时显示空状态
   - 模板配置不再前端写死，统一存入本地偏好
@@ -182,6 +184,11 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
   - 支持 5 个可配置的全局快速粘贴槽位，默认 `Ctrl+Alt+Shift+1` 到 `Ctrl+Alt+Shift+5`
   - 快捷键在 Settings / Hotkeys 中绑定稳定 Prompt ID；拖拽排序不会改变绑定含义
   - Windows 下由 Rust 写入剪贴板并向当前前台窗口发送 `Ctrl+V`，后台/托盘状态仍可使用
+  - 快速粘贴成功后完全静默；失败时保留可操作的系统通知和应用内错误提示
+- Screenshot & Hotkeys：
+  - 默认截图全局热键为 `Ctrl+Shift+X`，可在 Settings / Hotkeys 中录制和恢复默认
+  - 热键冲突、注册失败和 degraded 状态会明确显示，并支持重新注册
+  - 截图底图与高频选区交互由 Windows 原生层负责，WebView 负责工具栏、属性面板和复杂配置 UI
 - Reliability & Security Hardening：
   - SQLite 写 timeout 会 interrupt 并等待事务确定提交或回滚，不遗留后台悬空写
   - Native Preview/Interaction 由 typed owner thread 独占，跨线程不再传递裸指针
@@ -197,10 +204,11 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
   - 在 `Vite serve` 开发模式下默认启用
   - 不注入生产构建
 
-下一阶段将进入：
+后续优先事项：
 
-- Launch Task 模板化与批量编排 UX
-- action 级取消继续向子进程树与更细粒度诊断下钻
+- 对 release 安装包执行 Windows 自启动、CSP、托盘和全局热键持续回归
+- 继续完善 Launch Task 批量编排、恢复诊断与被冻结模块的回归顺序
+- 加强高权限目标窗口、剪贴板占用和热键冲突等异常环境诊断
 - `cargo test` 宿主 `STATUS_ENTRYPOINT_NOT_FOUND` 环境问题排查
 
 ## Product Direction
@@ -212,6 +220,7 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
 - 终端编排与附加命令启动
 - Codex Profile / `CODEX_HOME` 管理
 - Codex `auth.json` / `config.toml` 授权管理与切换
+- 常用 Prompts 管理、一键复制和最多 5 个全局快速粘贴槽位
 - VS Code / IDEA 启动
 - 托盘化运行、窗口恢复、日志与通知
 
@@ -223,7 +232,7 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
 ## Design References
 - 信息架构参考 Cherry Studio
 - 设置页质感参考 CC Switch
-- 当前视觉基线为明亮主题，不再以深色优先
+- 默认视觉基线为明亮主题，同时完整支持暗色主题
 - 当前亮色主题进一步收敛为紧凑、专业、偏桌面工作台的视觉基线
 - 当前允许引入 `Ant Design` 以快速重建紧凑桌面 UI 框架
 - 但仍不照搬 Cherry Studio 的 Electron / Redux / styled-components 重栈
@@ -238,23 +247,37 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
 - System Notification: `tauri-plugin-notification`
 
 ## Document Map
-- [产品需求](D:\Desktop\rust\BexoStudio\docs\product-requirements.md)
-- [技术架构](D:\Desktop\rust\BexoStudio\docs\technical-architecture.md)
-- [UI 系统](D:\Desktop\rust\BexoStudio\docs\ui-system.md)
-- [实施路线图](D:\Desktop\rust\BexoStudio\docs\implementation-roadmap.md)
-- [仓库协作规范](D:\Desktop\rust\BexoStudio\AGENTS.md)
+- [产品需求](docs/product-requirements.md)
+- [技术架构](docs/technical-architecture.md)
+- [UI 系统](docs/ui-system.md)
+- [实施路线图](docs/implementation-roadmap.md)
+- [仓库协作规范](AGENTS.md)
 
 ## Local Development
 
-```bash
+前置环境：Node.js/npm、Rust stable、Windows MSVC Build Tools 与 Microsoft Edge WebView2 Runtime。
+
+安装前端依赖：
+
+```powershell
 npm install
-npm run web:dev
+```
+
+启动完整 Tauri 桌面应用（会自动启动 Vite）：
+
+```powershell
 npm run desktop:dev
 ```
 
-可用验证命令：
+仅调试浏览器前端时：
 
-```bash
+```powershell
+npm run web:dev
+```
+
+常用验证命令：
+
+```powershell
 npm run web:test
 npm run web:build
 npm run desktop:build:debug
@@ -265,7 +288,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --all-targets --no-run
 
 发行打包命令：
 
-```bash
+```powershell
 npm run release:build
 ```
 
@@ -285,19 +308,10 @@ npm run release:build
 - 当前环境下 `cargo test` 能成功编译出测试可执行文件，但测试宿主启动时出现 `STATUS_ENTRYPOINT_NOT_FOUND`
 - 因此本轮 Rust 验证以 `cargo check`、`cargo test --no-run`、桌面构建和可执行文件启动为主
 
-当前机器能力探测基线：
+运行环境说明：
 
-- `wt`: 未在 PATH 中探测到
-- `code`: 已探测到
-- `codex`: 已探测到
-- `idea / idea64.exe`: 已探测到
-
-说明：
-
-- 从 Phase 4/5 开始，`wt` 不在 PATH 已不再是硬阻塞
-- 可在 `Settings / General` 中手动选择 `Windows Terminal` 目录
-- 当前机器已验证 `wt` 用户配置目录可生效：
-  - `D:\Downloads\Compressed\Microsoft.WindowsTerminalPreview_1.21.1772.0_x64\terminal-1.21.1772.0`
+- `wt`、`code`、`codex` 或 JetBrains IDE 不在 PATH 时，可在 `Settings / General` 中配置对应路径
+- 工具探测优先级为 `user_config -> PATH`
 - Launch Tasks 当前 UI 已开放：
   - `terminal_command`
   - `open_path`
@@ -319,7 +333,7 @@ npm run release:build
 - `src-tauri/target/release/bundle/nsis/Bexo Studio_<version>_x64-setup.exe`
 
 ## Repository Planning Files
-- [task_plan.md](D:\Desktop\rust\BexoStudio\task_plan.md)
-- [findings.md](D:\Desktop\rust\BexoStudio\findings.md)
-- [progress.md](D:\Desktop\rust\BexoStudio\progress.md)
-- [work blueprint](D:\Desktop\rust\BexoStudio\scripts\work\2026-03-09-bexostudio-blueprint\task_plan.md)
+- [task_plan.md](task_plan.md)
+- [findings.md](findings.md)
+- [progress.md](progress.md)
+- [work blueprint](scripts/work/2026-03-09-bexostudio-blueprint/task_plan.md)
