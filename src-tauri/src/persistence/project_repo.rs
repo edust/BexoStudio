@@ -97,7 +97,7 @@ pub fn upsert_project(
         }
     }
 
-    let transaction = connection.transaction().map_err(|error| {
+    let transaction = connection.savepoint().map_err(|error| {
         AppError::new("DB_WRITE_FAILED", "failed to open project transaction")
             .with_detail("reason", error.to_string())
     })?;

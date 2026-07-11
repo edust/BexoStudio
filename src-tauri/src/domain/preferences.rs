@@ -4,6 +4,14 @@ pub const DEFAULT_SCREENSHOT_CAPTURE_HOTKEY: &str = "Ctrl+Shift+X";
 pub const PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY: &str = "Ctrl+Shift+1";
 pub const EARLIER_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY: &str = "Ctrl+Shift+4";
 pub const LEGACY_SCREENSHOT_CAPTURE_HOTKEY: &str = "Ctrl+Alt+A";
+pub const PROMPT_QUICK_PASTE_SLOT_COUNT: usize = 5;
+pub const DEFAULT_PROMPT_QUICK_PASTE_HOTKEYS: [&str; PROMPT_QUICK_PASTE_SLOT_COUNT] = [
+    "Ctrl+Alt+Shift+1",
+    "Ctrl+Alt+Shift+2",
+    "Ctrl+Alt+Shift+3",
+    "Ctrl+Alt+Shift+4",
+    "Ctrl+Alt+Shift+5",
+];
 pub const DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE: i32 = 12;
 pub const DEFAULT_CODEX_AUTH_QUOTA_REFRESH_INTERVAL_SECONDS: i32 = 60;
 pub const DEFAULT_CODEX_AUTH_PROXY_MODE: &str = "system";
@@ -21,6 +29,27 @@ pub struct AppPreferences {
     pub diagnostics: DiagnosticsPreferences,
     pub codex_history: CodexHistoryViewPreferences,
     pub codex_auth: CodexAuthPreferences,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AppPreferencesPatch {
+    pub terminal: Option<TerminalPreferences>,
+    pub ide: Option<IdePreferences>,
+    pub workspace: Option<WorkspacePreferencesPatch>,
+    pub startup: Option<StartupPreferences>,
+    pub hotkey: Option<HotkeyPreferences>,
+    pub tray: Option<TrayPreferences>,
+    pub diagnostics: Option<DiagnosticsPreferences>,
+    pub codex_history: Option<CodexHistoryViewPreferences>,
+    pub codex_auth: Option<CodexAuthPreferences>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WorkspacePreferencesPatch {
+    pub selected_workspace_ids: Option<Vec<String>>,
+    pub pinned_workspace_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,6 +166,8 @@ pub struct HotkeyPreferences {
     pub screenshot_capture: String,
     pub voice_input_toggle: Option<String>,
     pub voice_input_hold: Option<String>,
+    #[serde(default = "default_prompt_quick_paste_slots")]
+    pub prompt_quick_paste_slots: Vec<PromptQuickPasteHotkeySlot>,
 }
 
 impl Default for HotkeyPreferences {
@@ -145,8 +176,42 @@ impl Default for HotkeyPreferences {
             screenshot_capture: default_screenshot_capture_hotkey(),
             voice_input_toggle: None,
             voice_input_hold: None,
+            prompt_quick_paste_slots: default_prompt_quick_paste_slots(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PromptQuickPasteHotkeySlot {
+    pub slot: u8,
+    pub enabled: bool,
+    pub prompt_id: Option<String>,
+    pub shortcut: String,
+}
+
+impl Default for PromptQuickPasteHotkeySlot {
+    fn default() -> Self {
+        Self {
+            slot: 1,
+            enabled: false,
+            prompt_id: None,
+            shortcut: DEFAULT_PROMPT_QUICK_PASTE_HOTKEYS[0].to_string(),
+        }
+    }
+}
+
+pub fn default_prompt_quick_paste_slots() -> Vec<PromptQuickPasteHotkeySlot> {
+    DEFAULT_PROMPT_QUICK_PASTE_HOTKEYS
+        .iter()
+        .enumerate()
+        .map(|(index, shortcut)| PromptQuickPasteHotkeySlot {
+            slot: (index + 1) as u8,
+            enabled: false,
+            prompt_id: None,
+            shortcut: (*shortcut).to_string(),
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

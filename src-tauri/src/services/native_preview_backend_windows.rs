@@ -1,5 +1,3 @@
-#![cfg(target_os = "windows")]
-
 use std::time::Instant;
 
 use windows::{
@@ -31,11 +29,12 @@ use windows::{
         },
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, DestroyWindow, LoadCursorW, RegisterClassExW,
-            SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW, HCURSOR, HMENU, HWND_TOPMOST,
-            IDC_ARROW, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOWNA,
-            WNDCLASSEXW, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE,
-            WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+            CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, LoadCursorW,
+            PeekMessageW, RegisterClassExW, SetWindowPos, ShowWindow, TranslateMessage, CS_HREDRAW,
+            CS_VREDRAW, HCURSOR, HMENU, HWND_TOPMOST, IDC_ARROW, MSG, PM_REMOVE, SWP_HIDEWINDOW,
+            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOWNA, WM_QUIT, WNDCLASSEXW,
+            WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
+            WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
         },
     },
 };
@@ -133,6 +132,20 @@ pub fn initialize() -> AppResult<(
             prime_present_ms,
         },
     ))
+}
+
+pub fn pump_messages() -> bool {
+    let mut message = MSG::default();
+    while unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
+        if message.message == WM_QUIT {
+            return false;
+        }
+        unsafe {
+            let _ = TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+    }
+    true
 }
 
 impl NativePreviewWindowsBackend {

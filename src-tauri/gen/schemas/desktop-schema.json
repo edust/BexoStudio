@@ -2145,6 +2145,840 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Allows detached history windows read-only history and view preference access.\n#### This permission set includes:\n\n- `allow-get-app-preferences`\n- `allow-list-codex-history-sessions`\n- `allow-get-codex-history-messages`",
+          "type": "string",
+          "const": "codex-history-window-commands",
+          "markdownDescription": "Allows detached history windows read-only history and view preference access.\n#### This permission set includes:\n\n- `allow-get-app-preferences`\n- `allow-list-codex-history-sessions`\n- `allow-get-codex-history-messages`"
+        },
+        {
+          "description": "Allows the trusted main window to invoke all Bexo Studio application commands.\n#### This permission set includes:\n\n- `allow-get-bootstrap-state`\n- `allow-get-native-interaction-state`\n- `allow-update-native-interaction-exclusion-rects`\n- `allow-update-native-interaction-runtime`\n- `allow-get-app-preferences`\n- `allow-update-app-preferences`\n- `allow-get-hotkey-health`\n- `allow-retry-hotkey-registration`\n- `allow-get-codex-home-directory`\n- `allow-detect-editors-from-path`\n- `allow-open-codex-history-window`\n- `allow-list-codex-history-sessions`\n- `allow-list-all-codex-history-sessions`\n- `allow-get-codex-history-messages`\n- `allow-list-codex-auth-profiles`\n- `allow-get-codex-auth-profile-detail`\n- `allow-import-current-codex-auth-profile`\n- `allow-upsert-codex-auth-profile`\n- `allow-delete-codex-auth-profile`\n- `allow-switch-codex-auth-profile`\n- `allow-query-codex-auth-quota`\n- `allow-refresh-all-codex-auth-quotas`\n- `allow-list-prompts`\n- `allow-upsert-prompt`\n- `allow-delete-prompt`\n- `allow-reorder-prompts`\n- `allow-list-workspaces`\n- `allow-upsert-workspace`\n- `allow-reorder-workspaces`\n- `allow-delete-workspace`\n- `allow-register-workspace-folder`\n- `allow-remove-workspace-registration`\n- `allow-open-workspace-terminal`\n- `allow-open-workspace-terminal-at-path`\n- `allow-open-workspace-in-editor`\n- `allow-run-workspace-terminal-command`\n- `allow-run-workspace-terminal-commands`\n- `allow-upsert-project`\n- `allow-list-workspace-resource-children`\n- `allow-allow-workspace-resource-scope`\n- `allow-get-workspace-resource-git-statuses`\n- `allow-list-launch-tasks`\n- `allow-upsert-launch-task`\n- `allow-reorder-launch-tasks`\n- `allow-delete-launch-task`\n- `allow-list-codex-profiles`\n- `allow-upsert-codex-profile`\n- `allow-list-snapshots`\n- `allow-create-snapshot`\n- `allow-update-snapshot`\n- `allow-start-screenshot-session`\n- `allow-get-screenshot-session`\n- `allow-get-screenshot-preview-rgba`\n- `allow-get-screenshot-selection-render`\n- `allow-copy-screenshot-selection`\n- `allow-save-screenshot-selection`\n- `allow-cancel-screenshot-session`\n- `allow-preview-restore`\n- `allow-start-restore-dry-run`\n- `allow-get-restore-capabilities`\n- `allow-start-restore-run`\n- `allow-cancel-restore-run`\n- `allow-cancel-restore-action`\n- `allow-list-recent-restore-targets`\n- `allow-restore-recent-target`\n- `allow-list-restore-runs`\n- `allow-get-restore-run-detail`\n- `allow-open-log-directory`",
+          "type": "string",
+          "const": "main-window-commands",
+          "markdownDescription": "Allows the trusted main window to invoke all Bexo Studio application commands.\n#### This permission set includes:\n\n- `allow-get-bootstrap-state`\n- `allow-get-native-interaction-state`\n- `allow-update-native-interaction-exclusion-rects`\n- `allow-update-native-interaction-runtime`\n- `allow-get-app-preferences`\n- `allow-update-app-preferences`\n- `allow-get-hotkey-health`\n- `allow-retry-hotkey-registration`\n- `allow-get-codex-home-directory`\n- `allow-detect-editors-from-path`\n- `allow-open-codex-history-window`\n- `allow-list-codex-history-sessions`\n- `allow-list-all-codex-history-sessions`\n- `allow-get-codex-history-messages`\n- `allow-list-codex-auth-profiles`\n- `allow-get-codex-auth-profile-detail`\n- `allow-import-current-codex-auth-profile`\n- `allow-upsert-codex-auth-profile`\n- `allow-delete-codex-auth-profile`\n- `allow-switch-codex-auth-profile`\n- `allow-query-codex-auth-quota`\n- `allow-refresh-all-codex-auth-quotas`\n- `allow-list-prompts`\n- `allow-upsert-prompt`\n- `allow-delete-prompt`\n- `allow-reorder-prompts`\n- `allow-list-workspaces`\n- `allow-upsert-workspace`\n- `allow-reorder-workspaces`\n- `allow-delete-workspace`\n- `allow-register-workspace-folder`\n- `allow-remove-workspace-registration`\n- `allow-open-workspace-terminal`\n- `allow-open-workspace-terminal-at-path`\n- `allow-open-workspace-in-editor`\n- `allow-run-workspace-terminal-command`\n- `allow-run-workspace-terminal-commands`\n- `allow-upsert-project`\n- `allow-list-workspace-resource-children`\n- `allow-allow-workspace-resource-scope`\n- `allow-get-workspace-resource-git-statuses`\n- `allow-list-launch-tasks`\n- `allow-upsert-launch-task`\n- `allow-reorder-launch-tasks`\n- `allow-delete-launch-task`\n- `allow-list-codex-profiles`\n- `allow-upsert-codex-profile`\n- `allow-list-snapshots`\n- `allow-create-snapshot`\n- `allow-update-snapshot`\n- `allow-start-screenshot-session`\n- `allow-get-screenshot-session`\n- `allow-get-screenshot-preview-rgba`\n- `allow-get-screenshot-selection-render`\n- `allow-copy-screenshot-selection`\n- `allow-save-screenshot-selection`\n- `allow-cancel-screenshot-session`\n- `allow-preview-restore`\n- `allow-start-restore-dry-run`\n- `allow-get-restore-capabilities`\n- `allow-start-restore-run`\n- `allow-cancel-restore-run`\n- `allow-cancel-restore-action`\n- `allow-list-recent-restore-targets`\n- `allow-restore-recent-target`\n- `allow-list-restore-runs`\n- `allow-get-restore-run-detail`\n- `allow-open-log-directory`"
+        },
+        {
+          "description": "Allows the screenshot overlay to access only its active session and native interaction runtime.\n#### This permission set includes:\n\n- `allow-update-native-interaction-runtime`\n- `allow-get-screenshot-session`\n- `allow-get-screenshot-selection-render`\n- `allow-copy-screenshot-selection`\n- `allow-save-screenshot-selection`\n- `allow-cancel-screenshot-session`",
+          "type": "string",
+          "const": "screenshot-overlay-commands",
+          "markdownDescription": "Allows the screenshot overlay to access only its active session and native interaction runtime.\n#### This permission set includes:\n\n- `allow-update-native-interaction-runtime`\n- `allow-get-screenshot-session`\n- `allow-get-screenshot-selection-render`\n- `allow-copy-screenshot-selection`\n- `allow-save-screenshot-selection`\n- `allow-cancel-screenshot-session`"
+        },
+        {
+          "description": "Enables the allow_workspace_resource_scope command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-allow-workspace-resource-scope",
+          "markdownDescription": "Enables the allow_workspace_resource_scope command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cancel_restore_action command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cancel-restore-action",
+          "markdownDescription": "Enables the cancel_restore_action command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cancel_restore_run command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cancel-restore-run",
+          "markdownDescription": "Enables the cancel_restore_run command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cancel_screenshot_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cancel-screenshot-session",
+          "markdownDescription": "Enables the cancel_screenshot_session command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the copy_screenshot_selection command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-copy-screenshot-selection",
+          "markdownDescription": "Enables the copy_screenshot_selection command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the create_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-create-snapshot",
+          "markdownDescription": "Enables the create_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_codex_auth_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-codex-auth-profile",
+          "markdownDescription": "Enables the delete_codex_auth_profile command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_launch_task command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-launch-task",
+          "markdownDescription": "Enables the delete_launch_task command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_prompt command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-prompt",
+          "markdownDescription": "Enables the delete_prompt command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_workspace command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-workspace",
+          "markdownDescription": "Enables the delete_workspace command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the detect_editors_from_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-detect-editors-from-path",
+          "markdownDescription": "Enables the detect_editors_from_path command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_app_preferences command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-app-preferences",
+          "markdownDescription": "Enables the get_app_preferences command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_bootstrap_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-bootstrap-state",
+          "markdownDescription": "Enables the get_bootstrap_state command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_codex_auth_profile_detail command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-codex-auth-profile-detail",
+          "markdownDescription": "Enables the get_codex_auth_profile_detail command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_codex_history_messages command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-codex-history-messages",
+          "markdownDescription": "Enables the get_codex_history_messages command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_codex_home_directory command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-codex-home-directory",
+          "markdownDescription": "Enables the get_codex_home_directory command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_hotkey_health command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-hotkey-health",
+          "markdownDescription": "Enables the get_hotkey_health command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_native_interaction_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-native-interaction-state",
+          "markdownDescription": "Enables the get_native_interaction_state command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_restore_capabilities command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-restore-capabilities",
+          "markdownDescription": "Enables the get_restore_capabilities command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_restore_run_detail command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-restore-run-detail",
+          "markdownDescription": "Enables the get_restore_run_detail command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_screenshot_preview_rgba command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-screenshot-preview-rgba",
+          "markdownDescription": "Enables the get_screenshot_preview_rgba command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_screenshot_selection_render command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-screenshot-selection-render",
+          "markdownDescription": "Enables the get_screenshot_selection_render command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_screenshot_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-screenshot-session",
+          "markdownDescription": "Enables the get_screenshot_session command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_workspace_resource_git_statuses command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-workspace-resource-git-statuses",
+          "markdownDescription": "Enables the get_workspace_resource_git_statuses command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the import_current_codex_auth_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-import-current-codex-auth-profile",
+          "markdownDescription": "Enables the import_current_codex_auth_profile command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_all_codex_history_sessions command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-all-codex-history-sessions",
+          "markdownDescription": "Enables the list_all_codex_history_sessions command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_codex_auth_profiles command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-codex-auth-profiles",
+          "markdownDescription": "Enables the list_codex_auth_profiles command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_codex_history_sessions command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-codex-history-sessions",
+          "markdownDescription": "Enables the list_codex_history_sessions command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_codex_profiles command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-codex-profiles",
+          "markdownDescription": "Enables the list_codex_profiles command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_launch_tasks command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-launch-tasks",
+          "markdownDescription": "Enables the list_launch_tasks command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_prompts command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-prompts",
+          "markdownDescription": "Enables the list_prompts command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_recent_restore_targets command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-recent-restore-targets",
+          "markdownDescription": "Enables the list_recent_restore_targets command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_restore_runs command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-restore-runs",
+          "markdownDescription": "Enables the list_restore_runs command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_snapshots command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-snapshots",
+          "markdownDescription": "Enables the list_snapshots command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_workspace_resource_children command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-workspace-resource-children",
+          "markdownDescription": "Enables the list_workspace_resource_children command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_workspaces command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-workspaces",
+          "markdownDescription": "Enables the list_workspaces command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_codex_history_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-codex-history-window",
+          "markdownDescription": "Enables the open_codex_history_window command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_log_directory command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-log-directory",
+          "markdownDescription": "Enables the open_log_directory command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_workspace_in_editor command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-workspace-in-editor",
+          "markdownDescription": "Enables the open_workspace_in_editor command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_workspace_terminal command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-workspace-terminal",
+          "markdownDescription": "Enables the open_workspace_terminal command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_workspace_terminal_at_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-workspace-terminal-at-path",
+          "markdownDescription": "Enables the open_workspace_terminal_at_path command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the preview_restore command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preview-restore",
+          "markdownDescription": "Enables the preview_restore command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the query_codex_auth_quota command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-query-codex-auth-quota",
+          "markdownDescription": "Enables the query_codex_auth_quota command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the refresh_all_codex_auth_quotas command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-refresh-all-codex-auth-quotas",
+          "markdownDescription": "Enables the refresh_all_codex_auth_quotas command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the register_workspace_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-register-workspace-folder",
+          "markdownDescription": "Enables the register_workspace_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the remove_workspace_registration command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-remove-workspace-registration",
+          "markdownDescription": "Enables the remove_workspace_registration command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the reorder_launch_tasks command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-reorder-launch-tasks",
+          "markdownDescription": "Enables the reorder_launch_tasks command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the reorder_prompts command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-reorder-prompts",
+          "markdownDescription": "Enables the reorder_prompts command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the reorder_workspaces command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-reorder-workspaces",
+          "markdownDescription": "Enables the reorder_workspaces command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the restore_recent_target command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-restore-recent-target",
+          "markdownDescription": "Enables the restore_recent_target command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the retry_hotkey_registration command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-retry-hotkey-registration",
+          "markdownDescription": "Enables the retry_hotkey_registration command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the run_workspace_terminal_command command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-run-workspace-terminal-command",
+          "markdownDescription": "Enables the run_workspace_terminal_command command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the run_workspace_terminal_commands command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-run-workspace-terminal-commands",
+          "markdownDescription": "Enables the run_workspace_terminal_commands command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_screenshot_selection command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-screenshot-selection",
+          "markdownDescription": "Enables the save_screenshot_selection command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the start_restore_dry_run command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-restore-dry-run",
+          "markdownDescription": "Enables the start_restore_dry_run command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the start_restore_run command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-restore-run",
+          "markdownDescription": "Enables the start_restore_run command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the start_screenshot_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-screenshot-session",
+          "markdownDescription": "Enables the start_screenshot_session command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the switch_codex_auth_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-switch-codex-auth-profile",
+          "markdownDescription": "Enables the switch_codex_auth_profile command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the update_app_preferences command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-update-app-preferences",
+          "markdownDescription": "Enables the update_app_preferences command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the update_native_interaction_exclusion_rects command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-update-native-interaction-exclusion-rects",
+          "markdownDescription": "Enables the update_native_interaction_exclusion_rects command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the update_native_interaction_runtime command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-update-native-interaction-runtime",
+          "markdownDescription": "Enables the update_native_interaction_runtime command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the update_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-update-snapshot",
+          "markdownDescription": "Enables the update_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the upsert_codex_auth_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-upsert-codex-auth-profile",
+          "markdownDescription": "Enables the upsert_codex_auth_profile command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the upsert_codex_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-upsert-codex-profile",
+          "markdownDescription": "Enables the upsert_codex_profile command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the upsert_launch_task command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-upsert-launch-task",
+          "markdownDescription": "Enables the upsert_launch_task command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the upsert_project command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-upsert-project",
+          "markdownDescription": "Enables the upsert_project command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the upsert_prompt command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-upsert-prompt",
+          "markdownDescription": "Enables the upsert_prompt command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the upsert_workspace command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-upsert-workspace",
+          "markdownDescription": "Enables the upsert_workspace command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the allow_workspace_resource_scope command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-allow-workspace-resource-scope",
+          "markdownDescription": "Denies the allow_workspace_resource_scope command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancel_restore_action command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cancel-restore-action",
+          "markdownDescription": "Denies the cancel_restore_action command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancel_restore_run command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cancel-restore-run",
+          "markdownDescription": "Denies the cancel_restore_run command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancel_screenshot_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cancel-screenshot-session",
+          "markdownDescription": "Denies the cancel_screenshot_session command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the copy_screenshot_selection command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-copy-screenshot-selection",
+          "markdownDescription": "Denies the copy_screenshot_selection command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the create_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-create-snapshot",
+          "markdownDescription": "Denies the create_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_codex_auth_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-codex-auth-profile",
+          "markdownDescription": "Denies the delete_codex_auth_profile command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_launch_task command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-launch-task",
+          "markdownDescription": "Denies the delete_launch_task command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_prompt command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-prompt",
+          "markdownDescription": "Denies the delete_prompt command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_workspace command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-workspace",
+          "markdownDescription": "Denies the delete_workspace command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the detect_editors_from_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-detect-editors-from-path",
+          "markdownDescription": "Denies the detect_editors_from_path command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_app_preferences command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-app-preferences",
+          "markdownDescription": "Denies the get_app_preferences command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_bootstrap_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-bootstrap-state",
+          "markdownDescription": "Denies the get_bootstrap_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_codex_auth_profile_detail command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-codex-auth-profile-detail",
+          "markdownDescription": "Denies the get_codex_auth_profile_detail command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_codex_history_messages command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-codex-history-messages",
+          "markdownDescription": "Denies the get_codex_history_messages command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_codex_home_directory command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-codex-home-directory",
+          "markdownDescription": "Denies the get_codex_home_directory command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_hotkey_health command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-hotkey-health",
+          "markdownDescription": "Denies the get_hotkey_health command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_native_interaction_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-native-interaction-state",
+          "markdownDescription": "Denies the get_native_interaction_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_restore_capabilities command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-restore-capabilities",
+          "markdownDescription": "Denies the get_restore_capabilities command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_restore_run_detail command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-restore-run-detail",
+          "markdownDescription": "Denies the get_restore_run_detail command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_screenshot_preview_rgba command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-screenshot-preview-rgba",
+          "markdownDescription": "Denies the get_screenshot_preview_rgba command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_screenshot_selection_render command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-screenshot-selection-render",
+          "markdownDescription": "Denies the get_screenshot_selection_render command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_screenshot_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-screenshot-session",
+          "markdownDescription": "Denies the get_screenshot_session command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_workspace_resource_git_statuses command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-workspace-resource-git-statuses",
+          "markdownDescription": "Denies the get_workspace_resource_git_statuses command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the import_current_codex_auth_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-import-current-codex-auth-profile",
+          "markdownDescription": "Denies the import_current_codex_auth_profile command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_all_codex_history_sessions command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-all-codex-history-sessions",
+          "markdownDescription": "Denies the list_all_codex_history_sessions command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_codex_auth_profiles command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-codex-auth-profiles",
+          "markdownDescription": "Denies the list_codex_auth_profiles command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_codex_history_sessions command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-codex-history-sessions",
+          "markdownDescription": "Denies the list_codex_history_sessions command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_codex_profiles command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-codex-profiles",
+          "markdownDescription": "Denies the list_codex_profiles command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_launch_tasks command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-launch-tasks",
+          "markdownDescription": "Denies the list_launch_tasks command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_prompts command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-prompts",
+          "markdownDescription": "Denies the list_prompts command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_recent_restore_targets command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-recent-restore-targets",
+          "markdownDescription": "Denies the list_recent_restore_targets command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_restore_runs command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-restore-runs",
+          "markdownDescription": "Denies the list_restore_runs command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_snapshots command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-snapshots",
+          "markdownDescription": "Denies the list_snapshots command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_workspace_resource_children command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-workspace-resource-children",
+          "markdownDescription": "Denies the list_workspace_resource_children command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_workspaces command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-workspaces",
+          "markdownDescription": "Denies the list_workspaces command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_codex_history_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-codex-history-window",
+          "markdownDescription": "Denies the open_codex_history_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_log_directory command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-log-directory",
+          "markdownDescription": "Denies the open_log_directory command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_workspace_in_editor command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-workspace-in-editor",
+          "markdownDescription": "Denies the open_workspace_in_editor command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_workspace_terminal command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-workspace-terminal",
+          "markdownDescription": "Denies the open_workspace_terminal command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_workspace_terminal_at_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-workspace-terminal-at-path",
+          "markdownDescription": "Denies the open_workspace_terminal_at_path command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the preview_restore command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preview-restore",
+          "markdownDescription": "Denies the preview_restore command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the query_codex_auth_quota command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-query-codex-auth-quota",
+          "markdownDescription": "Denies the query_codex_auth_quota command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the refresh_all_codex_auth_quotas command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-refresh-all-codex-auth-quotas",
+          "markdownDescription": "Denies the refresh_all_codex_auth_quotas command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the register_workspace_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-register-workspace-folder",
+          "markdownDescription": "Denies the register_workspace_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the remove_workspace_registration command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-remove-workspace-registration",
+          "markdownDescription": "Denies the remove_workspace_registration command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the reorder_launch_tasks command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-reorder-launch-tasks",
+          "markdownDescription": "Denies the reorder_launch_tasks command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the reorder_prompts command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-reorder-prompts",
+          "markdownDescription": "Denies the reorder_prompts command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the reorder_workspaces command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-reorder-workspaces",
+          "markdownDescription": "Denies the reorder_workspaces command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the restore_recent_target command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-restore-recent-target",
+          "markdownDescription": "Denies the restore_recent_target command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the retry_hotkey_registration command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-retry-hotkey-registration",
+          "markdownDescription": "Denies the retry_hotkey_registration command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the run_workspace_terminal_command command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-run-workspace-terminal-command",
+          "markdownDescription": "Denies the run_workspace_terminal_command command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the run_workspace_terminal_commands command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-run-workspace-terminal-commands",
+          "markdownDescription": "Denies the run_workspace_terminal_commands command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_screenshot_selection command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-screenshot-selection",
+          "markdownDescription": "Denies the save_screenshot_selection command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the start_restore_dry_run command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-restore-dry-run",
+          "markdownDescription": "Denies the start_restore_dry_run command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the start_restore_run command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-restore-run",
+          "markdownDescription": "Denies the start_restore_run command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the start_screenshot_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-screenshot-session",
+          "markdownDescription": "Denies the start_screenshot_session command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the switch_codex_auth_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-switch-codex-auth-profile",
+          "markdownDescription": "Denies the switch_codex_auth_profile command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the update_app_preferences command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-update-app-preferences",
+          "markdownDescription": "Denies the update_app_preferences command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the update_native_interaction_exclusion_rects command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-update-native-interaction-exclusion-rects",
+          "markdownDescription": "Denies the update_native_interaction_exclusion_rects command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the update_native_interaction_runtime command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-update-native-interaction-runtime",
+          "markdownDescription": "Denies the update_native_interaction_runtime command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the update_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-update-snapshot",
+          "markdownDescription": "Denies the update_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the upsert_codex_auth_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-upsert-codex-auth-profile",
+          "markdownDescription": "Denies the upsert_codex_auth_profile command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the upsert_codex_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-upsert-codex-profile",
+          "markdownDescription": "Denies the upsert_codex_profile command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the upsert_launch_task command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-upsert-launch-task",
+          "markdownDescription": "Denies the upsert_launch_task command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the upsert_project command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-upsert-project",
+          "markdownDescription": "Denies the upsert_project command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the upsert_prompt command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-upsert-prompt",
+          "markdownDescription": "Denies the upsert_prompt command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the upsert_workspace command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-upsert-workspace",
+          "markdownDescription": "Denies the upsert_workspace command without any pre-configured scope."
+        },
+        {
           "description": "This permission set configures if your\napplication can enable or disable auto\nstarting the application on boot.\n\n#### Granted Permissions\n\nIt allows all to check, enable and\ndisable the automatic start on boot.\n\n\n#### This default permission set includes:\n\n- `allow-enable`\n- `allow-disable`\n- `allow-is-enabled`",
           "type": "string",
           "const": "autostart:default",

@@ -118,7 +118,7 @@ pub fn create_snapshot(
     let timestamp = Utc::now().to_rfc3339();
     let snapshot_id = Uuid::new_v4().to_string();
 
-    let transaction = connection.transaction().map_err(|error| {
+    let transaction = connection.savepoint().map_err(|error| {
         AppError::new("DB_WRITE_FAILED", "failed to open snapshot transaction")
             .with_detail("reason", error.to_string())
     })?;

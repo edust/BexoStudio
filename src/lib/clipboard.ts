@@ -1,13 +1,10 @@
 export async function copyTextToClipboard(text: string, emptyMessage = "复制内容为空") {
-  const normalizedText = text.trim();
-  if (!normalizedText) {
-    throw new Error(emptyMessage);
-  }
+  const clipboardText = resolveClipboardPayload(text, emptyMessage);
 
   let clipboardError: unknown;
   if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
     try {
-      await navigator.clipboard.writeText(normalizedText);
+      await navigator.clipboard.writeText(clipboardText);
       return;
     } catch (error) {
       clipboardError = error;
@@ -22,7 +19,7 @@ export async function copyTextToClipboard(text: string, emptyMessage = "复制�
   }
 
   const textarea = document.createElement("textarea");
-  textarea.value = normalizedText;
+  textarea.value = clipboardText;
   textarea.readOnly = true;
   textarea.className = "allow-text-selection allow-context-menu";
   textarea.style.position = "fixed";
@@ -41,6 +38,13 @@ export async function copyTextToClipboard(text: string, emptyMessage = "复制�
   } finally {
     document.body.removeChild(textarea);
   }
+}
+
+export function resolveClipboardPayload(text: string, emptyMessage = "复制内容为空") {
+  if (!text.trim()) {
+    throw new Error(emptyMessage);
+  }
+  return text;
 }
 
 export function getClipboardErrorMessage(error: unknown, fallback = "复制失败") {

@@ -16,8 +16,10 @@ import { cn } from "@/lib/cn";
 import { defaultAppPreferences } from "@/lib/app-preferences";
 import { getCodexHomeDirectory, getErrorSummary, hasDesktopRuntime } from "@/lib/command-client";
 import {
+  codexAuthProfileDetailQueryKey,
   codexAuthProfilesQueryKey,
   deleteCodexAuthProfile,
+  getCodexAuthProfileDetail,
   importCurrentCodexAuthProfile,
   listCodexAuthProfiles,
   queryCodexAuthQuota,
@@ -28,7 +30,8 @@ import {
 import { appPreferencesQueryKey, getAppPreferences } from "@/queries/preferences";
 import { useShellStore } from "@/stores/shell-store";
 import type {
-  CodexAuthProfileRecord,
+  CodexAuthProfileDetail,
+  CodexAuthProfileSummary,
   CodexAuthQuotaRefreshBatchResult,
   UpsertCodexAuthProfilePayload,
 } from "@/types/backend";
@@ -90,6 +93,12 @@ export default function CodexAuthPage() {
     enabled: desktopRuntimeAvailable,
     staleTime: 30_000,
   });
+  const profileDetailQuery = useQuery({
+    queryKey: codexAuthProfileDetailQueryKey(selectedId ?? "none"),
+    queryFn: () => getCodexAuthProfileDetail(selectedId!),
+    enabled: desktopRuntimeAvailable && Boolean(selectedId),
+    staleTime: 10_000,
+  });
 
   const profiles = profilesQuery.data ?? [];
   const selectedProfile = useMemo(
@@ -122,14 +131,37 @@ export default function CodexAuthPage() {
   }, [profiles, selectedId, sortedProfiles]);
 
   useEffect(() => {
-    if (selectedProfile) {
-      setDraft(profileToDraft(selectedProfile));
-      setInlineError(null);
+    if (selectedId) {
+      if (profileDetailQuery.data?.id === selectedId) {
+        setDraft(profileToDraft(profileDetailQuery.data));
+        setInlineError(null);
+      } else if (profileDetailQuery.isError) {
+        setInlineError(getErrorSummary(profileDetailQuery.error).message);
+      } else {
+        const summary = profiles.find((profile) => profile.id === selectedId);
+        if (summary) {
+          setDraft({
+            id: summary.id,
+            name: summary.name,
+            description: summary.description ?? "",
+            codexHome: summary.codexHome,
+            authJson: "",
+            configToml: "",
+          });
+        }
+      }
       return;
     }
     const homePath = codexHomeQuery.data?.path ?? "";
     setDraft(buildEmptyDraft(homePath));
-  }, [codexHomeQuery.data?.path, selectedProfile]);
+  }, [
+    codexHomeQuery.data?.path,
+    profileDetailQuery.data,
+    profileDetailQuery.error,
+    profileDetailQuery.isError,
+    profiles,
+    selectedId,
+  ]);
 
   useEffect(() => {
     if (!desktopRuntimeAvailable) {
@@ -323,11 +355,13 @@ export default function CodexAuthPage() {
   const selectedQuota = selectedProfile?.lastQuota ?? null;
   const autoRefreshing = autoRefreshStatus.phase === "refreshing";
   const busy =
+    autoRefreshing ||
     importMutation.isPending ||
     saveMutation.isPending ||
     switchMutation.isPending ||
     quotaMutation.isPending ||
-    deleteMutation.isPending;
+    deleteMutation.isPending ||
+    profileDetailQuery.isFetching;
 
   return (
     <div className="flex h-full max-h-full min-h-0 flex-col overflow-hidden bg-panel">
@@ -351,6 +385,7 @@ export default function CodexAuthPage() {
             status={autoRefreshStatus}
           />
           <Button
+            disabled={busy}
             icon={<ImportOutlined />}
             loading={importMutation.isPending}
             onClick={() => {
@@ -360,7 +395,7 @@ export default function CodexAuthPage() {
           >
             导入当前
           </Button>
-          <Button icon={<PlusOutlined />} onClick={handleNewProfile}>
+          <Button disabled={busy} icon={<PlusOutlined />} onClick={handleNewProfile}>
             新增授权
           </Button>
         </div>
@@ -391,6 +426,7 @@ export default function CodexAuthPage() {
                 </Tooltip>
                 <Tooltip title="刷新列表">
                   <Button
+                    disabled={busy}
                     icon={<ReloadOutlined />}
                     loading={profilesQuery.isFetching}
                     size="small"
@@ -421,6 +457,7 @@ export default function CodexAuthPage() {
                           : "border-[#e3eaf2] bg-white hover:bg-[#f7fafc]",
                     )}
                     key={profile.id}
+                    disabled={busy}
                     onClick={() => setSelectedId(profile.id)}
                     type="button"
                   >
@@ -477,7 +514,7 @@ export default function CodexAuthPage() {
                   <>
                     <Button
                       icon={<ReloadOutlined />}
-                      disabled={autoRefreshing}
+                      disabled={busy || autoRefreshing}
                       loading={quotaMutation.isPending}
                       onClick={() => {
                         setInlineError(null);
@@ -487,6 +524,7 @@ export default function CodexAuthPage() {
                       查询额度
                     </Button>
                     <Button
+                      disabled={busy}
                       icon={<SwapOutlined />}
                       loading={switchMutation.isPending}
                       type="primary"
@@ -499,7 +537,12 @@ export default function CodexAuthPage() {
                     </Button>
                   </>
                 ) : null}
-                <Button icon={<SaveOutlined />} loading={saveMutation.isPending} onClick={handleSave}>
+                <Button
+                  disabled={busy}
+                  icon={<SaveOutlined />}
+                  loading={saveMutation.isPending}
+                  onClick={handleSave}
+                >
                   保存
                 </Button>
                 {draft.id ? (
@@ -513,7 +556,12 @@ export default function CodexAuthPage() {
                       deleteMutation.mutate(draft.id!);
                     }}
                   >
-                    <Button danger icon={<DeleteOutlined />} loading={deleteMutation.isPending}>
+                    <Button
+                      danger
+                      disabled={busy}
+                      icon={<DeleteOutlined />}
+                      loading={deleteMutation.isPending}
+                    >
                       删除
                     </Button>
                   </Popconfirm>
@@ -527,11 +575,13 @@ export default function CodexAuthPage() {
               <div className="grid shrink-0 grid-cols-[220px_minmax(0,1fr)] gap-3">
                 <FieldLabel title="名称" />
                 <Input
+                  disabled={busy}
                   value={draft.name}
                   onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
                 />
                 <FieldLabel title="说明" />
                 <Input
+                  disabled={busy}
                   value={draft.description}
                   onChange={(event) =>
                     setDraft((current) => ({ ...current, description: event.target.value }))
@@ -540,6 +590,7 @@ export default function CodexAuthPage() {
                 <FieldLabel title="Codex 配置目录" />
                 <Input
                   className="font-mono"
+                  disabled={busy}
                   value={draft.codexHome}
                   onChange={(event) =>
                     setDraft((current) => ({ ...current, codexHome: event.target.value }))
@@ -549,11 +600,13 @@ export default function CodexAuthPage() {
 
               <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 xl:grid-cols-2">
                 <ConfigEditor
+                  disabled={busy}
                   label="auth.json"
                   value={draft.authJson}
                   onChange={(value) => setDraft((current) => ({ ...current, authJson: value }))}
                 />
                 <ConfigEditor
+                  disabled={busy}
                   label="config.toml"
                   value={draft.configToml}
                   onChange={(value) => setDraft((current) => ({ ...current, configToml: value }))}
@@ -583,10 +636,12 @@ function FieldLabel({ title, description }: { title: string; description?: strin
 }
 
 function ConfigEditor({
+  disabled,
   label,
   value,
   onChange,
 }: {
+  disabled: boolean;
   label: string;
   value: string;
   onChange: (value: string) => void;
@@ -599,6 +654,7 @@ function ConfigEditor({
       </div>
       <Input.TextArea
         className="allow-text-selection !h-full !min-h-0 !resize-none font-mono !text-[12px]"
+        disabled={disabled}
         spellCheck={false}
         value={value}
         autoSize={false}
@@ -639,7 +695,7 @@ function AutoRefreshStatusTag({
   );
 }
 
-function QuotaInlineSummary({ profile }: { profile: CodexAuthProfileRecord }) {
+function QuotaInlineSummary({ profile }: { profile: CodexAuthProfileSummary }) {
   const quota = profile.lastQuota;
   if (!quota) {
     return <div className="mt-2 text-[11px] text-muted-foreground">未查询额度</div>;
@@ -660,7 +716,7 @@ function QuotaInlineSummary({ profile }: { profile: CodexAuthProfileRecord }) {
   );
 }
 
-function QuotaPanel({ quota }: { quota: NonNullable<CodexAuthProfileRecord["lastQuota"]> }) {
+function QuotaPanel({ quota }: { quota: NonNullable<CodexAuthProfileSummary["lastQuota"]> }) {
   return (
     <div className="rounded-[10px] border border-[color:var(--border)] bg-panel-muted p-3">
       <div className="flex items-center justify-between">
@@ -725,7 +781,7 @@ type QuotaSortMetrics = {
   queriedAtMs: number;
 };
 
-function sortCodexAuthProfiles(profiles: CodexAuthProfileRecord[]) {
+function sortCodexAuthProfiles(profiles: CodexAuthProfileSummary[]) {
   return profiles
     .map((profile, index) => ({ profile, index, metrics: getQuotaSortMetrics(profile) }))
     .sort((left, right) => {
@@ -769,7 +825,7 @@ function sortCodexAuthProfiles(profiles: CodexAuthProfileRecord[]) {
     .map((item) => item.profile);
 }
 
-function getQuotaSortMetrics(profile: CodexAuthProfileRecord): QuotaSortMetrics {
+function getQuotaSortMetrics(profile: CodexAuthProfileSummary): QuotaSortMetrics {
   const quota = profile.lastQuota;
   if (!quota) {
     return buildQuotaSortMetrics(3, null, null, profile.lastQuotaCheckedAt ?? profile.updatedAt);
@@ -820,7 +876,7 @@ function buildQuotaSortMetrics(
   };
 }
 
-function getTierRemaining(profile: CodexAuthProfileRecord, tierName: "five_hour" | "seven_day") {
+function getTierRemaining(profile: CodexAuthProfileSummary, tierName: "five_hour" | "seven_day") {
   const tier = profile.lastQuota?.tiers.find((item) => item.name === tierName);
   if (!tier || !Number.isFinite(tier.utilization)) {
     return null;
@@ -828,7 +884,7 @@ function getTierRemaining(profile: CodexAuthProfileRecord, tierName: "five_hour"
   return Math.max(0, Math.min(100, 100 - tier.utilization));
 }
 
-function isWeeklyQuotaExhausted(profile: CodexAuthProfileRecord) {
+function isWeeklyQuotaExhausted(profile: CodexAuthProfileSummary) {
   const sevenDayRemaining = getTierRemaining(profile, "seven_day");
   return sevenDayRemaining !== null && sevenDayRemaining <= 0;
 }
@@ -858,7 +914,7 @@ function buildEmptyDraft(codexHome: string): DraftState {
   };
 }
 
-function profileToDraft(profile: CodexAuthProfileRecord): DraftState {
+function profileToDraft(profile: CodexAuthProfileDetail): DraftState {
   return {
     id: profile.id,
     name: profile.name,

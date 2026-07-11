@@ -58,7 +58,7 @@ pub fn insert_restore_run_plan(
 ) -> AppResult<(String, Vec<RestoreRunTaskRecord>)> {
     let run_id = Uuid::new_v4().to_string();
     let started_at = Utc::now().to_rfc3339();
-    let transaction = connection.transaction().map_err(|error| {
+    let transaction = connection.savepoint().map_err(|error| {
         AppError::new("DB_WRITE_FAILED", "failed to open restore run transaction")
             .with_detail("reason", error.to_string())
     })?;
@@ -250,7 +250,7 @@ pub fn finalize_restore_run(
         _ => "completed_with_warnings",
     };
 
-    let transaction = connection.transaction().map_err(|error| {
+    let transaction = connection.savepoint().map_err(|error| {
         AppError::new(
             "DB_WRITE_FAILED",
             "failed to open restore finalize transaction",
@@ -339,7 +339,7 @@ pub fn recover_interrupted_restore_runs(connection: &mut Connection) -> AppResul
     }
 
     let finished_at = Utc::now().to_rfc3339();
-    let transaction = connection.transaction().map_err(|error| {
+    let transaction = connection.savepoint().map_err(|error| {
         AppError::new(
             "DB_WRITE_FAILED",
             "failed to open interrupted restore recovery transaction",
@@ -449,7 +449,7 @@ pub fn insert_restore_dry_run(
         "completed"
     };
 
-    let transaction = connection.transaction().map_err(|error| {
+    let transaction = connection.savepoint().map_err(|error| {
         AppError::new("DB_WRITE_FAILED", "failed to open restore run transaction")
             .with_detail("reason", error.to_string())
     })?;

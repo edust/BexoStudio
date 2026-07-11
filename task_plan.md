@@ -2027,3 +2027,59 @@ ativeToolbarActive 时才隐藏 WebView 主行，避免多次截图后工具整�
   - `cargo test --manifest-path "src-tauri/Cargo.toml" --lib --no-run`
   - `npm run web:build`
 - 状态：代码实现与自动验证已完成；真实导入、切换 live 文件和非过期 OAuth 额度查询仍需桌面手工回归。
+## 2026-07-10 Windows 开机启动可靠性修复
+
+- 状态：实现完成，验证与交付收尾中。
+- 高可信根因：生产日志插件额外使用 `current_dir()/runtime-logs`；Windows HKCU Run 登录启动不保证工作目录可写，该目录创建失败会在应用 setup、托盘与启动诊断之前终止插件初始化。现有证据已确认 Windows Shell 执行过 Run，且此失败路径与无日志/无持久进程现象完全吻合，但未直接捕获已退出进程的 CWD 或原始插件错误。
+- 实施：生产日志仅使用 Tauri `LogDir`；调试日志从可执行文件路径反推仓库；Windows 自启动收敛为单一 Rust 注册表适配器，增加幂等比对、写后读回、原值快照回滚、安全解码与偏好更新串行化；单实例插件调整为首个插件。
+- 数据/API：无数据库、Redis、前端 IPC 或环境变量变更；现有 `AppPreferences.startup` 合同保持兼容。
+- 验证：开发/发布 `cargo check`、测试目标编译、`npm run web:build` 和 `npm run desktop:build:debug` 已通过；测试进程实际运行受本机既有 `0xc0000139 (STATUS_ENTRYPOINT_NOT_FOUND)` 装载错误阻断，详见本次交付记录。
+- 详细计划与人工验证：`scripts/work/2026-07-10-windows-auto-start/`。
+
+## 2026-07-10 全项目审查问题全量修复与二次审查
+
+- 目标：修复本轮审查确认的 2 个高严重度、9 个中严重度问题，完成后重新独立 review 全项目。
+- 优先级：Native owner-thread 与 DB 确定事务终态优先；随后 Preferences/Hotkey、Codex Auth、Restore/watcher/listener、Tauri 权限、Screenshot 结构与测试。
+- 数据/API：新增 Preferences patch、Hotkey health/retry、Codex Auth summary/detail 合同；当前计划不新增 DB schema 或依赖。
+- 可靠性：所有 owner-thread/DB 请求 bounded；非幂等写不自动重试；失败必须进入确定终态并可见。
+- 详细蓝图与验证：`scripts/work/2026-07-10-full-review-remediation/`。
+- 状态：实现、验证与二次独立 review 已完成；原 2 高 + 9 中全部关闭，二次发现也已修复。
+- 二次新增合同：`reorder_workspaces` / `reorder_launch_tasks` 单事务批量排序；Tauri 64 项 command manifest/handler/permission 一致；生产 CSP 与 devCsp 分离。
+- 验证：前端 11/11、TypeScript/Vite build、Rust fmt/release/all-targets no-run/Clippy、Tauri debug no-bundle build 全部通过；Rust 测试执行仍受本机 `0xc0000139` 限制。
+
+## 2026-07-10 常用 Prompts 一级模块
+
+- 目标：新增可新增、编辑、删除、搜索、排序和一键复制的本地 Prompts 模块，复制成功后提供应用内 Toast。
+- 数据/API：新增 SQLite `prompts` 表与 `list/upsert/delete/reorder_prompts` 命令；正文原样保存，排序为完整集合单事务。
+- UI：一级导航 + 320px Prompt 列表 + 右侧编辑器；覆盖窗口化列表、拖拽/键盘排序、脏状态保护、复制与删除反馈。
+- 质量门禁：每个 STEP 执行实现 → Review → 补缺 → 再 Review，最终再做运营级完整复盘。
+- 详细计划：`scripts/work/2026-07-10-prompt-library/`。
+- 状态：实现、逐 STEP Review、补缺循环、全量验证与最终二次 Review 已完成；无未关闭高/中严重度问题。
+- 验证：19/19 前端测试、web production build、Rust fmt/release/all-targets no-run/Clippy、Tauri debug no-bundle 和亮/暗最小窗口视觉检查通过。
+- STEP 5 实机回归：修复长 Prompt 简介因 `block` 覆盖 `line-clamp-2` 而穿透固定列表项的问题；采用简介/内容区/条目三层裁剪，并保持 78px 条目 + 4px 间距 = 82px 虚拟行高。
+- STEP 5 验证：20/20 前端测试、web production build、Tauri debug no-bundle、编译 CSS/Prompt chunk 检查、亮/暗长文本截图和最终差异 Review 全部通过；无未关闭遗留。
+- STEP 6：Prompt item 对齐 WORKBENCH 卡片骨架；常规排序复用 stable-ID Motion Reorder、layoutScroll、shared spring 与 drag-end persistence，长列表保留虚拟化回退并增加 layout 过渡。
+- STEP 6 验证：20/20 前端测试、web production build、Tauri debug no-bundle、亮暗视觉、编译产物和最终 Review 全部通过；无未关闭遗留。
+- STEP 7：修复暗色 Prompt hover 误用亮色背景；完整复用 WORKBENCH 的 themeMode 条件，暗色为 `#2a2d2e / #3c3c3c`，亮色为 `#f8fafc / #d9e2ec`。
+- STEP 7 验证：20/20 前端测试、web production build、编译 CSS/Prompt chunk、Rust release check 与 release desktop binary build 通过；当前运行的用户 debug 进程导致 debug exe 无法覆盖，未擅自终止。
+
+## 2026-07-10 Prompt 全局热键快速粘贴
+
+- 目标：增加 5 个可配置的 Prompt 全局快速粘贴槽位，默认 `Ctrl+Alt+Shift+1` 至 `Ctrl+Alt+Shift+5`，在后台/托盘状态下把绑定正文发送到当前光标处。
+- 架构：复用现有 Preferences、HotkeyService 和 Prompt SQLite；绑定保存稳定 Prompt ID，Windows 剪贴板和 `SendInput` 由 Rust 执行。
+- 可靠性：原子热键更新与回滚、有界剪贴板重试、触发串行化、缺失 Prompt/权限隔离/输入注入失败可见。
+- UI：Settings / Hotkeys 新增五槽位紧凑配置区，Prompt 列表显示绑定徽标并保持现有 WORKBENCH style。
+- 质量门禁：实现后进入专项 Review；菜单、主题、异常路径或运营级缺口未关闭时继续补缺和复测。
+- 详细计划：`scripts/work/2026-07-10-prompt-quick-paste-hotkeys/`。
+- 状态：实现、自动验证、亮/暗截图 Review、运行链路复盘与补缺循环全部完成；无未关闭的本轮高/中严重度问题。
+- 验证：前端 25/25、web production build、Rust fmt/release check/all-targets no-run、Tauri debug no-bundle build通过；严格全仓 Clippy 仍被 56/57 条既有跨模块 lint 阻断，本轮新增 adapter/service无报告项。
+- 视觉证据：`scripts/work/2026-07-10-prompt-quick-paste-hotkeys/audit/03-settings-hotkeys-refined-accepted.png`、`04-settings-hotkeys-dark.png`。
+
+## 2026-07-11 UI 缩放与布局回归修复
+
+- 目标：修复 WORKBENCH、资源浏览器、终端命令组和 Prompts 同时出现的文字过小、控件拥挤、换行与图标错位。
+- 原则：先用 Git、全局样式、theme、WebView zoom/DPI 和同尺寸截图建立根因证据，再做最小修复。
+- 详细计划：`scripts/work/2026-07-11-ui-scale-layout-regression/`。
+- 状态：修复、production WebView 亮暗视觉验收、编辑态交互验收与最终 Review 均已完成，无未关闭高/中严重度遗留。
+- 根因与修复：Tauri production 为静态 style 注入 CSP nonce 后，无 nonce 的 Ant CSS-in-JS、Icons 与 Sonner runtime style 虽存在于 DOM 但 `sheet === null`；现由静态 nonce 锚点、加载前 style nonce bridge 和 Ant `ConfigProvider.csp` 完整传递，不放宽 CSP。
+- 验证：前端 27/27、production web build、Rust fmt/release/all-targets no-run、Tauri production debug no-bundle、亮暗 WORKBENCH/Prompts 截图和 Prompt 校验 Toast 交互通过。

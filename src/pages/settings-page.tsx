@@ -29,6 +29,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { toast } from "sonner";
 
+import { PromptQuickPasteSettings } from "@/features/settings/prompt-quick-paste-settings";
+import { useHotkeyRecorder } from "@/features/settings/use-hotkey-recorder";
 import {
   CommandClientError,
   detectEditorsFromPath,
@@ -52,17 +54,23 @@ import {
   codexHomeDirectoryQueryKey,
   getAppPreferences,
   getCodexHomeDirectory,
+  getHotkeyHealth,
+  hotkeyHealthQueryKey,
+  retryHotkeyRegistration,
   updateAppPreferences,
 } from "@/queries/preferences";
+import { listPrompts, promptsQueryKey } from "@/queries/prompts";
 import type {
   AdapterAvailability,
   AppPreferences,
+  AppPreferencesPatch,
   CodexAuthPreferences,
   CodexAuthProxyMode,
   CodexAuthProxyPreferences,
   CodexHistoryViewPreferences,
   CustomEditorRecord,
   EditorPathDetectionResult,
+  PromptQuickPasteHotkeySlot,
   TerminalCommandShell,
   TerminalCommandTemplateRecord,
 } from "@/types/backend";
@@ -93,21 +101,6 @@ const TERMINAL_COMMAND_SHELL_OPTIONS: Array<{
   { label: "PowerShell 7", value: "powershell7" },
   { label: "cmd.exe", value: "cmd" },
 ];
-const HOTKEY_MODIFIER_TOKENS = new Set([
-  "Ctrl",
-  "Alt",
-  "Shift",
-  "Super",
-  "LCtrl",
-  "RCtrl",
-  "LAlt",
-  "RAlt",
-  "LWin",
-  "RWin",
-  "LShift",
-  "RShift",
-]);
-
 export default function SettingsPage() {
   const { section } = useParams<{ section?: string }>();
   const activeSection: SettingsSection = section === "hotkeys" ? "hotkeys" : "general";
@@ -158,14 +151,38 @@ export default function SettingsPage() {
     enabled: desktopRuntimeAvailable,
     staleTime: 30_000,
   });
+  const hotkeyHealthQuery = useQuery({
+    queryKey: hotkeyHealthQueryKey,
+    queryFn: getHotkeyHealth,
+    enabled: desktopRuntimeAvailable,
+    staleTime: 10_000,
+  });
+  const promptsQuery = useQuery({
+    queryKey: promptsQueryKey,
+    queryFn: listPrompts,
+    enabled: desktopRuntimeAvailable && activeSection === "hotkeys",
+    staleTime: 10_000,
+  });
   const updatePreferencesMutation = useMutation({
     mutationFn: updateAppPreferences,
     onSuccess: (preferences) => {
       queryClient.setQueryData(appPreferencesQueryKey, preferences);
+      void queryClient.invalidateQueries({ queryKey: hotkeyHealthQueryKey });
     },
   });
   const detectEditorsMutation = useMutation({
     mutationFn: detectEditorsFromPath,
+  });
+  const retryHotkeyMutation = useMutation({
+    mutationFn: retryHotkeyRegistration,
+    onSuccess: (health) => {
+      queryClient.setQueryData(hotkeyHealthQueryKey, health);
+      toast.success("全局热键已重新注册");
+    },
+    onError: (error) => {
+      toast.error(formatHotkeyErrorSummary(getErrorSummary(error)));
+      void hotkeyHealthQuery.refetch();
+    },
   });
 
   const resolvedPreferences = preferencesQuery.data ?? defaultAppPreferences;
@@ -192,6 +209,11 @@ export default function SettingsPage() {
   const screenshotCaptureHotkey =
     resolvedPreferences.hotkey.screenshotCapture?.trim() || DEFAULT_SCREENSHOT_CAPTURE_HOTKEY;
   const screenshotHotkeyUsesCtrlAlt = isRiskyCtrlAltHotkey(screenshotCaptureHotkey);
+  const promptQuickPasteSlots = resolvedPreferences.hotkey.promptQuickPasteSlots;
+  const registeredPromptQuickPasteCount =
+    hotkeyHealthQuery.data?.registeredBindings.filter((binding) =>
+      binding.action.startsWith("prompt_quick_paste_"),
+    ).length ?? 0;
   const configuredEditorCount = Number(Boolean(vscodePath)) + Number(Boolean(jetbrainsPath));
   const codexHomePath = codexHomeQuery.data?.path?.trim() ?? "";
   const codexHomeExists = codexHomeQuery.data?.exists ?? false;
@@ -222,7 +244,7 @@ export default function SettingsPage() {
   const settingsPageLoading =
     activeSection === "general"
       ? preferencesQuery.isLoading || codexHomeQuery.isLoading
-      : preferencesQuery.isLoading;
+      : preferencesQuery.isLoading || hotkeyHealthQuery.isLoading;
   const hotkeyActionsDisabled =
     !desktopRuntimeAvailable || preferencesQuery.isError || updatePreferencesMutation.isPending;
   const preferenceActionsDisabled =
@@ -318,8 +340,8 @@ export default function SettingsPage() {
     setEditorInlineError(null);
   }
 
-  async function persistPreferences(nextPreferences: AppPreferences) {
-    return updatePreferencesMutation.mutateAsync(nextPreferences);
+  async function persistPreferences(patch: AppPreferencesPatch) {
+    return updatePreferencesMutation.mutateAsync(patch);
   }
 
   async function handleToggleStartupSetting(
@@ -349,7 +371,7 @@ export default function SettingsPage() {
         },
       };
 
-      await persistPreferences(nextPreferences);
+      await persistPreferences({ startup: nextPreferences.startup });
       toast.success(successMessage);
     } catch (error) {
       const summary = getErrorSummary(error);
@@ -362,7 +384,6 @@ export default function SettingsPage() {
     nextTemplates: TerminalCommandTemplateRecord[],
   ) {
     return persistPreferences({
-      ...resolvedPreferences,
       terminal: {
         ...resolvedPreferences.terminal,
         commandTemplates: assignTerminalCommandTemplateSortOrder(nextTemplates),
@@ -445,7 +466,7 @@ export default function SettingsPage() {
         },
       };
 
-      await persistPreferences(nextPreferences);
+      await persistPreferences({ ide: nextPreferences.ide });
       toast.success(
         editorKey === "vscode" ? "VS Code 路径已保存" : "JetBrains IDE 路径已保存",
       );
@@ -484,7 +505,7 @@ export default function SettingsPage() {
         },
       };
 
-      await persistPreferences(nextPreferences);
+      await persistPreferences({ ide: nextPreferences.ide });
       setEditorDraftPath(editorKey, "");
       toast.success(
         editorKey === "vscode"
@@ -604,7 +625,6 @@ export default function SettingsPage() {
         queryClient.getQueryData<AppPreferences>(appPreferencesQueryKey) ??
         resolvedPreferences;
       await persistPreferences({
-        ...currentPreferences,
         ide: {
           ...currentPreferences.ide,
           customEditors: normalizedEditors,
@@ -648,7 +668,6 @@ export default function SettingsPage() {
 
       if (shouldPersist) {
         await persistPreferences({
-          ...currentPreferences,
           ide: {
             ...currentPreferences.ide,
             vscodePath: nextVscodePath,
@@ -706,7 +725,6 @@ export default function SettingsPage() {
       }
 
       await persistPreferences({
-        ...resolvedPreferences,
         terminal: {
           ...resolvedPreferences.terminal,
           windowsTerminalPath: normalizedPath,
@@ -733,7 +751,6 @@ export default function SettingsPage() {
 
     try {
       await persistPreferences({
-        ...resolvedPreferences,
         terminal: {
           ...resolvedPreferences.terminal,
           commandShell: value,
@@ -799,7 +816,6 @@ export default function SettingsPage() {
           queryClient.getQueryData<AppPreferences>(appPreferencesQueryKey) ??
           resolvedPreferences;
         await persistPreferences({
-          ...currentPreferences,
           hotkey: {
             ...currentPreferences.hotkey,
             screenshotCapture: normalizedShortcut,
@@ -855,6 +871,27 @@ export default function SettingsPage() {
     await applyRecordedScreenshotHotkey(DEFAULT_SCREENSHOT_CAPTURE_HOTKEY);
   }
 
+  async function handleSavePromptQuickPasteSlots(slots: PromptQuickPasteHotkeySlot[]) {
+    if (hotkeyActionsDisabled) {
+      return;
+    }
+    setHotkeyInlineError(null);
+    try {
+      const currentPreferences =
+        queryClient.getQueryData<AppPreferences>(appPreferencesQueryKey) ?? resolvedPreferences;
+      await persistPreferences({
+        hotkey: {
+          ...currentPreferences.hotkey,
+          promptQuickPasteSlots: slots,
+        },
+      });
+    } catch (error) {
+      const message = formatHotkeyErrorSummary(getErrorSummary(error));
+      setHotkeyInlineError(message);
+      throw error;
+    }
+  }
+
   async function handleSaveCodexHistoryFontFamily(
     nextValue = codexHistoryFontFamilyDraft,
   ) {
@@ -888,7 +925,6 @@ export default function SettingsPage() {
         queryClient.getQueryData<AppPreferences>(appPreferencesQueryKey) ??
         resolvedPreferences;
       await persistPreferences({
-        ...currentPreferences,
         codexHistory: {
           ...resolveCodexHistoryPreferences(currentPreferences),
           messageFontFamily: normalizedFontFamily,
@@ -938,7 +974,6 @@ export default function SettingsPage() {
         queryClient.getQueryData<AppPreferences>(appPreferencesQueryKey) ??
         resolvedPreferences;
       await persistPreferences({
-        ...currentPreferences,
         codexHistory: {
           ...resolveCodexHistoryPreferences(currentPreferences),
           messageFontSize: nextFontSize,
@@ -984,7 +1019,6 @@ export default function SettingsPage() {
         queryClient.getQueryData<AppPreferences>(appPreferencesQueryKey) ??
         resolvedPreferences;
       await persistPreferences({
-        ...currentPreferences,
         codexAuth: {
           ...resolveCodexAuthPreferences(currentPreferences),
           quotaRefreshIntervalSeconds: nextIntervalSeconds,
@@ -1022,7 +1056,6 @@ export default function SettingsPage() {
         queryClient.getQueryData<AppPreferences>(appPreferencesQueryKey) ??
         resolvedPreferences;
       await persistPreferences({
-        ...currentPreferences,
         codexAuth: {
           ...resolveCodexAuthPreferences(currentPreferences),
           proxy: nextProxy,
@@ -1078,7 +1111,6 @@ export default function SettingsPage() {
         queryClient.getQueryData<AppPreferences>(appPreferencesQueryKey) ??
         resolvedPreferences;
       await persistPreferences({
-        ...currentPreferences,
         codexAuth: {
           ...resolveCodexAuthPreferences(currentPreferences),
           proxy: {
@@ -1096,98 +1128,19 @@ export default function SettingsPage() {
     }
   }
 
-  useEffect(() => {
-    if (hotkeyRecorderStatus !== "recording") {
-      return;
-    }
-
-    const activeTokens = new Set<string>();
-    const seenTokens = new Set<string>();
-    let ignoredUnsupportedKey = false;
-
-    const finishRecording = (combo: string) => {
-      if (!combo) {
-        return;
-      }
-
-      const tokens = combo.split("+").filter(Boolean);
-      if (!tokens.some((token) => !isHotkeyModifierToken(token))) {
-        setHotkeyRecorderError(
-          `截图热键至少包含一个非修饰键，建议使用默认 ${DEFAULT_SCREENSHOT_CAPTURE_HOTKEY}。`,
-        );
-        setHotkeyRecorderStatus("error");
-        return;
-      }
-
-      void applyRecordedScreenshotHotkey(combo);
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.repeat) {
-        return;
-      }
-
-      if (event.code === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        cancelScreenshotHotkeyRecording();
-        return;
-      }
-
-      const token = keyboardEventToHotkeyToken(event);
-      if (!token) {
-        ignoredUnsupportedKey = true;
-        setHotkeyRecorderError(
-          `不支持的按键：${event.code}（支持 A-Z、0-9、F1-F24、Space/Tab/Enter/Backspace/Delete 与左右修饰键）。`,
-        );
-        return;
-      }
-
-      event.preventDefault();
-      event.stopPropagation();
+  useHotkeyRecorder({
+    active: hotkeyRecorderStatus === "recording",
+    onCancel: cancelScreenshotHotkeyRecording,
+    onComplete: applyRecordedScreenshotHotkey,
+    onError: (message) => {
+      setHotkeyRecorderError(message);
+      setHotkeyRecorderStatus("error");
+    },
+    onPreviewChange: (preview) => {
       setHotkeyRecorderError(null);
-      activeTokens.add(token);
-      seenTokens.add(token);
-      setHotkeyRecorderPreview(formatHotkeyTokens(activeTokens));
-
-      if (!isHotkeyModifierToken(token)) {
-        finishRecording(formatHotkeyTokens(activeTokens));
-      }
-    };
-
-    const handleKeyUp = (event: KeyboardEvent) => {
-      const token = keyboardEventToHotkeyToken(event);
-      if (!token) {
-        return;
-      }
-
-      event.preventDefault();
-      event.stopPropagation();
-
-      activeTokens.delete(token);
-      setHotkeyRecorderPreview(formatHotkeyTokens(activeTokens));
-
-      if (activeTokens.size !== 0 || seenTokens.size === 0) {
-        return;
-      }
-
-      if (ignoredUnsupportedKey) {
-        setHotkeyRecorderError("包含不支持的按键，请重新录制。");
-        setHotkeyRecorderStatus("error");
-        return;
-      }
-
-      finishRecording(formatHotkeyTokens(seenTokens));
-    };
-
-    window.addEventListener("keydown", handleKeyDown, true);
-    window.addEventListener("keyup", handleKeyUp, true);
-
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown, true);
-      window.removeEventListener("keyup", handleKeyUp, true);
-    };
-  }, [applyRecordedScreenshotHotkey, hotkeyRecorderStatus]);
+      setHotkeyRecorderPreview(preview);
+    },
+  });
 
   async function handleSaveTemplate(values: TerminalCommandTemplateFormValues) {
     setTemplateInlineError(null);
@@ -1799,6 +1752,45 @@ export default function SettingsPage() {
               />
             ) : null}
 
+            {hotkeyHealthQuery.data?.status === "degraded" ? (
+              <Alert
+                action={
+                  <Button
+                    loading={retryHotkeyMutation.isPending}
+                    onClick={() => retryHotkeyMutation.mutate()}
+                    size="small"
+                  >
+                    重试注册
+                  </Button>
+                }
+                className="mb-4"
+                description={
+                  hotkeyHealthQuery.data.lastError?.message ??
+                  "当前持久化快捷键未能注册，可能与其他程序或系统热键冲突。"
+                }
+                message="全局热键当前不可用"
+                showIcon
+                type="warning"
+              />
+            ) : hotkeyHealthQuery.isError ? (
+              <Alert
+                action={
+                  <Button
+                    loading={hotkeyHealthQuery.isFetching}
+                    onClick={() => void hotkeyHealthQuery.refetch()}
+                    size="small"
+                  >
+                    重新检测
+                  </Button>
+                }
+                className="mb-4"
+                description={getErrorSummary(hotkeyHealthQuery.error).message}
+                message="无法读取全局热键状态"
+                showIcon
+                type="error"
+              />
+            ) : null}
+
             {desktopRuntimeAvailable && settingsPageLoading ? (
               <div className="flex min-h-0 flex-1 items-center justify-center">
                 <Spin size="small" />
@@ -1827,6 +1819,11 @@ export default function SettingsPage() {
                             : "录制中：请按下新的组合键，按 Esc 取消。"
                           : `默认 ${DEFAULT_SCREENSHOT_CAPTURE_HOTKEY}，保存后立即生效。截图热键必须包含一个非修饰键，支持左右修饰键组合。`}
                       </Typography.Text>
+                      {hotkeyHealthQuery.data?.status === "ready" ? (
+                        <Typography.Text className="mt-1 block text-[11px] text-[#16845b]">
+                          运行状态：已注册 {hotkeyHealthQuery.data.registeredBindings.length} 个全局热键
+                        </Typography.Text>
+                      ) : null}
                     </div>
 
                     <div className="flex flex-wrap justify-end gap-2">
@@ -1873,6 +1870,20 @@ export default function SettingsPage() {
                     </div>
                   ) : null}
                 </div>
+
+                <PromptQuickPasteSettings
+                  disabled={hotkeyActionsDisabled}
+                  loadingPrompts={promptsQuery.isLoading || promptsQuery.isFetching}
+                  onSave={handleSavePromptQuickPasteSlots}
+                  promptLoadError={
+                    promptsQuery.isError
+                      ? getErrorSummary(promptsQuery.error).message
+                      : null
+                  }
+                  prompts={promptsQuery.data ?? []}
+                  registeredCount={registeredPromptQuickPasteCount}
+                  slots={promptQuickPasteSlots}
+                />
 
                 <div className="rounded-[0] border border-[#eef2f6] bg-white px-4 py-4">
                   <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
@@ -2607,106 +2618,6 @@ function containsControlCharacter(value: string) {
   return /[\u0000-\u001f\u007f]/.test(value);
 }
 
-function keyboardEventToHotkeyToken(event: KeyboardEvent): string | null {
-  switch (event.code) {
-    case "ControlLeft":
-      return "LCtrl";
-    case "ControlRight":
-      return "RCtrl";
-    case "AltLeft":
-      return "LAlt";
-    case "AltRight":
-      return "RAlt";
-    case "ShiftLeft":
-      return "LShift";
-    case "ShiftRight":
-      return "RShift";
-    case "MetaLeft":
-      return "LWin";
-    case "MetaRight":
-      return "RWin";
-    case "Space":
-      return "Space";
-    case "Tab":
-      return "Tab";
-    case "Enter":
-      return "Enter";
-    case "Backspace":
-      return "Backspace";
-    case "Delete":
-      return "Delete";
-    default:
-      break;
-  }
-
-  if (event.code.startsWith("Key") && event.code.length === 4) {
-    return event.code.slice(3);
-  }
-
-  if (event.code.startsWith("Digit") && event.code.length === 6) {
-    return event.code.slice(5);
-  }
-
-  const functionKeyMatch = event.code.match(/^F([1-9]|1[0-9]|2[0-4])$/);
-  if (functionKeyMatch) {
-    return functionKeyMatch[0];
-  }
-
-  return null;
-}
-
-function hotkeyTokenOrder(token: string) {
-  const fixedOrder: Record<string, number> = {
-    Ctrl: 10,
-    LCtrl: 11,
-    RCtrl: 12,
-    Alt: 20,
-    LAlt: 21,
-    RAlt: 22,
-    Shift: 30,
-    LShift: 31,
-    RShift: 32,
-    Super: 40,
-    LWin: 41,
-    RWin: 42,
-    Space: 100,
-    Tab: 101,
-    Enter: 102,
-    Backspace: 103,
-    Delete: 104,
-  };
-
-  const fixed = fixedOrder[token];
-  if (typeof fixed === "number") {
-    return fixed;
-  }
-
-  if (/^[A-Z]$/.test(token)) {
-    return 100 + token.charCodeAt(0);
-  }
-
-  if (/^[0-9]$/.test(token)) {
-    return 200 + token.charCodeAt(0);
-  }
-
-  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(token)) {
-    const sequence = Number.parseInt(token.slice(1), 10);
-    return 300 + sequence;
-  }
-
-  return 999;
-}
-
-function formatHotkeyTokens(tokens: Iterable<string>) {
-  return Array.from(new Set(tokens))
-    .sort((left, right) => hotkeyTokenOrder(left) - hotkeyTokenOrder(right))
-    .join("+");
-}
-
-function isHotkeyModifierToken(token: string) {
-  return HOTKEY_MODIFIER_TOKENS.has(token);
-}
-
 function normalizeHotkeyModifierToken(token: string) {
   const normalized = token.trim().toLowerCase();
   switch (normalized) {
@@ -2725,6 +2636,12 @@ function normalizeHotkeyModifierToken(token: string) {
     default:
       return normalized;
   }
+}
+
+function isHotkeyModifierToken(token: string) {
+  return ["ctrl", "alt", "shift", "super", "win"].includes(
+    normalizeHotkeyModifierToken(token),
+  );
 }
 
 function isRiskyCtrlAltHotkey(shortcut: string) {

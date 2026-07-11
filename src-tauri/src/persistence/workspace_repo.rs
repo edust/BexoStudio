@@ -1,13 +1,14 @@
 use std::path::Path;
 
 use chrono::Utc;
-use rusqlite::{params, Connection, Error as SqlError, ErrorCode, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, Error as SqlError, ErrorCode, OptionalExtension};
 use uuid::Uuid;
 
 use crate::{
     domain::{
-        parse_color_or_none, require_non_empty, validate_optional_uuid, DeleteResult,
-        ProjectRecord, UpsertWorkspaceInput, WorkspaceRecord,
+        parse_color_or_none, require_non_empty, validate_optional_uuid, validate_ordered_uuid_list,
+        DeleteResult, ProjectRecord, ReorderWorkspacesInput, UpsertWorkspaceInput, WorkspaceRecord,
+        MAX_REORDER_ITEMS,
     },
     error::{AppError, AppResult},
     persistence::list_all_launch_tasks,
@@ -197,7 +198,7 @@ pub fn upsert_workspace(
     let is_archived = input.is_archived.unwrap_or(false);
     let timestamp = Utc::now().to_rfc3339();
 
-    let transaction = connection.transaction().map_err(|error| {
+    let transaction = connection.savepoint().map_err(|error| {
         AppError::new("DB_WRITE_FAILED", "failed to open workspace transaction")
             .with_detail("reason", error.to_string())
     })?;
@@ -276,6 +277,47 @@ pub fn upsert_workspace(
         })
 }
 
+pub fn reorder_workspaces(
+    connection: &mut Connection,
+    input: ReorderWorkspacesInput,
+) -> AppResult<Vec<WorkspaceRecord>> {
+    let workspace_ids =
+        validate_ordered_uuid_list("workspaceIds", input.workspace_ids, MAX_REORDER_ITEMS)?;
+    let timestamp = Utc::now().to_rfc3339();
+    let transaction = connection.savepoint().map_err(|error| {
+        AppError::new(
+            "DB_WRITE_FAILED",
+            "failed to open workspace reorder transaction",
+        )
+        .with_detail("reason", error.to_string())
+    })?;
+
+    for (index, workspace_id) in workspace_ids.iter().enumerate() {
+        let affected = transaction
+            .execute(
+                "UPDATE workspaces SET sort_order = ?1, updated_at = ?2 WHERE id = ?3",
+                params![index as i64, timestamp, workspace_id],
+            )
+            .map_err(|error| {
+                AppError::new("DB_WRITE_FAILED", "failed to reorder workspaces")
+                    .with_detail("workspaceId", workspace_id.clone())
+                    .with_detail("reason", error.to_string())
+            })?;
+        if affected != 1 {
+            return Err(
+                AppError::new("WORKSPACE_NOT_FOUND", "workspace was not found")
+                    .with_detail("workspaceId", workspace_id.clone()),
+            );
+        }
+    }
+
+    transaction.commit().map_err(|error| {
+        AppError::new("DB_WRITE_FAILED", "failed to commit workspace reorder")
+            .with_detail("reason", error.to_string())
+    })?;
+    list_workspaces(connection)
+}
+
 pub fn delete_workspace(connection: &mut Connection, id: String) -> AppResult<DeleteResult> {
     let id = validate_optional_uuid("id", Some(id))?
         .ok_or_else(|| AppError::validation("id is required"))?;
@@ -328,7 +370,7 @@ pub fn register_workspace_folder(
     let workspace_id = Uuid::new_v4().to_string();
     let project_id = Uuid::new_v4().to_string();
 
-    let transaction = connection.transaction().map_err(|error| {
+    let transaction = connection.savepoint().map_err(|error| {
         AppError::new(
             "DB_WRITE_FAILED",
             "failed to open register workspace transaction",
@@ -424,7 +466,7 @@ pub fn remove_workspace_registration(
     let id = validate_optional_uuid("id", Some(id))?
         .ok_or_else(|| AppError::validation("id is required"))?;
 
-    let transaction = connection.transaction().map_err(|error| {
+    let transaction = connection.savepoint().map_err(|error| {
         AppError::new(
             "DB_WRITE_FAILED",
             "failed to open remove workspace transaction",
@@ -543,8 +585,8 @@ fn derive_workspace_label(path: &str) -> String {
     }
 }
 
-fn allocate_workspace_name(transaction: &Transaction<'_>, base_name: &str) -> AppResult<String> {
-    let mut statement = transaction
+fn allocate_workspace_name(connection: &Connection, base_name: &str) -> AppResult<String> {
+    let mut statement = connection
         .prepare("SELECT name FROM workspaces")
         .map_err(|error| {
             AppError::new("DB_READ_FAILED", "failed to prepare workspace name query")

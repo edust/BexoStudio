@@ -1,11 +1,12 @@
 {
   "name": "bexo-studio",
   "private": true,
-  "version": "0.1.12",
+  "version": "0.1.15",
   "type": "module",
   "scripts": {
     "web:dev": "vite",
     "web:build": "tsc -b && vite build",
+    "web:test": "node --test tests/frontend/*.test.mjs",
     "web:preview": "vite preview",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",

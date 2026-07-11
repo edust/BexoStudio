@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "screenshot-overlay",
+  "description": "Minimal screenshot session and native interaction capability for the overlay window",
+  "windows": ["screenshot_overlay"],
+  "permissions": [
+    "screenshot-overlay-commands",
+    "core:default",
+    "dialog:allow-save",
+    "log:default"
+  ]
+}

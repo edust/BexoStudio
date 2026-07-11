@@ -1,5 +1,44 @@
 # findings
 
+## 2026-07-11 UI 缩放与布局回归
+
+- 用户截图显示异常跨 WORKBENCH、资源浏览器、终端命令组和 Prompts，初始分类为全局/共享层回归，尚未确认根因。
+- 上一轮快速粘贴静默变更按目标仅移除成功 Toast 和成功系统通知；本轮将用实际 Git diff 与构建产物核实是否存在意外波及，不凭变更意图排除关联。
+- 原图显示 Tailwind 自定义壳层仍正常，而 Ant Design Input/Button 盒模型与 clear icon 定位跨页面同时丢失；优先验证生产 CSP 是否拦截 CSS-in-JS style 注入。
+- 当前 CSP 已允许 inline style，源码也无主窗口 zoom/scale；根因尚未成立，下一证据点是运行时 `data-css-hash` 与受影响组件的 computed style/最终 JSX。
+- 当前源码在 Chrome/Vite 与独立 Tauri/WebView2 dev 中均能完整注入 Ant CSS-in-JS；问题现已限定为生产构建/安装版差异或安装版运行时状态。
+- production Tauri 初始 `/history` 样本出现 0px border，但不是与 dev 相同元素，不能据此直接定根因；官方 layer 兼容配置缺失是高可信候选，等待 HOME/Prompts 同元素 production 对照。
+- HOME/Prompts production 同元素已确认 0px/0px/0px/透明/auto，且截图精确复现；根因为 Ant CSS-in-JS 与 Tailwind v4 的 production cascade layer 顺序缺失。
+- 继续审计发现 Ant 元素 hash 与动态 style 规则 hash 匹配且规则未分层；需最终区分“级联覆盖”与“CSP 使动态 style sheet 未激活”，尚不实施修复。
+- 最终区分完成：production Ant style 的 `sheet` 全为 null 且 nonce 为空，确定是 Tauri production nonce CSP 拦截 Ant runtime styles；不是 cascade layer 覆盖。
+- 现有静态 overlay style 已获 Tauri production nonce 且生效；Ant ConfigProvider 支持原生 csp nonce。Ant Icons 与 Sonner runtime style 也被同一问题影响，修复/验证范围需覆盖三者。
+
+## 2026-07-10 常用 Prompts 模块
+
+- 现有剪贴板 helper 会 trim 后复制，无法满足 Prompt 正文原样复制；本轮将改为仅 trim 判空、复制原始内容。
+- Prompt 模块复用现有 SQLite 确定事务、CommandResponse、批量排序和 Tauri 命令权限一致性门禁。
+- 页面采用 Codex Auth 同类的“页面自持有列表 + 编辑器”结构，但从起点拆分 feature components，避免新巨石页面。
+- 不新增依赖；长列表用项目内固定行高窗口化，排序期间临时渲染完整列表保证拖拽命中。
+- 最终结果：完整集合事务排序、原样正文复制、脏状态保护、窗口化列表、双端输入校验和 main-window-only 权限均闭环；二次 Review 无未关闭高/中严重度发现。
+
+## 2026-07-10 Prompt 全局热键快速粘贴
+
+- 已确认项目存在 `tauri-plugin-global-shortcut`、Windows 高级热键 hook、热键健康状态/回滚、`arboard`、系统通知和 Prompt SQLite 稳定 ID，无需引入平行基础设施。
+- 用户锁定默认组合为 `Ctrl+Alt+Shift+1` 至 `Ctrl+Alt+Shift+5`；虽然 `Ctrl+Alt` 对部分 AltGr 布局存在风险，但必须尊重该产品决策并保留可配置和冲突反馈。
+- 绑定必须存 Prompt ID，不能按列表实时位置解析，否则拖拽排序会静默改变热键语义。
+- 全局触发时修饰键可能仍处于按下态；粘贴动作必须在 Released 阶段或确认修饰键释放后执行，避免发送成 `Ctrl+Shift+V`。
+- 第三方应用是否接受粘贴无法可靠确认；按最新交互要求，成功结果完全静默，仅失败时发送通知与错误 Toast。
+- `ui-ux-pro-max` 安装目录和仓库均缺失 `search.py`，本轮改为复用既有 Settings 视觉系统并执行技能内置检查表。
+- 最终实现采用 `PromptQuickPasteService -> PromptPasteAdapter -> SystemPromptPasteAdapter`，Windows 剪贴板与输入注入不泄漏到前端或业务编排层。
+- 运行 Review 已关闭 SendInput 部分发送残留按键、修饰键超时后的剪贴板部分副作用、非 Windows 失败副作用和前端通知初始化竞态。
+- `global-hotkey 0.7.0` Windows 源码确认 Released 事件真实存在；Prompt action 在 Released 处理，adapter 再等待全部修饰键释放。
+- Settings 亮/暗 1440×1000 截图通过；动态 Prompt 徽标因 headless web 无 Tauri SQLite 数据，保留为桌面人工验收项。
+- 实机回归发现 Prompt 简介同时使用 `line-clamp-2` 与 `block`；生产 CSS 中后声明的 `.block { display:block }` 覆盖了两行截断所需的 `display:-webkit-box`，且外框没有裁剪边界，因此长正文穿透相邻条目。
+- 修复后简介使用有效两行截断、34px 最大高度和长串换行，内容区与 78px 外框均裁剪；82px 虚拟行高保持不变。亮/暗主题的中文、无空格长串、多行内容视觉回归均无重叠。
+- STEP 6 对照确认 WORKBENCH 顺滑排序来自 stable-ID Motion Reorder、layoutScroll、shared spring 和 drag-end persistence；Prompts 原自研 elementFromPoint 指针排序缺少 layout 动画。
+- Prompts 已对齐 WORKBENCH 卡片状态面与 Motion 主路径；80 条以内完整 Motion，超过阈值保留 windowing + pointer fallback 并加入 layout 过渡。排序增加 optimistic query update 和失败回滚。
+- STEP 7 实机回归确认上一轮漏掉 WORKBENCH 的显式暗色 hover 分支；Prompt 已改为共享 themeMode 条件，暗色 hover 精确使用 `#2a2d2e / #3c3c3c`，不再出现亮色白块。
+
 ## 2026-05-06 Terminal Shell Preference
 - 当前 Home 终端命令组实际启动链路为 `wt.exe new-tab ... cmd.exe /D /K <commandLine>`，因此用户按 `Ctrl+C` 后回到的是 cmd 会话，而不是 PowerShell 7。
 - `cmd.exe /K` 的启动命令不会按用户预期进入 PowerShell/PSReadLine 历史；这解释了停止 Codex 后上翻没有熟悉历史的体验。
@@ -729,3 +768,34 @@ ativeToolbarActive（native 已确认 visible 且 session 有效）时，才隐�
 - Bexo 的边界必须保持 Rust owned：授权文件读写、TOML/JSON 校验、quota HTTP 请求和 rollback 都在 Rust 侧完成，前端只提交表单和展示结果。
 - Fresh Codex installs may not yet have `config.toml`; importing such configs should save empty TOML and later switch 时创建空 `config.toml`，否则用户无法导入只有 `auth.json` 的真实环境。
 - `reqwest 0.13.x` 的 TLS feature 是 `rustls`，不是 `rustls-tls`；新增依赖时已用 `cargo info reqwest@0.13.2` 校验。
+## 2026-07-10 Windows 开机启动静默退出高可信根因
+
+- 本机偏好 `launchAtLogin=true`、Run 键命令和 `StartupApproved` 启用值均正确，安装 exe 也存在。
+- `Microsoft-Windows-Shell-Core/Operational` 事件 9707/9708 明确记录 Explorer 在登录后执行了 `bexo-studio.exe --autostart`；因此故障不是 Windows 未触发 Run，而是进程启动后未存活。
+- 旧日志初始化把 `current_dir()/runtime-logs` 注册为必需写入目标；`tauri-plugin-log 2.8.0` 初始化 Folder target 时会执行 `create_dir_all` 并传播失败。该动作发生在应用 setup、托盘和启动日志之前，与“无应用日志、无窗口、无持久进程”的机器差异形成完整解释链。
+- 证据边界：没有直接捕获已退出 PID 的 CWD 或原始插件错误，因此将其定级为高可信根因而非已动态复现的唯一根因；修复同时强化 Run 注册、校验与回滚，以覆盖独立的启动项可靠性风险。
+- 如果不同 Windows 登录环境提供了不同的启动工作目录或写权限，旧实现即可表现为“新系统可启动、当前系统静默退出”；无论本机已退出进程当时的实际 CWD 为何，生产日志目标都不应依赖工作目录。
+- Windows 自启动此前还存在插件与自有注册表代码双写、无条件重写 Run、主动创建 `StartupApproved`、无写后校验/事务回滚等可靠性风险，已一并收敛。
+
+## 2026-07-10 全项目审查修复输入
+
+- 已确认 2 个高风险：Native Preview/Interaction 通过 `usize` 绕过线程亲和；DB timeout 后 detached blocking write 仍可能提交。
+- 已确认 9 个中风险：Hotkey health、Screenshot listener/结构、watch fallback、Tauri 权限、Codex Auth 事务/DTO、Preferences lost update、Restore cleanup、过期 example。
+- 本轮不直接沿用旧结论作为完成证明；每项修复后必须从最终源码和验证结果重新关闭。
+- 详细证据与实施记录：`scripts/work/2026-07-10-full-review-remediation/`。
+
+## 2026-07-10 全量修复后二次 review 结论
+
+- 原 2 个高风险、9 个中风险均已从最终源码关闭。
+- 二次 review 额外发现并修复：DB read late-success、owner thread 缺 Win32 message pump、Auth mutation race/非原子替换、生产 CSP 混入 dev source、custom protocol 绕过窗口 ACL、两类拖拽排序部分提交、taskkill 无 deadline、overlay shortcut/数值容差边界。
+- Workspace/LaunchTask 排序已改为 Rust 单事务批量命令；任一 UUID 重复、缺失或跨 project 时整体回滚。
+- Tauri build manifest、invoke handler、main permission set 均为 64 项且测试锁定；Preview protocol 只接受 `screenshot_overlay` WebView。
+- 本机 Run 值、安装 exe 与 StartupApproved `0x02` 只读复核正常；没有修改注册表。自启动代码修复重点仍是生产日志不依赖登录 CWD、安装路径保护、幂等写后读回与失败回滚。
+- 未发现新的高/中严重度未修复逻辑错误。剩余限制是 Rust 测试宿主 `0xc0000139`、Native/Auth/下次登录需人工动态回归；Overlay 主编排文件和 Ant vendor chunk 属非阻断技术债。
+
+## 2026-07-11 Production Runtime Style CSP Regression
+
+- 用户截图中 Primary Rail、Tailwind panel 边界仍正常，退化集中在 Ant Input/Button/Empty/Icon 与 Sonner，排除了全局 WebView zoom 和本轮“成功提示静默”逻辑。
+- 普通浏览器和 Tauri dev 的动态 stylesheet 正常；production WebView 中匹配 hash 的 `<style>` 文本存在，但全部 `sheet === null` 且无 nonce，证明是 CSP 激活阶段阻断而非 CSS cascade 或组件 style 覆盖。
+- Tauri production 会为静态 style 注入随机 nonce；在 CSP 含 nonce 时，runtime CSS-in-JS 必须继承同页 nonce。正确修复是传递 nonce，而不是关闭 CSP 或继续堆叠覆盖样式。
+- 修复后 HOME/Prompts 的 Ant runtime style 分别 43/43、30/30 激活，全部 head style 33/33 激活，Ant Icons 与 Sonner 也恢复；亮暗主题和 Prompt 编辑/校验 Toast 实机复核无阻断样式。

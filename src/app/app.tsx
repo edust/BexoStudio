@@ -1,7 +1,10 @@
+import { lazy, Suspense } from "react";
+
 import { AppProviders } from "@/app/providers";
-import CodexHistoryWindowPage from "@/pages/codex-history-window-page";
-import ScreenshotOverlayPage from "@/pages/screenshot-overlay-page";
 import { AppRouter } from "@/routes/app-router";
+
+const ScreenshotOverlayPage = lazy(() => import("@/pages/screenshot-overlay-page"));
+const CodexHistoryWindowPage = lazy(() => import("@/pages/codex-history-window-page"));
 
 export function App() {
   const windowSearchParams =
@@ -13,13 +16,23 @@ export function App() {
 
   return (
     <AppProviders>
-      {isScreenshotOverlay ? (
-        <ScreenshotOverlayPage />
-      ) : isCodexHistoryWindow ? (
-        <CodexHistoryWindowPage />
-      ) : (
-        <AppRouter />
-      )}
+      <Suspense fallback={<WindowRouteLoading />}>
+        {isScreenshotOverlay ? (
+          <ScreenshotOverlayPage />
+        ) : isCodexHistoryWindow ? (
+          <CodexHistoryWindowPage />
+        ) : (
+          <AppRouter />
+        )}
+      </Suspense>
     </AppProviders>
+  );
+}
+
+function WindowRouteLoading() {
+  return (
+    <div className="flex h-screen w-screen items-center justify-center bg-[var(--panel)] text-sm text-[var(--muted-foreground)]">
+      正在加载窗口…
+    </div>
   );
 }

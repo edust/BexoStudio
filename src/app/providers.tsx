@@ -5,10 +5,19 @@ import { Toaster, toast } from "sonner";
 import zhCN from "antd/locale/zh_CN";
 
 import { AppErrorBoundary } from "@/app/error-boundary";
-import { hasDesktopRuntime, listenToHotkeyTriggerEvents } from "@/lib/command-client";
+import {
+  getErrorSummary,
+  getHotkeyHealth,
+  hasDesktopRuntime,
+  listenToHotkeyTriggerEvents,
+  listenToPromptQuickPasteResultEvents,
+} from "@/lib/command-client";
 import { bootstrapDesktopRuntime } from "@/lib/tauri-runtime";
 import { createAppQueryClient } from "@/queries/query-client";
 import { useShellStore } from "@/stores/shell-store";
+
+const RUNTIME_STYLE_NONCE_ELEMENT_ID = "bexo-runtime-style-nonce";
+const runtimeStyleNonce = resolveRuntimeStyleNonce();
 
 const lightAppTheme: ThemeConfig = {
   algorithm: [theme.defaultAlgorithm, theme.compactAlgorithm],
@@ -37,6 +46,8 @@ const lightAppTheme: ThemeConfig = {
     motion: false,
   },
 };
+
+let hotkeyHealthWarningShown = false;
 
 const darkAppTheme: ThemeConfig = {
   algorithm: [theme.darkAlgorithm, theme.compactAlgorithm],
@@ -68,6 +79,7 @@ const darkAppTheme: ThemeConfig = {
 
 export function AppProviders({ children }: PropsWithChildren) {
   const [queryClient] = useState(createAppQueryClient);
+  const mainWindowRoute = isMainWindowRoute();
   const themeMode = useShellStore((state) => state.themeMode);
   const appTheme = useMemo<ThemeConfig>(
     () => (themeMode === "dark" ? darkAppTheme : lightAppTheme),
@@ -92,11 +104,43 @@ export function AppProviders({ children }: PropsWithChildren) {
   );
 
   useEffect(() => {
+    if (!mainWindowRoute) {
+      return;
+    }
     void bootstrapDesktopRuntime();
-  }, []);
+  }, [mainWindowRoute]);
 
   useEffect(() => {
-    if (!hasDesktopRuntime()) {
+    if (!mainWindowRoute || !hasDesktopRuntime()) {
+      return;
+    }
+
+    let disposed = false;
+    void getHotkeyHealth()
+      .then((health) => {
+        if (disposed || health.status !== "degraded" || hotkeyHealthWarningShown) {
+          return;
+        }
+        hotkeyHealthWarningShown = true;
+        toast.error("全局热键初始化失败", {
+          description:
+            health.lastError?.message ?? "请在设置页检查快捷键冲突并重试注册。",
+          duration: 10_000,
+        });
+      })
+      .catch((error) => {
+        if (!disposed) {
+          console.error("Failed to query hotkey health", getErrorSummary(error));
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [mainWindowRoute]);
+
+  useEffect(() => {
+    if (!mainWindowRoute || !hasDesktopRuntime()) {
       return;
     }
 
@@ -106,7 +150,10 @@ export function AppProviders({ children }: PropsWithChildren) {
     void (async () => {
       try {
         const attached = await listenToHotkeyTriggerEvents((event) => {
-          if (event.action === "screenshot_capture") {
+          if (
+            event.action === "screenshot_capture" ||
+            event.action.startsWith("prompt_quick_paste_")
+          ) {
             return;
           }
           const label = resolveHotkeyActionLabel(event.action);
@@ -132,7 +179,46 @@ export function AppProviders({ children }: PropsWithChildren) {
         unlisten();
       }
     };
-  }, []);
+  }, [mainWindowRoute]);
+
+  useEffect(() => {
+    if (!mainWindowRoute || !hasDesktopRuntime()) {
+      return;
+    }
+
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    void (async () => {
+      try {
+        const attached = await listenToPromptQuickPasteResultEvents((event) => {
+          if (event.status === "sent") {
+            return;
+          }
+
+          const description = `${event.shortcut} · 槽位 ${event.slot}`;
+          const errorMessage = event.error?.message ?? event.message;
+          toast.error("Prompt 快速粘贴失败", {
+            description: `${errorMessage}（${description}）`,
+            duration: 10_000,
+          });
+        });
+
+        if (disposed) {
+          attached();
+          return;
+        }
+        unlisten = attached;
+      } catch (error) {
+        console.error("Failed to listen prompt quick paste result events", error);
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [mainWindowRoute]);
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -194,6 +280,7 @@ export function AppProviders({ children }: PropsWithChildren) {
     <AppErrorBoundary>
       <ConfigProvider
         componentSize="small"
+        csp={runtimeStyleNonce ? { nonce: runtimeStyleNonce } : undefined}
         locale={zhCN}
         renderEmpty={() => <Empty description="暂无内容" image={Empty.PRESENTED_IMAGE_SIMPLE} />}
         theme={appTheme}
@@ -219,6 +306,21 @@ export function AppProviders({ children }: PropsWithChildren) {
   );
 }
 
+function resolveRuntimeStyleNonce() {
+  if (typeof document === "undefined") {
+    return undefined;
+  }
+
+  const nonceAnchor = document.getElementById(RUNTIME_STYLE_NONCE_ELEMENT_ID);
+  const nonce = nonceAnchor instanceof HTMLStyleElement ? (nonceAnchor.nonce ?? "").trim() : "";
+  if (!nonce && import.meta.env.PROD && hasDesktopRuntime()) {
+    console.error(
+      "Tauri production runtime style nonce is unavailable; dynamic component styles may be blocked",
+    );
+  }
+  return nonce || undefined;
+}
+
 function resolveHotkeyActionLabel(action: string) {
   switch (action) {
     case "screenshot_capture":
@@ -230,4 +332,12 @@ function resolveHotkeyActionLabel(action: string) {
     default:
       return "热键";
   }
+}
+
+function isMainWindowRoute() {
+  if (typeof window === "undefined") {
+    return true;
+  }
+  const searchParams = new URLSearchParams(window.location.search);
+  return !searchParams.has("overlay") && !searchParams.has("window");
 }

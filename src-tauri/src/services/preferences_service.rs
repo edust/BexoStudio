@@ -2,7 +2,7 @@ use std::{
     collections::HashSet,
     env, fs,
     path::PathBuf,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, RwLock},
 };
 
 use chrono::Utc;
@@ -14,12 +14,14 @@ use tauri_plugin_store::{Store, StoreExt};
 use crate::{
     adapters::{resolve_configured_executable, IdeAdapter, JetBrainsAdapter, VSCodeAdapter},
     domain::{
-        AppPreferences, CodexAuthPreferences, CodexAuthProxyPreferences,
+        AppPreferences, AppPreferencesPatch, CodexAuthPreferences, CodexAuthProxyPreferences,
         CodexHistoryViewPreferences, EditorPathDetectionResult, HotkeyAction, HotkeyPreferences,
-        TerminalCommandShell, TerminalPreferences, DEFAULT_CODEX_AUTH_PROXY_MODE,
-        DEFAULT_CODEX_AUTH_QUOTA_REFRESH_INTERVAL_SECONDS, DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE,
+        PromptQuickPasteHotkeySlot, TerminalCommandShell, TerminalPreferences,
+        DEFAULT_CODEX_AUTH_PROXY_MODE, DEFAULT_CODEX_AUTH_QUOTA_REFRESH_INTERVAL_SECONDS,
+        DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE, DEFAULT_PROMPT_QUICK_PASTE_HOTKEYS,
         DEFAULT_SCREENSHOT_CAPTURE_HOTKEY, EARLIER_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
         LEGACY_SCREENSHOT_CAPTURE_HOTKEY, PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
+        PROMPT_QUICK_PASTE_SLOT_COUNT,
     },
     error::{AppError, AppResult},
     services::HotkeyService,
@@ -39,12 +41,14 @@ const CODEX_AUTH_MAX_MANUAL_PROXY_URL_LENGTH: usize = 512;
 #[derive(Debug, Clone)]
 pub struct PreferencesService {
     cache: Arc<RwLock<AppPreferences>>,
+    update_lock: Arc<Mutex<()>>,
 }
 
 impl PreferencesService {
     pub fn new() -> Self {
         Self {
             cache: Arc::new(RwLock::new(AppPreferences::default())),
+            update_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -68,30 +72,81 @@ impl PreferencesService {
         &self,
         app: &AppHandle<R>,
         hotkey_service: &HotkeyService,
-        input: AppPreferences,
+        patch: AppPreferencesPatch,
     ) -> AppResult<AppPreferences> {
+        let _update_guard = self.update_lock.lock().map_err(|_| {
+            AppError::new(
+                "PREFERENCES_UPDATE_LOCK_FAILED",
+                "设置更新状态异常，请重启 Bexo Studio 后重试",
+            )
+        })?;
         let previous_preferences = self.get_preferences()?;
-        let validated = validate_preferences(input)?;
-        sync_autostart_launch_at_login(app, validated.startup.launch_at_login)?;
+        let validated =
+            validate_preferences(apply_preferences_patch(previous_preferences.clone(), patch))?;
+        let launch_at_login_changed =
+            validated.startup.launch_at_login != previous_preferences.startup.launch_at_login;
+        if launch_at_login_changed {
+            sync_autostart_launch_at_login(app, validated.startup.launch_at_login)?;
+        }
         if let Err(error) = hotkey_service.apply_preferences(app, &validated) {
-            rollback_autostart_launch_at_login(app, &previous_preferences);
-            return Err(error);
+            let rollback_failures = rollback_runtime_preference_effects(
+                app,
+                hotkey_service,
+                &previous_preferences,
+                launch_at_login_changed,
+            );
+            return Err(attach_preference_rollback_failures(
+                error,
+                rollback_failures,
+            ));
         }
-        let store = self.open_store(app)?;
-        if let Err(error) = self.write_store(&store, &validated) {
-            if let Err(rollback_error) =
-                hotkey_service.apply_preferences(app, &previous_preferences)
-            {
-                log::error!(
-                    target: "bexo::service::preferences",
-                    "hotkey rollback failed after store write error: {}",
-                    rollback_error
+        let store = match self.open_store(app) {
+            Ok(store) => store,
+            Err(error) => {
+                let rollback_failures = rollback_runtime_preference_effects(
+                    app,
+                    hotkey_service,
+                    &previous_preferences,
+                    launch_at_login_changed,
                 );
+                return Err(attach_preference_rollback_failures(
+                    error,
+                    rollback_failures,
+                ));
             }
-            rollback_autostart_launch_at_login(app, &previous_preferences);
-            return Err(error);
+        };
+        if let Err(error) = self.write_store(&store, &validated) {
+            let mut rollback_failures = Vec::new();
+            if let Some(failure) = rollback_store_preferences(self, &store, &previous_preferences) {
+                rollback_failures.push(failure);
+            }
+            rollback_failures.extend(rollback_runtime_preference_effects(
+                app,
+                hotkey_service,
+                &previous_preferences,
+                launch_at_login_changed,
+            ));
+            return Err(attach_preference_rollback_failures(
+                error,
+                rollback_failures,
+            ));
         }
-        self.replace_cache(validated.clone())?;
+        if let Err(error) = self.replace_cache(validated.clone()) {
+            let mut rollback_failures = Vec::new();
+            if let Some(failure) = rollback_store_preferences(self, &store, &previous_preferences) {
+                rollback_failures.push(failure);
+            }
+            rollback_failures.extend(rollback_runtime_preference_effects(
+                app,
+                hotkey_service,
+                &previous_preferences,
+                launch_at_login_changed,
+            ));
+            return Err(attach_preference_rollback_failures(
+                error,
+                rollback_failures,
+            ));
+        }
         Ok(validated)
     }
 
@@ -225,6 +280,51 @@ impl PreferencesService {
     }
 }
 
+fn apply_preferences_patch(
+    mut current: AppPreferences,
+    patch: AppPreferencesPatch,
+) -> AppPreferences {
+    if let Some(terminal) = patch.terminal {
+        current.terminal = terminal;
+    }
+    if let Some(ide) = patch.ide {
+        current.ide = ide;
+    }
+    if let Some(workspace) = patch.workspace {
+        if let Some(selected_workspace_ids) = workspace.selected_workspace_ids {
+            current.workspace.selected_workspace_ids = selected_workspace_ids;
+        }
+        if let Some(pinned_workspace_ids) = workspace.pinned_workspace_ids {
+            current.workspace.pinned_workspace_ids = pinned_workspace_ids;
+        }
+    }
+    if let Some(startup) = patch.startup {
+        current.startup = startup;
+    }
+    if let Some(hotkey) = patch.hotkey {
+        current.hotkey = hotkey;
+    }
+    if let Some(tray) = patch.tray {
+        current.tray = tray;
+    }
+    if let Some(diagnostics) = patch.diagnostics {
+        current.diagnostics = diagnostics;
+    }
+    if let Some(codex_history) = patch.codex_history {
+        current.codex_history = codex_history;
+    }
+    if let Some(codex_auth) = patch.codex_auth {
+        current.codex_auth = codex_auth;
+    }
+    current
+}
+
+impl Default for PreferencesService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug)]
 struct PreferenceMigrationResult {
     preferences: AppPreferences,
@@ -319,6 +419,8 @@ fn sanitize_hotkey_preferences(input: HotkeyPreferences) -> HotkeyPreferenceRepa
 
     let input_voice_toggle = input.voice_input_toggle.clone();
     let input_voice_hold = input.voice_input_hold.clone();
+    let prompt_quick_paste_slots =
+        sanitize_prompt_quick_paste_slots(input.prompt_quick_paste_slots, &mut changed);
 
     let screenshot_capture = sanitize_required_hotkey_shortcut(
         HotkeyAction::ScreenshotCapture,
@@ -341,6 +443,7 @@ fn sanitize_hotkey_preferences(input: HotkeyPreferences) -> HotkeyPreferenceRepa
         screenshot_capture,
         voice_input_toggle,
         voice_input_hold,
+        prompt_quick_paste_slots,
     };
 
     repaired.voice_input_toggle = repaired
@@ -363,6 +466,21 @@ fn sanitize_hotkey_preferences(input: HotkeyPreferences) -> HotkeyPreferenceRepa
         changed = true;
     }
 
+    let mut seen_active_shortcuts = HashSet::new();
+    seen_active_shortcuts.insert(repaired.screenshot_capture.to_ascii_lowercase());
+    if let Some(shortcut) = repaired.voice_input_toggle.as_deref() {
+        seen_active_shortcuts.insert(shortcut.to_ascii_lowercase());
+    }
+    if let Some(shortcut) = repaired.voice_input_hold.as_deref() {
+        seen_active_shortcuts.insert(shortcut.to_ascii_lowercase());
+    }
+    for slot in &mut repaired.prompt_quick_paste_slots {
+        if slot.enabled && !seen_active_shortcuts.insert(slot.shortcut.to_ascii_lowercase()) {
+            slot.enabled = false;
+            changed = true;
+        }
+    }
+
     if let Err(error) = validate_hotkey_preferences(repaired.clone()) {
         log::warn!(
             target: "bexo::service::preferences",
@@ -379,6 +497,74 @@ fn sanitize_hotkey_preferences(input: HotkeyPreferences) -> HotkeyPreferenceRepa
         preferences: repaired,
         changed,
     }
+}
+
+fn sanitize_prompt_quick_paste_slots(
+    input: Vec<PromptQuickPasteHotkeySlot>,
+    changed: &mut bool,
+) -> Vec<PromptQuickPasteHotkeySlot> {
+    let mut candidates = input;
+    if candidates.len() != PROMPT_QUICK_PASTE_SLOT_COUNT {
+        *changed = true;
+    }
+
+    let mut repaired = Vec::with_capacity(PROMPT_QUICK_PASTE_SLOT_COUNT);
+    for slot_number in 1..=PROMPT_QUICK_PASTE_SLOT_COUNT as u8 {
+        let action = HotkeyAction::from_prompt_quick_paste_slot(slot_number)
+            .expect("prompt quick paste slot must map to a hotkey action");
+        let default_shortcut = DEFAULT_PROMPT_QUICK_PASTE_HOTKEYS[(slot_number - 1) as usize];
+        let Some(index) = candidates
+            .iter()
+            .position(|candidate| candidate.slot == slot_number)
+        else {
+            *changed = true;
+            repaired.push(PromptQuickPasteHotkeySlot {
+                slot: slot_number,
+                enabled: false,
+                prompt_id: None,
+                shortcut: default_shortcut.to_string(),
+            });
+            continue;
+        };
+        let candidate = candidates.remove(index);
+        let shortcut = sanitize_required_hotkey_shortcut(
+            action,
+            candidate.shortcut,
+            default_shortcut,
+            changed,
+        );
+        let prompt_id = candidate.prompt_id.and_then(|raw| {
+            let trimmed = raw.trim();
+            match uuid::Uuid::parse_str(trimmed) {
+                Ok(id) => {
+                    let normalized = id.to_string();
+                    if normalized != trimmed {
+                        *changed = true;
+                    }
+                    Some(normalized)
+                }
+                Err(_) => {
+                    *changed = true;
+                    None
+                }
+            }
+        });
+        let enabled = candidate.enabled && prompt_id.is_some();
+        if enabled != candidate.enabled {
+            *changed = true;
+        }
+        repaired.push(PromptQuickPasteHotkeySlot {
+            slot: slot_number,
+            enabled,
+            prompt_id,
+            shortcut,
+        });
+    }
+
+    if !candidates.is_empty() {
+        *changed = true;
+    }
+    repaired
 }
 
 fn sanitize_required_hotkey_shortcut(
@@ -542,10 +728,7 @@ fn sync_autostart_launch_at_login<R: Runtime>(
 ) -> AppResult<()> {
     #[cfg(windows)]
     {
-        return windows_autostart::sync_launch_at_login(
-            app.package_info().name.as_str(),
-            should_enable,
-        );
+        windows_autostart::sync_launch_at_login(app.package_info().name.as_str(), should_enable)
     }
 
     #[cfg(not(windows))]
@@ -579,16 +762,91 @@ fn sync_autostart_launch_at_login<R: Runtime>(
 fn rollback_autostart_launch_at_login<R: Runtime>(
     app: &AppHandle<R>,
     previous_preferences: &AppPreferences,
-) {
-    if let Err(error) =
-        sync_autostart_launch_at_login(app, previous_preferences.startup.launch_at_login)
-    {
+    launch_at_login_changed: bool,
+) -> Option<String> {
+    if !launch_at_login_changed {
+        return None;
+    }
+
+    match sync_autostart_launch_at_login(app, previous_preferences.startup.launch_at_login) {
+        Ok(()) => None,
+        Err(error) => {
+            log::error!(
+                target: "bexo::service::preferences",
+                "autostart rollback failed after preferences update error code={} message={} details={:?}",
+                error.code,
+                error.message,
+                error.details
+            );
+            Some(format!(
+                "autostart: code={} message={}",
+                error.code, error.message
+            ))
+        }
+    }
+}
+
+fn rollback_runtime_preference_effects<R: Runtime>(
+    app: &AppHandle<R>,
+    hotkey_service: &HotkeyService,
+    previous_preferences: &AppPreferences,
+    launch_at_login_changed: bool,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    if let Err(error) = hotkey_service.apply_preferences(app, previous_preferences) {
         log::error!(
             target: "bexo::service::preferences",
-            "autostart rollback failed after preferences update error: {}",
-            error
+            "hotkey rollback failed after preferences persistence error code={} message={} details={:?}",
+            error.code,
+            error.message,
+            error.details
         );
+        failures.push(format!(
+            "hotkey: code={} message={}",
+            error.code, error.message
+        ));
     }
+    if let Some(failure) =
+        rollback_autostart_launch_at_login(app, previous_preferences, launch_at_login_changed)
+    {
+        failures.push(failure);
+    }
+    failures
+}
+
+fn rollback_store_preferences<R: Runtime>(
+    service: &PreferencesService,
+    store: &Store<R>,
+    previous_preferences: &AppPreferences,
+) -> Option<String> {
+    match service.write_store(store, previous_preferences) {
+        Ok(()) => None,
+        Err(error) => {
+            log::error!(
+                target: "bexo::service::preferences",
+                "preferences store rollback failed code={} message={} details={:?}",
+                error.code,
+                error.message,
+                error.details
+            );
+            Some(format!(
+                "store: code={} message={}",
+                error.code, error.message
+            ))
+        }
+    }
+}
+
+fn attach_preference_rollback_failures(
+    mut original_error: AppError,
+    rollback_failures: Vec<String>,
+) -> AppError {
+    if !rollback_failures.is_empty() {
+        original_error = original_error
+            .with_detail("rollbackFailure", rollback_failures.join("; "))
+            .with_detail("stateConsistency", "unknown");
+    }
+    original_error
 }
 
 #[cfg(windows)]
@@ -596,7 +854,7 @@ mod windows_autostart {
     use std::{
         ffi::{c_void, OsStr},
         os::windows::ffi::OsStrExt,
-        path::Path,
+        path::{Path, PathBuf},
         ptr,
     };
 
@@ -607,7 +865,9 @@ mod windows_autostart {
     const HKEY_CURRENT_USER: HKey = -2147483647i32 as HKey;
     const ERROR_SUCCESS: i32 = 0;
     const ERROR_FILE_NOT_FOUND: i32 = 2;
+    const ERROR_MORE_DATA: i32 = 234;
     const REG_SZ: u32 = 1;
+    const REG_EXPAND_SZ: u32 = 2;
     const REG_BINARY: u32 = 3;
     const KEY_QUERY_VALUE: u32 = 0x0001;
     const KEY_SET_VALUE: u32 = 0x0002;
@@ -616,9 +876,27 @@ mod windows_autostart {
     const STARTUP_APPROVED_RUN_KEY: &str =
         "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run";
     const AUTOSTART_ARGS: [&str; 1] = ["--autostart"];
+    const MAX_RUN_COMMAND_UTF16_UNITS: usize = 260;
+    const MAX_REGISTRY_READ_ATTEMPTS: usize = 2;
+    const MAX_REGISTRY_VALUE_BYTES: u32 = 65_536;
     const TASK_MANAGER_ENABLED_VALUE: [u8; 12] = [
         0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     ];
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct RegistryValueSnapshot {
+        value_type: u32,
+        bytes: Vec<u8>,
+    }
+
+    struct RegistryRollbackPlan<'a> {
+        run_before: Option<&'a RegistryValueSnapshot>,
+        approval_before: Option<&'a RegistryValueSnapshot>,
+        expected_run_value: &'a RegistryValueSnapshot,
+        expected_approval_value: &'a RegistryValueSnapshot,
+        run_was_modified: bool,
+        approval_was_modified: bool,
+    }
 
     #[link(name = "Advapi32")]
     extern "system" {
@@ -670,45 +948,151 @@ mod windows_autostart {
         }
 
         if should_enable {
-            let executable = std::env::current_exe().map_err(|error| {
-                AppError::new("AUTOSTART_PATH_RESOLVE_FAILED", "解析开机启动路径失败")
-                    .with_detail("reason", error.to_string())
-            })?;
-            let command_line = build_registry_run_command_line(&executable, &AUTOSTART_ARGS);
-            let existing_command_line = get_registry_string_value_if_exists(RUN_KEY, app_name)?;
-            if should_keep_existing_release_command(&executable, existing_command_line.as_deref()) {
-                log::info!(
-                    target: "bexo::service::preferences",
-                    "autostart sync kept existing installed release command app_name={} current_exe={} registry_command={}",
-                    app_name,
-                    executable.display(),
-                    existing_command_line.unwrap_or_default()
-                );
-            } else {
-                set_registry_string_value(RUN_KEY, app_name, &command_line)?;
-                log::info!(
-                    target: "bexo::service::preferences",
-                    "autostart sync wrote run command app_name={} current_exe={} command_line={}",
-                    app_name,
-                    executable.display(),
-                    command_line
-                );
-            }
-            set_startup_approved_enabled(app_name)?;
+            sync_enabled(app_name)
         } else {
-            delete_registry_value_if_exists(RUN_KEY, app_name)?;
-            log::info!(
-                target: "bexo::service::preferences",
-                "autostart sync removed run command app_name={}",
-                app_name
+            sync_disabled(app_name)
+        }
+    }
+
+    fn sync_enabled(app_name: &str) -> AppResult<()> {
+        let current_executable = std::env::current_exe().map_err(|error| {
+            AppError::new("AUTOSTART_PATH_RESOLVE_FAILED", "解析开机启动路径失败")
+                .with_detail("reason", error.to_string())
+        })?;
+        if !current_executable.is_file() {
+            return Err(
+                AppError::new("AUTOSTART_PATH_INVALID", "开机启动程序路径不存在")
+                    .with_detail("path", current_executable.display().to_string()),
             );
         }
 
+        let run_before = get_registry_raw_value_if_exists(RUN_KEY, app_name)?;
+        let (approval_before, approval_was_read) = match get_registry_raw_value_if_exists(
+            STARTUP_APPROVED_RUN_KEY,
+            app_name,
+        ) {
+            Ok(value) => (value, true),
+            Err(error) => {
+                log::warn!(
+                    target: "bexo::service::preferences",
+                    "autostart StartupApproved state unavailable; continuing with documented Run registration code={} message={} details={:?}",
+                    error.code,
+                    error.message,
+                    error.details
+                );
+                (None, false)
+            }
+        };
+        let existing_command_line = run_before.as_ref().and_then(decode_registry_string_value);
+        let registration_executable =
+            resolve_registration_executable(&current_executable, existing_command_line.as_deref());
+        let command_line =
+            build_registry_run_command_line(&registration_executable, &AUTOSTART_ARGS);
+        validate_registry_run_command_line(&command_line)?;
+        let expected_run_value = registry_string_value_snapshot(&command_line);
+        let expected_approval_value = RegistryValueSnapshot {
+            value_type: REG_BINARY,
+            bytes: TASK_MANAGER_ENABLED_VALUE.to_vec(),
+        };
+
+        let run_matches = run_before.as_ref().is_some_and(|value| {
+            value.value_type == REG_SZ
+                && decode_registry_string_value(value).as_deref() == Some(command_line.as_str())
+        });
+        let approval_needs_repair = approval_before
+            .as_ref()
+            .is_some_and(|value| !startup_approved_value_is_enabled(value));
+
+        if run_matches && !approval_needs_repair {
+            log::info!(
+                target: "bexo::service::preferences",
+                "autostart sync verified existing registration app_name={} current_exe={} registered_exe={} approval_checked={} approval_present={}",
+                app_name,
+                current_executable.display(),
+                registration_executable.display(),
+                approval_was_read,
+                approval_before.is_some()
+            );
+            return Ok(());
+        }
+
+        let mut run_was_modified = false;
+        let mut approval_was_modified = false;
+        let update_result = (|| {
+            if !run_matches {
+                set_registry_string_value(RUN_KEY, app_name, &command_line)?;
+                run_was_modified = true;
+            }
+            if approval_needs_repair {
+                set_startup_approved_enabled_if_present(app_name)?;
+                approval_was_modified = true;
+            }
+            verify_enabled_registration(app_name, &command_line, approval_was_read)
+        })();
+
+        if let Err(error) = update_result {
+            return Err(rollback_registry_snapshots(
+                app_name,
+                RegistryRollbackPlan {
+                    run_before: run_before.as_ref(),
+                    approval_before: approval_before.as_ref(),
+                    expected_run_value: &expected_run_value,
+                    expected_approval_value: &expected_approval_value,
+                    run_was_modified,
+                    approval_was_modified,
+                },
+                error,
+            ));
+        }
+
+        log::info!(
+            target: "bexo::service::preferences",
+            "autostart sync repaired registration app_name={} current_exe={} registered_exe={} run_updated={} approval_updated={}",
+            app_name,
+            current_executable.display(),
+            registration_executable.display(),
+            !run_matches,
+            approval_needs_repair
+        );
         Ok(())
     }
 
-    fn set_startup_approved_enabled(app_name: &str) -> AppResult<()> {
-        let key = create_registry_key(STARTUP_APPROVED_RUN_KEY, "AUTOSTART_APPROVAL_OPEN_FAILED")?;
+    fn sync_disabled(app_name: &str) -> AppResult<()> {
+        let Some(run_before) = get_registry_raw_value_if_exists(RUN_KEY, app_name)? else {
+            log::info!(
+                target: "bexo::service::preferences",
+                "autostart sync verified registration absent app_name={}",
+                app_name
+            );
+            return Ok(());
+        };
+
+        delete_registry_value_if_exists(RUN_KEY, app_name)?;
+        if let Err(error) = verify_disabled_registration(app_name) {
+            let rollback_error = restore_registry_value_if_absent(RUN_KEY, app_name, &run_before);
+            return Err(attach_rollback_result(error, rollback_error));
+        }
+
+        log::info!(
+            target: "bexo::service::preferences",
+            "autostart sync removed run command app_name={}",
+            app_name
+        );
+        Ok(())
+    }
+
+    fn set_startup_approved_enabled_if_present(app_name: &str) -> AppResult<()> {
+        let key = match open_registry_key_with_access(STARTUP_APPROVED_RUN_KEY, KEY_SET_VALUE) {
+            Ok(key) => key,
+            Err(status) if status == ERROR_FILE_NOT_FOUND => return Ok(()),
+            Err(status) => {
+                return Err(AppError::new(
+                    "AUTOSTART_APPROVAL_OPEN_FAILED",
+                    "打开开机启动任务管理器状态失败",
+                )
+                .with_detail("reason", format!("RegOpenKeyExW returned {status}")));
+            }
+        };
         set_registry_raw_value(&key, app_name, REG_BINARY, &TASK_MANAGER_ENABLED_VALUE).map_err(
             |error| {
                 AppError::new(
@@ -720,18 +1104,183 @@ mod windows_autostart {
         )
     }
 
+    fn validate_registry_run_command_line(command_line: &str) -> AppResult<()> {
+        let utf16_units = command_line.encode_utf16().count();
+        if utf16_units > MAX_RUN_COMMAND_UTF16_UNITS {
+            return Err(AppError::new(
+                "AUTOSTART_COMMAND_TOO_LONG",
+                "开机启动命令长度超过 Windows 限制",
+            )
+            .with_detail("utf16Units", utf16_units.to_string())
+            .with_detail("limit", MAX_RUN_COMMAND_UTF16_UNITS.to_string()));
+        }
+        Ok(())
+    }
+
+    fn verify_enabled_registration(
+        app_name: &str,
+        expected_command: &str,
+        verify_startup_approval: bool,
+    ) -> AppResult<()> {
+        let run_value = get_registry_raw_value_if_exists(RUN_KEY, app_name)?.ok_or_else(|| {
+            AppError::new("AUTOSTART_VERIFY_FAILED", "开机启动注册项写入后不存在")
+        })?;
+        let actual_command = decode_registry_string_value(&run_value).ok_or_else(|| {
+            AppError::new("AUTOSTART_VERIFY_FAILED", "开机启动注册项格式无效")
+                .with_detail("registryType", run_value.value_type.to_string())
+        })?;
+        if run_value.value_type != REG_SZ || actual_command != expected_command {
+            return Err(AppError::new(
+                "AUTOSTART_VERIFY_FAILED",
+                "开机启动注册项写入后与预期不一致",
+            )
+            .with_detail("registryType", run_value.value_type.to_string()));
+        }
+
+        if verify_startup_approval {
+            if let Some(approval) =
+                get_registry_raw_value_if_exists(STARTUP_APPROVED_RUN_KEY, app_name)?
+            {
+                if !startup_approved_value_is_enabled(&approval) {
+                    return Err(AppError::new(
+                        "AUTOSTART_APPROVAL_VERIFY_FAILED",
+                        "开机启动仍被 Windows 启动项管理禁用",
+                    )
+                    .with_detail("registryType", approval.value_type.to_string()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn verify_disabled_registration(app_name: &str) -> AppResult<()> {
+        if get_registry_raw_value_if_exists(RUN_KEY, app_name)?.is_some() {
+            return Err(AppError::new(
+                "AUTOSTART_VERIFY_FAILED",
+                "关闭开机启动后注册项仍然存在",
+            ));
+        }
+        Ok(())
+    }
+
+    fn startup_approved_value_is_enabled(value: &RegistryValueSnapshot) -> bool {
+        value.value_type == REG_BINARY
+            && value.bytes.len() >= 8
+            && value.bytes.iter().rev().take(8).all(|byte| *byte == 0)
+    }
+
+    fn rollback_registry_snapshots(
+        app_name: &str,
+        plan: RegistryRollbackPlan<'_>,
+        mut original_error: AppError,
+    ) -> AppError {
+        let mut rollback_failures = Vec::new();
+        if plan.run_was_modified {
+            if let Err(error) = restore_registry_value_if_unchanged(
+                RUN_KEY,
+                app_name,
+                plan.expected_run_value,
+                plan.run_before,
+            ) {
+                rollback_failures.push(format!("Run: {error}"));
+            }
+        }
+        if plan.approval_was_modified {
+            if let Err(error) = restore_registry_value_if_unchanged(
+                STARTUP_APPROVED_RUN_KEY,
+                app_name,
+                plan.expected_approval_value,
+                plan.approval_before,
+            ) {
+                rollback_failures.push(format!("StartupApproved: {error}"));
+            }
+        }
+        if !rollback_failures.is_empty() {
+            original_error = original_error
+                .with_detail("rollbackFailure", rollback_failures.join("; "))
+                .with_detail("stateConsistency", "unknown");
+        }
+        original_error
+    }
+
+    fn restore_registry_value_if_unchanged(
+        key_path: &str,
+        value_name: &str,
+        expected_current: &RegistryValueSnapshot,
+        snapshot: Option<&RegistryValueSnapshot>,
+    ) -> Result<(), String> {
+        let current = get_registry_raw_value_if_exists(key_path, value_name)
+            .map_err(|error| error.to_string())?;
+        if current.as_ref() != Some(expected_current) {
+            return Err("current value changed concurrently; rollback skipped".to_string());
+        }
+        restore_registry_value(key_path, value_name, snapshot)
+    }
+
+    fn restore_registry_value_if_absent(
+        key_path: &str,
+        value_name: &str,
+        snapshot: &RegistryValueSnapshot,
+    ) -> Result<(), String> {
+        let current = get_registry_raw_value_if_exists(key_path, value_name)
+            .map_err(|error| error.to_string())?;
+        if current.is_some() {
+            return Err("current value was recreated concurrently; rollback skipped".to_string());
+        }
+        restore_registry_value(key_path, value_name, Some(snapshot))
+    }
+
+    fn attach_rollback_result(
+        mut original_error: AppError,
+        rollback_result: Result<(), String>,
+    ) -> AppError {
+        if let Err(error) = rollback_result {
+            original_error = original_error
+                .with_detail("rollbackFailure", error)
+                .with_detail("stateConsistency", "unknown");
+        }
+        original_error
+    }
+
+    fn restore_registry_value(
+        key_path: &str,
+        value_name: &str,
+        snapshot: Option<&RegistryValueSnapshot>,
+    ) -> Result<(), String> {
+        match snapshot {
+            Some(snapshot) => {
+                let key = create_registry_key(key_path, "AUTOSTART_ROLLBACK_OPEN_FAILED")
+                    .map_err(|error| error.to_string())?;
+                set_registry_raw_value(&key, value_name, snapshot.value_type, &snapshot.bytes)
+            }
+            None => delete_registry_value_if_exists(key_path, value_name)
+                .map_err(|error| error.to_string()),
+        }
+    }
+
     fn set_registry_string_value(key_path: &str, value_name: &str, value: &str) -> AppResult<()> {
         let key = create_registry_key(key_path, "AUTOSTART_REGISTRY_OPEN_FAILED")?;
-        let wide_value = to_wide_null(value);
-        let bytes = unsafe {
-            std::slice::from_raw_parts(wide_value.as_ptr().cast::<u8>(), wide_value.len() * 2)
-        };
+        let snapshot = registry_string_value_snapshot(value);
 
-        set_registry_raw_value(&key, value_name, REG_SZ, bytes).map_err(|error| {
-            AppError::new("AUTOSTART_REGISTRY_WRITE_FAILED", "写入开机启动注册表失败")
-                .with_detail("reason", error)
-                .with_detail("commandLine", value.to_string())
-        })
+        set_registry_raw_value(&key, value_name, snapshot.value_type, &snapshot.bytes).map_err(
+            |error| {
+                AppError::new("AUTOSTART_REGISTRY_WRITE_FAILED", "写入开机启动注册表失败")
+                    .with_detail("reason", error)
+                    .with_detail("commandLine", value.to_string())
+            },
+        )
+    }
+
+    fn registry_string_value_snapshot(value: &str) -> RegistryValueSnapshot {
+        let bytes = value
+            .encode_utf16()
+            .chain([0])
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        RegistryValueSnapshot {
+            value_type: REG_SZ,
+            bytes,
+        }
     }
 
     fn set_registry_raw_value(
@@ -740,6 +1289,13 @@ mod windows_autostart {
         value_type: u32,
         value: &[u8],
     ) -> Result<(), String> {
+        let value_len = u32::try_from(value.len())
+            .map_err(|_| "registry value length exceeds u32".to_string())?;
+        if value_len > MAX_REGISTRY_VALUE_BYTES {
+            return Err(format!(
+                "registry value length {value_len} exceeds limit {MAX_REGISTRY_VALUE_BYTES}"
+            ));
+        }
         let wide_name = to_wide_null(value_name);
         let status = unsafe {
             RegSetValueExW(
@@ -748,7 +1304,7 @@ mod windows_autostart {
                 0,
                 value_type,
                 value.as_ptr(),
-                value.len() as u32,
+                value_len,
             )
         };
         if status == ERROR_SUCCESS {
@@ -783,10 +1339,10 @@ mod windows_autostart {
         }
     }
 
-    fn get_registry_string_value_if_exists(
+    fn get_registry_raw_value_if_exists(
         key_path: &str,
         value_name: &str,
-    ) -> AppResult<Option<String>> {
+    ) -> AppResult<Option<RegistryValueSnapshot>> {
         let key = match open_registry_key_with_access(key_path, KEY_QUERY_VALUE) {
             Ok(key) => key,
             Err(status) if status == ERROR_FILE_NOT_FOUND => return Ok(None),
@@ -800,57 +1356,114 @@ mod windows_autostart {
         };
 
         let wide_name = to_wide_null(value_name);
-        let mut value_type = 0u32;
-        let mut bytes_len = 0u32;
-        let status = unsafe {
-            RegQueryValueExW(
-                key.0,
-                wide_name.as_ptr(),
-                ptr::null_mut(),
-                &mut value_type,
-                ptr::null_mut(),
-                &mut bytes_len,
+        for attempt in 0..MAX_REGISTRY_READ_ATTEMPTS {
+            let mut value_type = 0u32;
+            let mut bytes_len = 0u32;
+            let status = unsafe {
+                RegQueryValueExW(
+                    key.0,
+                    wide_name.as_ptr(),
+                    ptr::null_mut(),
+                    &mut value_type,
+                    ptr::null_mut(),
+                    &mut bytes_len,
+                )
+            };
+
+            if status == ERROR_FILE_NOT_FOUND {
+                return Ok(None);
+            }
+            if status != ERROR_SUCCESS {
+                return Err(AppError::new(
+                    "AUTOSTART_REGISTRY_READ_FAILED",
+                    "读取开机启动注册表失败",
+                )
+                .with_detail("reason", format!("RegQueryValueExW returned {status}")));
+            }
+            if bytes_len == 0 {
+                return Ok(Some(RegistryValueSnapshot {
+                    value_type,
+                    bytes: Vec::new(),
+                }));
+            }
+            validate_registry_value_size(bytes_len)?;
+
+            let mut buffer = vec![0u8; bytes_len as usize];
+            let mut actual_len = bytes_len;
+            let status = unsafe {
+                RegQueryValueExW(
+                    key.0,
+                    wide_name.as_ptr(),
+                    ptr::null_mut(),
+                    &mut value_type,
+                    buffer.as_mut_ptr(),
+                    &mut actual_len,
+                )
+            };
+            if status == ERROR_FILE_NOT_FOUND {
+                return Ok(None);
+            }
+            if status == ERROR_MORE_DATA && attempt + 1 < MAX_REGISTRY_READ_ATTEMPTS {
+                continue;
+            }
+            if status != ERROR_SUCCESS {
+                return Err(AppError::new(
+                    "AUTOSTART_REGISTRY_READ_FAILED",
+                    "读取开机启动注册表失败",
+                )
+                .with_detail("reason", format!("RegQueryValueExW returned {status}")));
+            }
+            if actual_len > bytes_len {
+                return Err(AppError::new(
+                    "AUTOSTART_REGISTRY_READ_FAILED",
+                    "读取开机启动注册表时返回了无效长度",
+                )
+                .with_detail("bufferLength", bytes_len.to_string())
+                .with_detail("actualLength", actual_len.to_string()));
+            }
+            buffer.truncate(actual_len as usize);
+            return Ok(Some(RegistryValueSnapshot {
+                value_type,
+                bytes: buffer,
+            }));
+        }
+
+        Err(AppError::new(
+            "AUTOSTART_REGISTRY_READ_FAILED",
+            "读取开机启动注册表时数据持续变化",
+        )
+        .retryable(true))
+    }
+
+    fn validate_registry_value_size(bytes_len: u32) -> AppResult<()> {
+        if bytes_len > MAX_REGISTRY_VALUE_BYTES {
+            return Err(AppError::new(
+                "AUTOSTART_REGISTRY_VALUE_TOO_LARGE",
+                "开机启动注册表值异常过大",
             )
-        };
+            .with_detail("bytes", bytes_len.to_string())
+            .with_detail("limit", MAX_REGISTRY_VALUE_BYTES.to_string()));
+        }
+        Ok(())
+    }
 
-        if status == ERROR_FILE_NOT_FOUND {
-            return Ok(None);
+    fn decode_registry_string_value(value: &RegistryValueSnapshot) -> Option<String> {
+        if value.value_type != REG_SZ && value.value_type != REG_EXPAND_SZ {
+            return None;
         }
-        if status != ERROR_SUCCESS {
-            return Err(
-                AppError::new("AUTOSTART_REGISTRY_READ_FAILED", "读取开机启动注册表失败")
-                    .with_detail("reason", format!("RegQueryValueExW returned {status}")),
-            );
+        let mut chunks = value.bytes.chunks_exact(2);
+        let mut wide = chunks
+            .by_ref()
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect::<Vec<_>>();
+        if !chunks.remainder().is_empty() {
+            return None;
         }
-        if value_type != REG_SZ || bytes_len == 0 {
-            return Ok(None);
+        while wide.last().is_some_and(|unit| *unit == 0) {
+            wide.pop();
         }
-
-        let mut buffer = vec![0u8; bytes_len as usize];
-        let status = unsafe {
-            RegQueryValueExW(
-                key.0,
-                wide_name.as_ptr(),
-                ptr::null_mut(),
-                &mut value_type,
-                buffer.as_mut_ptr(),
-                &mut bytes_len,
-            )
-        };
-        if status != ERROR_SUCCESS {
-            return Err(
-                AppError::new("AUTOSTART_REGISTRY_READ_FAILED", "读取开机启动注册表失败")
-                    .with_detail("reason", format!("RegQueryValueExW returned {status}")),
-            );
-        }
-
-        let u16_len = (bytes_len as usize) / 2;
-        let wide = unsafe { std::slice::from_raw_parts(buffer.as_ptr().cast::<u16>(), u16_len) };
-        let text = String::from_utf16_lossy(wide)
-            .trim_end_matches('\0')
-            .trim()
-            .to_string();
-        Ok((!text.is_empty()).then_some(text))
+        let text = String::from_utf16(&wide).ok()?.trim().to_string();
+        (!text.is_empty()).then_some(text)
     }
 
     fn create_registry_key(key_path: &str, error_code: &str) -> AppResult<RegistryKey> {
@@ -901,6 +1514,20 @@ mod windows_autostart {
         parts.join(" ")
     }
 
+    fn resolve_registration_executable(
+        current_exe: &Path,
+        existing_command_line: Option<&str>,
+    ) -> PathBuf {
+        if should_keep_existing_release_command(current_exe, existing_command_line) {
+            if let Some(existing_executable) =
+                existing_command_line.and_then(extract_windows_command_executable)
+            {
+                return PathBuf::from(existing_executable);
+            }
+        }
+        current_exe.to_path_buf()
+    }
+
     fn should_keep_existing_release_command(
         current_exe: &Path,
         existing_command_line: Option<&str>,
@@ -914,7 +1541,14 @@ mod windows_autostart {
             return false;
         };
 
-        !is_development_executable(Path::new(&existing_exe)) && Path::new(&existing_exe).exists()
+        let existing_exe = Path::new(&existing_exe);
+        let file_names_match = current_exe
+            .file_name()
+            .and_then(|name| name.to_str())
+            .zip(existing_exe.file_name().and_then(|name| name.to_str()))
+            .is_some_and(|(current, existing)| current.eq_ignore_ascii_case(existing));
+
+        file_names_match && !is_development_executable(existing_exe) && existing_exe.is_file()
     }
 
     fn is_development_executable(path: &Path) -> bool {
@@ -950,6 +1584,18 @@ mod windows_autostart {
             return None;
         }
 
+        let lower = trimmed.to_ascii_lowercase();
+        for (index, _) in lower.match_indices(".exe") {
+            let end = index + 4;
+            let is_boundary = trimmed
+                .get(end..)
+                .and_then(|suffix| suffix.chars().next())
+                .is_none_or(char::is_whitespace);
+            if is_boundary {
+                return Some(trimmed[..end].trim().to_string());
+            }
+        }
+
         trimmed.split_whitespace().next().map(str::to_string)
     }
 
@@ -964,19 +1610,19 @@ mod windows_autostart {
                     backslash_count += 1;
                 }
                 '"' => {
-                    quoted.extend(std::iter::repeat('\\').take(backslash_count * 2 + 1));
+                    quoted.extend(std::iter::repeat_n('\\', backslash_count * 2 + 1));
                     quoted.push('"');
                     backslash_count = 0;
                 }
                 _ => {
-                    quoted.extend(std::iter::repeat('\\').take(backslash_count));
+                    quoted.extend(std::iter::repeat_n('\\', backslash_count));
                     quoted.push(character);
                     backslash_count = 0;
                 }
             }
         }
 
-        quoted.extend(std::iter::repeat('\\').take(backslash_count * 2));
+        quoted.extend(std::iter::repeat_n('\\', backslash_count * 2));
         quoted.push('"');
         quoted
     }
@@ -1000,10 +1646,23 @@ mod windows_autostart {
         use std::path::Path;
 
         use super::{
-            build_registry_run_command_line, extract_windows_command_executable,
-            is_development_executable, quote_windows_command_arg,
-            should_keep_existing_release_command,
+            build_registry_run_command_line, decode_registry_string_value,
+            extract_windows_command_executable, is_development_executable,
+            quote_windows_command_arg, resolve_registration_executable,
+            should_keep_existing_release_command, startup_approved_value_is_enabled,
+            validate_registry_run_command_line, validate_registry_value_size,
+            RegistryValueSnapshot, MAX_REGISTRY_VALUE_BYTES, REG_BINARY, REG_EXPAND_SZ, REG_SZ,
+            TASK_MANAGER_ENABLED_VALUE,
         };
+
+        fn registry_string_snapshot(value_type: u32, value: &str) -> RegistryValueSnapshot {
+            let bytes = value
+                .encode_utf16()
+                .chain([0])
+                .flat_map(u16::to_le_bytes)
+                .collect();
+            RegistryValueSnapshot { value_type, bytes }
+        }
 
         #[test]
         fn registry_run_command_quotes_executable_path_and_autostart_arg() {
@@ -1038,6 +1697,76 @@ mod windows_autostart {
         }
 
         #[test]
+        fn command_executable_repairs_legacy_unquoted_path_with_spaces() {
+            assert_eq!(
+                extract_windows_command_executable(
+                    r#"C:\Users\aka86\AppData\Local\Bexo Studio\bexo-studio.exe --autostart"#
+                )
+                .as_deref(),
+                Some(r"C:\Users\aka86\AppData\Local\Bexo Studio\bexo-studio.exe")
+            );
+        }
+
+        #[test]
+        fn registry_string_decode_supports_sz_and_expand_sz_without_pointer_casts() {
+            let expected = r#""C:\Program Files\Bexo Studio\bexo-studio.exe" "--autostart""#;
+            assert_eq!(
+                decode_registry_string_value(&registry_string_snapshot(REG_SZ, expected))
+                    .as_deref(),
+                Some(expected)
+            );
+            assert_eq!(
+                decode_registry_string_value(&registry_string_snapshot(REG_EXPAND_SZ, expected))
+                    .as_deref(),
+                Some(expected)
+            );
+            assert!(decode_registry_string_value(&RegistryValueSnapshot {
+                value_type: REG_SZ,
+                bytes: vec![0x41],
+            })
+            .is_none());
+        }
+
+        #[test]
+        fn startup_approval_matches_locked_auto_launch_compatibility_rules() {
+            for state in [0x00, 0x02, 0x06] {
+                let mut enabled = TASK_MANAGER_ENABLED_VALUE.to_vec();
+                enabled[0] = state;
+                assert!(startup_approved_value_is_enabled(&RegistryValueSnapshot {
+                    value_type: REG_BINARY,
+                    bytes: enabled,
+                }));
+            }
+
+            let mut disabled = TASK_MANAGER_ENABLED_VALUE.to_vec();
+            disabled[0] = 0x03;
+            disabled[4] = 0x01;
+            assert!(!startup_approved_value_is_enabled(&RegistryValueSnapshot {
+                value_type: REG_BINARY,
+                bytes: disabled,
+            }));
+            assert!(!startup_approved_value_is_enabled(
+                &registry_string_snapshot(REG_SZ, "enabled")
+            ));
+        }
+
+        #[test]
+        fn registry_run_command_rejects_windows_limit_overflow() {
+            assert!(validate_registry_run_command_line(&"x".repeat(260)).is_ok());
+            let error = validate_registry_run_command_line(&"x".repeat(261))
+                .expect_err("command longer than the documented limit must fail");
+            assert_eq!(error.code, "AUTOSTART_COMMAND_TOO_LONG");
+        }
+
+        #[test]
+        fn registry_value_size_is_bounded_before_allocation() {
+            assert!(validate_registry_value_size(MAX_REGISTRY_VALUE_BYTES).is_ok());
+            let error = validate_registry_value_size(MAX_REGISTRY_VALUE_BYTES + 1)
+                .expect_err("oversized registry value must be rejected");
+            assert_eq!(error.code, "AUTOSTART_REGISTRY_VALUE_TOO_LARGE");
+        }
+
+        #[test]
         fn development_executable_detects_tauri_target_paths() {
             assert!(is_development_executable(Path::new(
                 r"D:\Desktop\rust\BexoStudio\src-tauri\target\debug\bexo-studio.exe"
@@ -1049,23 +1778,30 @@ mod windows_autostart {
 
         #[test]
         fn development_build_keeps_existing_installed_autostart_command() {
-            let fake_install_dir =
-                std::env::temp_dir().join(format!("bexo-autostart-test-{}", std::process::id()));
+            let fake_install_root = std::env::temp_dir().join(format!(
+                "bexo-autostart-test-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4()
+            ));
+            let fake_install_dir = fake_install_root.join("Bexo Studio");
             std::fs::create_dir_all(&fake_install_dir).expect("create temp install dir");
             let fake_install_exe = fake_install_dir.join("bexo-studio.exe");
             std::fs::write(&fake_install_exe, []).expect("create fake installed exe");
 
             let current =
                 Path::new(r"D:\Desktop\rust\BexoStudio\src-tauri\target\debug\bexo-studio.exe");
-            let existing = build_registry_run_command_line(&fake_install_exe, &["--autostart"]);
+            let existing = format!("{} --autostart", fake_install_exe.display());
 
             assert!(should_keep_existing_release_command(
                 current,
                 Some(existing.as_str())
             ));
+            assert_eq!(
+                resolve_registration_executable(current, Some(existing.as_str())),
+                fake_install_exe
+            );
 
-            let _ = std::fs::remove_file(&fake_install_exe);
-            let _ = std::fs::remove_dir(&fake_install_dir);
+            let _ = std::fs::remove_dir_all(&fake_install_root);
         }
     }
 }
@@ -1357,6 +2093,8 @@ fn validate_hotkey_preferences(input: HotkeyPreferences) -> AppResult<HotkeyPref
         validate_hotkey_shortcut_option(HotkeyAction::VoiceInputToggle, input.voice_input_toggle)?;
     let voice_input_hold =
         validate_hotkey_shortcut_option(HotkeyAction::VoiceInputHold, input.voice_input_hold)?;
+    let prompt_quick_paste_slots =
+        validate_prompt_quick_paste_slots(input.prompt_quick_paste_slots)?;
 
     let mut seen_shortcuts: HashSet<String> = HashSet::new();
     let mut ensure_unique = |action: HotkeyAction, shortcut: Option<&str>| -> AppResult<()> {
@@ -1386,12 +2124,81 @@ fn validate_hotkey_preferences(input: HotkeyPreferences) -> AppResult<HotkeyPref
         voice_input_toggle.as_deref(),
     )?;
     ensure_unique(HotkeyAction::VoiceInputHold, voice_input_hold.as_deref())?;
+    for slot in &prompt_quick_paste_slots {
+        if slot.enabled {
+            let action = HotkeyAction::from_prompt_quick_paste_slot(slot.slot)
+                .expect("validated prompt quick paste slot must map to an action");
+            ensure_unique(action, Some(slot.shortcut.as_str()))?;
+        }
+    }
 
     Ok(HotkeyPreferences {
         screenshot_capture,
         voice_input_toggle,
         voice_input_hold,
+        prompt_quick_paste_slots,
     })
+}
+
+fn validate_prompt_quick_paste_slots(
+    mut input: Vec<PromptQuickPasteHotkeySlot>,
+) -> AppResult<Vec<PromptQuickPasteHotkeySlot>> {
+    if input.len() != PROMPT_QUICK_PASTE_SLOT_COUNT {
+        return Err(AppError::new(
+            "PROMPT_QUICK_PASTE_SLOTS_INVALID",
+            "Prompt 快速粘贴必须包含 5 个配置槽位",
+        )
+        .with_detail("field", "hotkey.promptQuickPasteSlots")
+        .with_detail("count", input.len().to_string()));
+    }
+
+    input.sort_by_key(|slot| slot.slot);
+    let mut validated = Vec::with_capacity(PROMPT_QUICK_PASTE_SLOT_COUNT);
+    for (index, slot) in input.into_iter().enumerate() {
+        let expected_slot = (index + 1) as u8;
+        if slot.slot != expected_slot {
+            return Err(AppError::new(
+                "PROMPT_QUICK_PASTE_SLOTS_INVALID",
+                "Prompt 快速粘贴槽位编号必须为 1 到 5 且不得重复",
+            )
+            .with_detail("field", "hotkey.promptQuickPasteSlots")
+            .with_detail("slot", slot.slot.to_string()));
+        }
+        let action = HotkeyAction::from_prompt_quick_paste_slot(slot.slot)
+            .expect("validated prompt quick paste slot must map to an action");
+        let shortcut = validate_hotkey_shortcut(action, slot.shortcut, true)?
+            .expect("required hotkey validation must return a shortcut");
+        let prompt_id = match slot.prompt_id {
+            Some(raw) if !raw.trim().is_empty() => Some(
+                uuid::Uuid::parse_str(raw.trim())
+                    .map_err(|_| {
+                        AppError::new(
+                            "PROMPT_QUICK_PASTE_PROMPT_ID_INVALID",
+                            "绑定的 Prompt 标识无效",
+                        )
+                        .with_detail("field", action.preference_field())
+                        .with_detail("slot", slot.slot.to_string())
+                    })?
+                    .to_string(),
+            ),
+            _ => None,
+        };
+        if slot.enabled && prompt_id.is_none() {
+            return Err(AppError::new(
+                "PROMPT_QUICK_PASTE_PROMPT_REQUIRED",
+                "启用快速粘贴前必须选择 Prompt",
+            )
+            .with_detail("field", action.preference_field())
+            .with_detail("slot", slot.slot.to_string()));
+        }
+        validated.push(PromptQuickPasteHotkeySlot {
+            slot: slot.slot,
+            enabled: slot.enabled,
+            prompt_id,
+            shortcut,
+        });
+    }
+    Ok(validated)
 }
 
 fn validate_hotkey_shortcut_option(
@@ -1455,6 +2262,18 @@ fn validate_hotkey_shortcut_semantics(action: HotkeyAction, value: &str) -> Resu
     let has_non_modifier = tokens.iter().any(|token| !is_hotkey_modifier_token(token));
     if action == HotkeyAction::ScreenshotCapture && !has_non_modifier {
         return Err("截图热键至少包含一个非修饰键，例如 Ctrl+Shift+X".to_string());
+    }
+
+    if matches!(
+        action,
+        HotkeyAction::PromptQuickPaste1
+            | HotkeyAction::PromptQuickPaste2
+            | HotkeyAction::PromptQuickPaste3
+            | HotkeyAction::PromptQuickPaste4
+            | HotkeyAction::PromptQuickPaste5
+    ) && !has_non_modifier
+    {
+        return Err("Prompt 快速粘贴热键至少包含一个非修饰键，例如 Ctrl+Alt+Shift+1".to_string());
     }
 
     if matches!(
@@ -1830,19 +2649,111 @@ mod tests {
     use std::{env, fs};
 
     use super::{
+        apply_preferences_patch, attach_preference_rollback_failures,
         build_codex_home_directory_info, migrate_legacy_preferences,
         sanitize_codex_auth_preferences, sanitize_codex_history_view_preferences,
         sanitize_hotkey_preferences, validate_codex_auth_proxy_preferences,
         validate_codex_auth_quota_refresh_interval_seconds,
-        validate_codex_history_message_font_size, validate_hotkey_shortcut,
+        validate_codex_history_message_font_size, validate_hotkey_preferences,
+        validate_hotkey_shortcut,
     };
     use crate::domain::{
-        AppPreferences, CodexAuthPreferences, CodexAuthProxyPreferences,
-        CodexHistoryViewPreferences, HotkeyAction, DEFAULT_CODEX_AUTH_PROXY_MODE,
+        AppPreferences, AppPreferencesPatch, CodexAuthPreferences, CodexAuthProxyPreferences,
+        CodexHistoryViewPreferences, HotkeyAction, PromptQuickPasteHotkeySlot,
+        WorkspacePreferencesPatch, DEFAULT_CODEX_AUTH_PROXY_MODE,
         DEFAULT_CODEX_AUTH_QUOTA_REFRESH_INTERVAL_SECONDS, DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE,
-        DEFAULT_SCREENSHOT_CAPTURE_HOTKEY, EARLIER_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
-        LEGACY_SCREENSHOT_CAPTURE_HOTKEY, PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
+        DEFAULT_PROMPT_QUICK_PASTE_HOTKEYS, DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
+        EARLIER_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY, LEGACY_SCREENSHOT_CAPTURE_HOTKEY,
+        PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY, PROMPT_QUICK_PASTE_SLOT_COUNT,
     };
+    use crate::error::AppError;
+
+    #[test]
+    fn preferences_patch_merges_against_latest_workspace_state() {
+        let mut preferences = AppPreferences::default();
+        preferences.workspace.selected_workspace_ids = vec!["selected-a".to_string()];
+        preferences.workspace.pinned_workspace_ids = vec!["pinned-a".to_string()];
+
+        let preferences = apply_preferences_patch(
+            preferences,
+            AppPreferencesPatch {
+                workspace: Some(WorkspacePreferencesPatch {
+                    selected_workspace_ids: Some(vec!["selected-b".to_string()]),
+                    pinned_workspace_ids: None,
+                }),
+                ..AppPreferencesPatch::default()
+            },
+        );
+        let preferences = apply_preferences_patch(
+            preferences,
+            AppPreferencesPatch {
+                workspace: Some(WorkspacePreferencesPatch {
+                    selected_workspace_ids: None,
+                    pinned_workspace_ids: Some(vec!["pinned-b".to_string()]),
+                }),
+                ..AppPreferencesPatch::default()
+            },
+        );
+
+        assert_eq!(
+            preferences.workspace.selected_workspace_ids,
+            vec!["selected-b".to_string()]
+        );
+        assert_eq!(
+            preferences.workspace.pinned_workspace_ids,
+            vec!["pinned-b".to_string()]
+        );
+    }
+
+    #[test]
+    fn preferences_patch_does_not_replace_unrelated_domains() {
+        let mut preferences = AppPreferences::default();
+        preferences.workspace.pinned_workspace_ids = vec!["pinned".to_string()];
+
+        let patched = apply_preferences_patch(
+            preferences,
+            AppPreferencesPatch {
+                startup: Some(crate::domain::StartupPreferences {
+                    launch_at_login: true,
+                    start_silently: true,
+                }),
+                ..AppPreferencesPatch::default()
+            },
+        );
+
+        assert!(patched.startup.launch_at_login);
+        assert!(patched.startup.start_silently);
+        assert_eq!(
+            patched.workspace.pinned_workspace_ids,
+            vec!["pinned".to_string()]
+        );
+    }
+
+    #[test]
+    fn preference_rollback_failures_preserve_error_and_mark_unknown_consistency() {
+        let error = AppError::new("PREFERENCES_STORE_WRITE_FAILED", "保存设置失败");
+        let error =
+            attach_preference_rollback_failures(error, vec!["store: write failed".to_string()]);
+
+        assert_eq!(error.code, "PREFERENCES_STORE_WRITE_FAILED");
+        assert_eq!(error.message, "保存设置失败");
+        assert_eq!(
+            error
+                .details
+                .as_ref()
+                .and_then(|details| details.get("rollbackFailure"))
+                .map(String::as_str),
+            Some("store: write failed")
+        );
+        assert_eq!(
+            error
+                .details
+                .as_ref()
+                .and_then(|details| details.get("stateConsistency"))
+                .map(String::as_str),
+            Some("unknown")
+        );
+    }
 
     #[test]
     fn codex_home_directory_info_marks_existing_directory() {
@@ -2063,6 +2974,81 @@ mod tests {
         assert_eq!(
             repaired.preferences.screenshot_capture,
             DEFAULT_SCREENSHOT_CAPTURE_HOTKEY
+        );
+    }
+
+    #[test]
+    fn old_preferences_receive_five_disabled_prompt_quick_paste_slots() {
+        let preferences: AppPreferences = serde_json::from_value(serde_json::json!({
+            "hotkey": {
+                "screenshotCapture": DEFAULT_SCREENSHOT_CAPTURE_HOTKEY
+            }
+        }))
+        .expect("legacy preferences should deserialize with defaults");
+
+        assert_eq!(
+            preferences.hotkey.prompt_quick_paste_slots.len(),
+            PROMPT_QUICK_PASTE_SLOT_COUNT
+        );
+        for (index, slot) in preferences
+            .hotkey
+            .prompt_quick_paste_slots
+            .iter()
+            .enumerate()
+        {
+            assert_eq!(slot.slot, (index + 1) as u8);
+            assert!(!slot.enabled);
+            assert!(slot.prompt_id.is_none());
+            assert_eq!(slot.shortcut, DEFAULT_PROMPT_QUICK_PASTE_HOTKEYS[index]);
+        }
+    }
+
+    #[test]
+    fn validate_prompt_quick_paste_requires_prompt_before_enable() {
+        let mut preferences = AppPreferences::default();
+        preferences.hotkey.prompt_quick_paste_slots[0].enabled = true;
+
+        let error = validate_hotkey_preferences(preferences.hotkey)
+            .expect_err("enabled slot without a prompt must fail");
+        assert_eq!(error.code, "PROMPT_QUICK_PASTE_PROMPT_REQUIRED");
+    }
+
+    #[test]
+    fn validate_prompt_quick_paste_rejects_active_shortcut_conflicts() {
+        let mut preferences = AppPreferences::default();
+        let slot = &mut preferences.hotkey.prompt_quick_paste_slots[0];
+        slot.enabled = true;
+        slot.prompt_id = Some(uuid::Uuid::new_v4().to_string());
+        slot.shortcut = DEFAULT_SCREENSHOT_CAPTURE_HOTKEY.to_string();
+
+        let error = validate_hotkey_preferences(preferences.hotkey)
+            .expect_err("active slots must not conflict with screenshot hotkey");
+        assert_eq!(error.code, "HOTKEY_DUPLICATE_SHORTCUT");
+    }
+
+    #[test]
+    fn sanitize_prompt_quick_paste_repairs_invalid_slot_without_losing_defaults() {
+        let mut preferences = AppPreferences::default();
+        preferences.hotkey.prompt_quick_paste_slots[0] = PromptQuickPasteHotkeySlot {
+            slot: 1,
+            enabled: true,
+            prompt_id: Some("not-a-uuid".to_string()),
+            shortcut: "modifier-only".to_string(),
+        };
+
+        let repaired = sanitize_hotkey_preferences(preferences.hotkey);
+        assert!(repaired.changed);
+        assert_eq!(
+            repaired.preferences.prompt_quick_paste_slots.len(),
+            PROMPT_QUICK_PASTE_SLOT_COUNT
+        );
+        assert!(!repaired.preferences.prompt_quick_paste_slots[0].enabled);
+        assert!(repaired.preferences.prompt_quick_paste_slots[0]
+            .prompt_id
+            .is_none());
+        assert_eq!(
+            repaired.preferences.prompt_quick_paste_slots[0].shortcut,
+            DEFAULT_PROMPT_QUICK_PASTE_HOTKEYS[0]
         );
     }
 

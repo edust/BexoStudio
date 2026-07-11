@@ -52,6 +52,8 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
   - Logs 页真实执行结果与日志目录入口
 - Phase 4/5 Tray & Diagnostics：
   - `tauri-plugin-store` 偏好存储与 `PreferencesService`
+  - Windows 开机启动由 Rust 单一注册表适配路径负责，支持幂等校验、写后读回与失败回滚
+  - 生产日志目录不依赖进程工作目录，消除登录启动场景下可能在 setup 前静默退出的高可信失败路径
   - 用户可配置 `Windows Terminal / Codex CLI / VS Code / JetBrains` 路径
   - 工具探测优先级改为 `user_config -> PATH`
   - 托盘最近工作区快速恢复
@@ -154,7 +156,7 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
       - 按排序顺序逐个打开 tabs
       - tabs 之间固定间隔 `10s`
     - 单条命令独立窗口运行
-    - 成功/失败同时触发系统级通知
+    - 快速粘贴成功时保持静默，失败时触发系统级通知和应用内错误提示
   - 命令组只管理 `terminal_command`
   - 没有工作区时显示空状态
   - 模板配置不再前端写死，统一存入本地偏好
@@ -171,6 +173,25 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
   - 支持按设置的秒数自动队列刷新所有授权额度，默认 `60s`
   - 支持为额度查询配置系统代理、手动 HTTP/SOCKS 代理或禁用代理
   - 不包含 ChatGPT 登录托管、refresh token 自动维护或其他 AI CLI 控制
+- Prompts：
+  - 左侧主导航提供常用 Prompts 一级入口
+  - SQLite 本地保存标题、完整正文与用户排序
+  - 支持新增、编辑、删除、搜索、拖拽/键盘排序
+  - 列表和编辑区均可一键复制，真实写入剪贴板后显示应用内通知
+  - 未保存修改在切换条目或离开页面前会明确确认
+  - 支持 5 个可配置的全局快速粘贴槽位，默认 `Ctrl+Alt+Shift+1` 到 `Ctrl+Alt+Shift+5`
+  - 快捷键在 Settings / Hotkeys 中绑定稳定 Prompt ID；拖拽排序不会改变绑定含义
+  - Windows 下由 Rust 写入剪贴板并向当前前台窗口发送 `Ctrl+V`，后台/托盘状态仍可使用
+- Reliability & Security Hardening：
+  - SQLite 写 timeout 会 interrupt 并等待事务确定提交或回滚，不遗留后台悬空写
+  - Native Preview/Interaction 由 typed owner thread 独占，跨线程不再传递裸指针
+  - Preferences 使用字段级 patch 合并，热键 degraded 状态可见且可重试
+  - Codex Auth 列表不返回凭据，授权切换串行并覆盖文件与 DB 状态回滚
+  - Restore 失败先清理进程树；Screenshot listener/watch 部分失败会完整释放资源
+  - 工作区/终端任务排序使用 Rust 单事务批量命令，不再因前端循环写入产生部分提交
+  - Tauri capability 按窗口最小授权，生产/开发 CSP 分离；截图预览协议仅允许 Overlay 窗口
+  - Ant Design、Icons 与 Sonner runtime style 继承 Tauri production nonce，避免安装版在 CSP 下退化为裸控件
+  - Overlay/History 已拆为懒加载 chunk，关键热键、runtime state 与 listener lifecycle 有自动测试
 - Dev Inspector Baseline：
   - 已接入 `code-inspector-plugin`
   - 在 `Vite serve` 开发模式下默认启用
@@ -234,9 +255,12 @@ npm run desktop:dev
 可用验证命令：
 
 ```bash
-cargo test --manifest-path src-tauri/Cargo.toml
+npm run web:test
 npm run web:build
 npm run desktop:build:debug
+cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+cargo check --manifest-path src-tauri/Cargo.toml --release
+cargo test --manifest-path src-tauri/Cargo.toml --all-targets --no-run
 ```
 
 发行打包命令：

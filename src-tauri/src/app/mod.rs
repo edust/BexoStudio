@@ -9,24 +9,17 @@ use tauri::{
     http::{header::CONTENT_TYPE, Response, StatusCode},
     Manager,
 };
+#[cfg(not(windows))]
 use tauri_plugin_autostart::MacosLauncher;
 
 pub(crate) use tray::refresh_tray_menu;
 
 const SCREENSHOT_PREVIEW_PROTOCOL: &str = "bexo-preview";
 const SCREENSHOT_PREVIEW_TEMP_DIR_NAME: &str = "bexo-screenshot-preview";
+const SCREENSHOT_PREVIEW_MAX_ENCODED_PATH_BYTES: usize = 8_192;
 
 pub fn run() {
     let builder = tauri::Builder::default()
-        .register_uri_scheme_protocol(SCREENSHOT_PREVIEW_PROTOCOL, |context, request| {
-            serve_screenshot_preview(context, request)
-        })
-        .plugin(logging::build_plugin())
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_drag::init())
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             if args_indicate_autostart(&_argv) {
                 log::info!(
@@ -41,6 +34,15 @@ pub fn run() {
                 focus_main_window(app);
             }
         }))
+        .register_uri_scheme_protocol(SCREENSHOT_PREVIEW_PROTOCOL, |context, request| {
+            serve_screenshot_preview(context, request)
+        })
+        .plugin(logging::build_plugin())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_drag::init())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(
@@ -84,6 +86,8 @@ pub fn run() {
             }
             let screenshot_service = crate::services::ScreenshotService::new();
             let hotkey_service = crate::services::HotkeyService::new();
+            let prompt_service = crate::services::PromptService::new(database.clone());
+            let prompt_quick_paste_service = crate::services::PromptQuickPasteService::new();
             if let Err(error) = screenshot_service.prewarm_overlay_window(&app.handle()) {
                 log::warn!(
                     target: "bexo::app",
@@ -101,6 +105,9 @@ pub fn run() {
             app.manage(native_preview_service);
             app.manage(native_interaction_service);
             app.manage(screenshot_service);
+            app.manage(preferences_service.clone());
+            app.manage(prompt_service);
+            app.manage(prompt_quick_paste_service);
             if let Err(error) = hotkey_service.initialize(&app.handle(), &initial_preferences) {
                 log::error!(
                     target: "bexo::app",
@@ -109,7 +116,6 @@ pub fn run() {
                 );
             }
 
-            app.manage(preferences_service.clone());
             app.manage(hotkey_service);
             app.manage(crate::services::WorkspaceService::new(database.clone()));
             app.manage(crate::services::ResourceBrowserService::new(
@@ -137,6 +143,7 @@ pub fn run() {
             }
             app.manage(restore_service);
 
+            #[cfg(not(windows))]
             app.handle()
                 .plugin(tauri_plugin_autostart::init(
                     MacosLauncher::LaunchAgent,
@@ -152,8 +159,10 @@ pub fn run() {
             {
                 log::warn!(
                     target: "bexo::app",
-                    "sync autostart state from saved preferences failed: {}",
-                    error
+                    "sync autostart state from saved preferences failed code={} message={} details={:?}",
+                    error.code,
+                    error.message,
+                    error.details
                 );
             }
 
@@ -202,6 +211,8 @@ pub fn run() {
             commands::native_interaction::update_native_interaction_runtime,
             commands::preferences::get_app_preferences,
             commands::preferences::update_app_preferences,
+            commands::preferences::get_hotkey_health,
+            commands::preferences::retry_hotkey_registration,
             commands::preferences::get_codex_home_directory,
             commands::preferences::detect_editors_from_path,
             commands::codex_history::open_codex_history_window,
@@ -209,14 +220,20 @@ pub fn run() {
             commands::codex_history::list_all_codex_history_sessions,
             commands::codex_history::get_codex_history_messages,
             commands::codex_auth::list_codex_auth_profiles,
+            commands::codex_auth::get_codex_auth_profile_detail,
             commands::codex_auth::import_current_codex_auth_profile,
             commands::codex_auth::upsert_codex_auth_profile,
             commands::codex_auth::delete_codex_auth_profile,
             commands::codex_auth::switch_codex_auth_profile,
             commands::codex_auth::query_codex_auth_quota,
             commands::codex_auth::refresh_all_codex_auth_quotas,
+            commands::prompt::list_prompts,
+            commands::prompt::upsert_prompt,
+            commands::prompt::delete_prompt,
+            commands::prompt::reorder_prompts,
             commands::workspace::list_workspaces,
             commands::workspace::upsert_workspace,
+            commands::workspace::reorder_workspaces,
             commands::workspace::delete_workspace,
             commands::workspace::register_workspace_folder,
             commands::workspace::remove_workspace_registration,
@@ -231,6 +248,7 @@ pub fn run() {
             commands::resource_browser::get_workspace_resource_git_statuses,
             commands::launch_task::list_launch_tasks,
             commands::launch_task::upsert_launch_task,
+            commands::launch_task::reorder_launch_tasks,
             commands::launch_task::delete_launch_task,
             commands::codex_profile::list_codex_profiles,
             commands::codex_profile::upsert_codex_profile,
@@ -284,9 +302,21 @@ fn serve_screenshot_preview<R: tauri::Runtime>(
             .expect("build preview protocol success response")
     };
 
+    if context.webview_label() != SCREENSHOT_OVERLAY_WINDOW_LABEL {
+        log::warn!(
+            target: "bexo::app",
+            "preview protocol denied non-overlay webview label={}",
+            context.webview_label()
+        );
+        return build_error_response(StatusCode::FORBIDDEN, "preview protocol is overlay-only");
+    }
+
     let encoded_path = request.uri().path().trim_start_matches('/');
     if encoded_path.is_empty() {
         return build_error_response(StatusCode::BAD_REQUEST, "missing preview path");
+    }
+    if encoded_path.len() > SCREENSHOT_PREVIEW_MAX_ENCODED_PATH_BYTES {
+        return build_error_response(StatusCode::PAYLOAD_TOO_LARGE, "preview path is too large");
     }
 
     let decoded_path = match URL_SAFE_NO_PAD.decode(encoded_path) {

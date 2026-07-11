@@ -95,6 +95,86 @@ pub fn get_codex_auth_profile(
         })
 }
 
+pub fn get_active_codex_auth_profile_id(connection: &Connection) -> AppResult<Option<String>> {
+    connection
+        .query_row(
+            "SELECT id FROM codex_auth_profiles WHERE is_active = 1 ORDER BY updated_at DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| {
+            AppError::new("DB_READ_FAILED", "failed to load active codex auth profile")
+                .with_detail("reason", error.to_string())
+        })
+}
+
+pub fn restore_codex_auth_active_profile(
+    connection: &mut Connection,
+    active_id: Option<String>,
+) -> AppResult<()> {
+    let transaction = connection.savepoint().map_err(|error| {
+        AppError::new(
+            "DB_WRITE_FAILED",
+            "failed to open codex auth active rollback transaction",
+        )
+        .with_detail("reason", error.to_string())
+    })?;
+
+    if let Some(active_id) = active_id.as_deref() {
+        let exists = transaction
+            .query_row(
+                "SELECT 1 FROM codex_auth_profiles WHERE id = ?1 LIMIT 1",
+                [active_id],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(|error| {
+                AppError::new(
+                    "DB_READ_FAILED",
+                    "failed to validate previous active profile",
+                )
+                .with_detail("reason", error.to_string())
+            })?;
+        if exists.is_none() {
+            return Err(AppError::new(
+                "CODEX_AUTH_ROLLBACK_FAILED",
+                "previous active Codex Auth profile no longer exists",
+            )
+            .with_detail("id", active_id.to_string()));
+        }
+    }
+
+    transaction
+        .execute("UPDATE codex_auth_profiles SET is_active = 0", [])
+        .map_err(|error| {
+            AppError::new("DB_WRITE_FAILED", "failed to reset Codex Auth active state")
+                .with_detail("reason", error.to_string())
+        })?;
+    if let Some(active_id) = active_id {
+        transaction
+            .execute(
+                "UPDATE codex_auth_profiles SET is_active = 1 WHERE id = ?1",
+                [active_id],
+            )
+            .map_err(|error| {
+                AppError::new(
+                    "DB_WRITE_FAILED",
+                    "failed to restore previous Codex Auth active profile",
+                )
+                .with_detail("reason", error.to_string())
+            })?;
+    }
+
+    transaction.commit().map_err(|error| {
+        AppError::new(
+            "DB_WRITE_FAILED",
+            "failed to commit Codex Auth active rollback",
+        )
+        .with_detail("reason", error.to_string())
+    })
+}
+
 pub fn upsert_codex_auth_profile(
     connection: &mut Connection,
     input: UpsertCodexAuthProfileInput,
@@ -113,7 +193,7 @@ pub fn upsert_codex_auth_profile(
     validate_codex_config_toml(&config_toml)?;
 
     let timestamp = Utc::now().to_rfc3339();
-    let transaction = connection.transaction().map_err(|error| {
+    let transaction = connection.savepoint().map_err(|error| {
         AppError::new(
             "DB_WRITE_FAILED",
             "failed to open codex auth profile transaction",
@@ -212,7 +292,7 @@ pub fn mark_codex_auth_profile_active(
     id: String,
 ) -> AppResult<CodexAuthProfileRecord> {
     let timestamp = Utc::now().to_rfc3339();
-    let transaction = connection.transaction().map_err(|error| {
+    let transaction = connection.savepoint().map_err(|error| {
         AppError::new(
             "DB_WRITE_FAILED",
             "failed to open codex auth active profile transaction",

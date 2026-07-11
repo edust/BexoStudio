@@ -53,6 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             windows_terminal_path: Some(terminal_path.clone()),
             codex_cli_path: None,
             command_templates: Vec::new(),
+            ..TerminalPreferences::default()
         },
         ide: IdePreferences {
             vscode_path: None,
@@ -69,6 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             show_adapter_sources: true,
             show_executable_paths: true,
         },
+        ..AppPreferences::default()
     };
     preferences_service.set_preferences_for_runtime(preferences)?;
     let capabilities = restore_service

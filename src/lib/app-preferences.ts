@@ -24,6 +24,12 @@ export const defaultAppPreferences: AppPreferences = {
     screenshotCapture: "Ctrl+Shift+X",
     voiceInputToggle: null,
     voiceInputHold: null,
+    promptQuickPasteSlots: [1, 2, 3, 4, 5].map((slot) => ({
+      slot,
+      enabled: false,
+      promptId: null,
+      shortcut: `Ctrl+Alt+Shift+${slot}`,
+    })),
   },
   tray: {
     closeToTray: true,

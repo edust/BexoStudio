@@ -4,11 +4,12 @@ export type AppRouteKey =
   | "home"
   | "history"
   | "codexAuth"
+  | "prompts"
   | "settings"
   | "frozen";
 
 export type PrimaryNavItem = {
-  key: "home" | "history" | "codexAuth" | "settings";
+  key: "home" | "history" | "codexAuth" | "prompts" | "settings";
   label: string;
   href: string;
   icon: ComponentType<{ className?: string }>;

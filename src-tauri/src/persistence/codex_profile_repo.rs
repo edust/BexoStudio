@@ -81,7 +81,7 @@ pub fn upsert_codex_profile(
     let is_default = input.is_default.unwrap_or(false);
     let timestamp = Utc::now().to_rfc3339();
 
-    let transaction = connection.transaction().map_err(|error| {
+    let transaction = connection.savepoint().map_err(|error| {
         AppError::new(
             "DB_WRITE_FAILED",
             "failed to open codex profile transaction",

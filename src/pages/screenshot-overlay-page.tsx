@@ -56,6 +56,62 @@ import {
   saveScreenshotSelection,
   updateNativeInteractionRuntime,
 } from "@/lib/command-client";
+import {
+  buildToolHotkeyMap,
+  resolveToolHotkeyFromKeyboardEvent,
+} from "@/features/screenshot-overlay/overlay-hotkeys";
+import { AsyncDisposerGroup } from "@/features/screenshot-overlay/async-disposer-group";
+import type {
+  Annotation,
+  BusyAction,
+  Draft,
+  EffectAnnotation,
+  EffectClipboardState,
+  EffectGroupDragState,
+  EffectHandleDescriptor,
+  EffectKind,
+  EffectTransformMode,
+  EffectTransformState,
+  MixedClipboardState,
+  MixedGroupDragState,
+  NumberAnnotation,
+  NumberClipboardState,
+  NumberDragState,
+  NumberGroupDragState,
+  ObjectClipboardKind,
+  ObjectMarqueeResolution,
+  ObjectSelectionAnnotation,
+  ObjectSelectionBuckets,
+  ObjectSelectionFamily,
+  ObjectSelectionMarqueeState,
+  PenAnnotation,
+  PenClipboardState,
+  PenGroupDragState,
+  PenTransformState,
+  Point,
+  SelectionRect,
+  SelectionStatusBarModel,
+  ShapeAnnotation,
+  ShapeClipboardState,
+  ShapeGroupDragState,
+  ShapeHandleDescriptor,
+  ShapeTransformMode,
+  ShapeTransformState,
+  SnapGuide,
+  TextAnnotation,
+  TextClipboardState,
+  TextDragState,
+  TextEditorState,
+  TextMetrics,
+  TextStyleKind,
+  ToolbarIconAction,
+  ToolKind,
+} from "@/features/screenshot-overlay/overlay-model";
+import {
+  areNativeInteractionStatesEqual,
+  buildNativeInteractionRuntimeRequestKey,
+  type NativeInteractionRuntimeRequest,
+} from "@/features/screenshot-overlay/native-runtime-state";
 import type {
   NativeInteractionEditableShape,
   NativeInteractionExclusionRect,
@@ -68,296 +124,6 @@ import type {
 } from "@/types/backend";
 
 let tauriLogModulePromise: Promise<typeof import("@tauri-apps/plugin-log")> | null = null;
-
-type BusyAction = "copy" | "save" | "cancel" | null;
-type ToolKind = "select" | "line" | "rect" | "ellipse" | "arrow" | "pen" | "text" | "number" | "fill" | "mosaic" | "blur";
-type ShapeKind = "line" | "rect" | "ellipse" | "arrow";
-type EffectKind = "mosaic" | "blur";
-type TextStyleKind = "plain" | "outline" | "background" | "highlight";
-
-type Point = { x: number; y: number };
-type SelectionRect = { x: number; y: number; width: number; height: number };
-type NativeInteractionRuntimeRequest = {
-  sessionId: string;
-  visible: boolean;
-  exclusionRects: NativeInteractionExclusionRect[];
-  mode: NativeInteractionMode;
-  selection: SelectionRect | null;
-  activeShape: NativeInteractionEditableShape | null;
-  shapeCandidates: NativeInteractionEditableShape[];
-  color: string;
-  strokeWidth: number;
-};
-
-type ToolbarIconAction = {
-  key: string;
-  label: string;
-  icon: ReactNode;
-  onClick: () => void;
-  disabled?: boolean;
-  active?: boolean;
-  danger?: boolean;
-  loading?: boolean;
-};
-
-type ShapeAnnotation = {
-  id: string;
-  kind: ShapeKind;
-  color: string;
-  strokeWidth: number;
-  start: Point;
-  end: Point;
-};
-
-type PenAnnotation = {
-  id: string;
-  kind: "pen";
-  color: string;
-  strokeWidth: number;
-  points: Point[];
-};
-
-type TextAnnotation = {
-  id: string;
-  kind: "text";
-  style: TextStyleKind;
-  color: string;
-  fontSize: number;
-  rotation: number;
-  opacity: number;
-  point: Point;
-  text: string;
-};
-
-type NumberAnnotation = {
-  id: string;
-  kind: "number";
-  value: number;
-  color: string;
-  size: number;
-  point: Point;
-};
-
-type FillAnnotation = {
-  id: string;
-  kind: "fill";
-  color: string;
-  opacity: number;
-};
-
-type EffectAnnotation = {
-  id: string;
-  kind: "effect";
-  effect: EffectKind;
-  intensity: number;
-  start: Point;
-  end: Point;
-};
-
-type Annotation = ShapeAnnotation | PenAnnotation | TextAnnotation | NumberAnnotation | FillAnnotation | EffectAnnotation;
-type Draft = ShapeAnnotation | PenAnnotation | EffectAnnotation | null;
-
-type TextEditorState = {
-  id: string;
-  sourceAnnotationId: string | null;
-  point: Point;
-  text: string;
-  style: TextStyleKind;
-  color: string;
-  fontSize: number;
-  rotation: number;
-  opacity: number;
-};
-
-type TextDragState = {
-  ids: string[];
-  originPoints: Record<string, Point>;
-  startPointer: Point;
-  delta: Point;
-  groupBounds: SelectionRect;
-  guides: SnapGuide[];
-  moved: boolean;
-};
-
-type EffectTransformMode = "move" | "n" | "s" | "e" | "w" | "nw" | "ne" | "sw" | "se";
-type ShapeTransformMode = "move" | "start" | "end" | Exclude<EffectTransformMode, "move">;
-
-type EffectTransformState = {
-  id: string;
-  mode: EffectTransformMode;
-  startPointer: Point;
-  originBounds: SelectionRect;
-  previewBounds: SelectionRect;
-  moved: boolean;
-};
-
-type ShapeTransformState = {
-  id: string;
-  mode: ShapeTransformMode;
-  startPointer: Point;
-  originAnnotation: ShapeAnnotation;
-  previewAnnotation: ShapeAnnotation;
-  moved: boolean;
-};
-
-type ShapeGroupDragState = {
-  ids: string[];
-  originAnnotations: Record<string, ShapeAnnotation>;
-  startPointer: Point;
-  delta: Point;
-  groupBounds: SelectionRect;
-  moved: boolean;
-};
-
-type PenTransformState = {
-  id: string;
-  startPointer: Point;
-  originAnnotation: PenAnnotation;
-  previewAnnotation: PenAnnotation;
-  moved: boolean;
-};
-
-type NumberDragState = {
-  id: string;
-  startPointer: Point;
-  originAnnotation: NumberAnnotation;
-  previewAnnotation: NumberAnnotation;
-  moved: boolean;
-};
-
-type PenGroupDragState = {
-  ids: string[];
-  originAnnotations: Record<string, PenAnnotation>;
-  startPointer: Point;
-  delta: Point;
-  groupBounds: SelectionRect;
-  moved: boolean;
-};
-
-type NumberGroupDragState = {
-  ids: string[];
-  originPoints: Record<string, Point>;
-  startPointer: Point;
-  delta: Point;
-  groupBounds: SelectionRect;
-  moved: boolean;
-};
-
-type EffectGroupDragState = {
-  ids: string[];
-  originBounds: Record<string, SelectionRect>;
-  startPointer: Point;
-  delta: Point;
-  groupBounds: SelectionRect;
-  moved: boolean;
-};
-
-type MixedGroupDragState = {
-  ids: string[];
-  originAnnotations: Record<string, ObjectSelectionAnnotation>;
-  startPointer: Point;
-  delta: Point;
-  groupBounds: SelectionRect;
-  moved: boolean;
-};
-
-type ObjectSelectionMarqueeState = {
-  startPointer: Point;
-  currentPointer: Point;
-  additive: boolean;
-};
-
-type ObjectSelectionFamily = "text" | "shape" | "pen" | "number" | "effect";
-
-type ObjectSelectionAnnotation = TextAnnotation | ShapeAnnotation | PenAnnotation | NumberAnnotation | EffectAnnotation;
-
-type ObjectMarqueeResolution = {
-  family: ObjectSelectionFamily | null;
-  ids: string[];
-  primaryId: string | null;
-  counts: Record<ObjectSelectionFamily, number>;
-};
-
-type ObjectSelectionBuckets = {
-  text: string[];
-  shape: string[];
-  pen: string[];
-  number: string[];
-  effect: string[];
-};
-
-type SelectionStatusBarTone = "idle" | "preview" | "selection";
-
-type SelectionStatusBarModel = {
-  tone: SelectionStatusBarTone;
-  title: string;
-  subtitle: string;
-  chips: string[];
-};
-
-type SnapGuide = {
-  orientation: "vertical" | "horizontal";
-  position: number;
-  start: number;
-  end: number;
-  source: "selection" | "annotation";
-};
-
-type TextClipboardState = {
-  items: TextAnnotation[];
-  groupBounds: SelectionRect;
-  pasteCount: number;
-};
-
-type PenClipboardState = {
-  items: PenAnnotation[];
-  groupBounds: SelectionRect;
-  pasteCount: number;
-};
-
-type ShapeClipboardState = {
-  items: ShapeAnnotation[];
-  groupBounds: SelectionRect;
-  pasteCount: number;
-};
-
-type NumberClipboardState = {
-  items: NumberAnnotation[];
-  groupBounds: SelectionRect;
-  pasteCount: number;
-};
-
-type EffectClipboardState = {
-  items: EffectAnnotation[];
-  groupBounds: SelectionRect;
-  pasteCount: number;
-};
-
-type MixedClipboardState = {
-  items: ObjectSelectionAnnotation[];
-  groupBounds: SelectionRect;
-  pasteCount: number;
-};
-
-type ObjectClipboardKind = "text" | "shape" | "pen" | "number" | "effect" | "mixed";
-
-type TextMetrics = {
-  width: number;
-  height: number;
-  lineHeight: number;
-};
-
-type EffectHandleDescriptor = {
-  mode: Exclude<EffectTransformMode, "move">;
-  point: Point;
-  cursor: string;
-};
-
-type ShapeHandleDescriptor = {
-  mode: Exclude<ShapeTransformMode, "move">;
-  point: Point;
-  cursor: string;
-};
 
 const TOOLS: Array<{ key: ToolKind; label: string }> = [
   { key: "select", label: "选区" },
@@ -381,19 +147,6 @@ const TEXT_STYLE_OPTIONS: Array<{ key: TextStyleKind; label: string }> = [
   { key: "highlight", label: "高亮" },
 ];
 const NATIVE_SELECTION_RUNTIME_STABILIZE_MS = 220;
-const FIXED_SCREENSHOT_TOOL_HOTKEYS: Array<[string, ToolKind]> = [
-  ["1", "select"],
-  ["2", "line"],
-  ["3", "rect"],
-  ["4", "ellipse"],
-  ["5", "arrow"],
-  ["6", "pen"],
-  ["7", "text"],
-  ["8", "fill"],
-  ["9", "mosaic"],
-  ["0", "blur"],
-  ["n", "number"],
-];
 const TOOL_HOTKEY_MAP = buildToolHotkeyMap();
 
 export default function ScreenshotOverlayPage() {
@@ -3952,30 +3705,36 @@ export default function ScreenshotOverlayPage() {
     }
 
     let disposed = false;
-    let unlistenState: (() => void) | null = null;
-    let unlistenRectCommitted: (() => void) | null = null;
-    let unlistenShapeUpdated: (() => void) | null = null;
+    const listenerGroup = new AsyncDisposerGroup((error) => {
+      console.warn("detach native interaction listener failed", getErrorSummary(error));
+    });
 
     void (async () => {
       try {
-        const [detachState, detachRectCommitted, detachShapeUpdated] = await Promise.all([
+        const stateAttached = await listenerGroup.attach(() =>
           listenToNativeInteractionStateUpdatedEvents((event) => {
-          if (disposed) {
-            return;
-          }
-          if (session && event.sessionId && event.sessionId !== session.sessionId) {
+            if (disposed) {
+              return;
+            }
+            if (session && event.sessionId && event.sessionId !== session.sessionId) {
+              emitPipelineInfo(
+                `[screenshot][native-interaction] state_updated_dropped reason=session_mismatch event_session_id=${event.sessionId} current_session_id=${session.sessionId} drag_mode=${event.dragMode ?? "none"} lifecycle_state=${event.lifecycleState}`,
+              );
+              return;
+            }
             emitPipelineInfo(
-              `[screenshot][native-interaction] state_updated_dropped reason=session_mismatch event_session_id=${event.sessionId} current_session_id=${session.sessionId} drag_mode=${event.dragMode ?? "none"} lifecycle_state=${event.lifecycleState}`,
+              `[screenshot][native-interaction] state_updated_applied session_id=${event.sessionId ?? "none"} drag_mode=${event.dragMode ?? "none"} lifecycle_state=${event.lifecycleState} interaction_mode=${event.interactionMode} selection_revision=${event.selectionRevision}`,
             );
-            return;
-          }
-          emitPipelineInfo(
-            `[screenshot][native-interaction] state_updated_applied session_id=${event.sessionId ?? "none"} drag_mode=${event.dragMode ?? "none"} lifecycle_state=${event.lifecycleState} interaction_mode=${event.interactionMode} selection_revision=${event.selectionRevision}`,
-          );
-          setNativeInteractionState((current) =>
-            areNativeInteractionStatesEqual(current, event) ? current : event,
-          );
+            setNativeInteractionState((current) =>
+              areNativeInteractionStatesEqual(current, event) ? current : event,
+            );
           }),
+        );
+        if (!stateAttached) {
+          return;
+        }
+
+        const committedAttached = await listenerGroup.attach(() =>
           listenToNativeInteractionShapeAnnotationCommittedEvents((event) => {
             if (disposed) {
               return;
@@ -3993,6 +3752,12 @@ export default function ScreenshotOverlayPage() {
             };
             pushAnnotation(annotation);
           }),
+        );
+        if (!committedAttached) {
+          return;
+        }
+
+        const updatedAttached = await listenerGroup.attach(() =>
           listenToNativeInteractionShapeAnnotationUpdatedEvents((event) => {
             if (disposed) {
               return;
@@ -4023,32 +3788,19 @@ export default function ScreenshotOverlayPage() {
             commitAnnotations(nextAnnotations);
             selectShapeAnnotation(nextAnnotation);
           }),
-        ]);
-        if (disposed) {
-          detachState();
-          detachRectCommitted();
-          detachShapeUpdated();
+        );
+        if (!updatedAttached) {
           return;
         }
-        unlistenState = detachState;
-        unlistenRectCommitted = detachRectCommitted;
-        unlistenShapeUpdated = detachShapeUpdated;
       } catch (error) {
+        listenerGroup.dispose();
         console.warn("listen native interaction events failed", getErrorSummary(error));
       }
     })();
 
     return () => {
       disposed = true;
-      if (unlistenState) {
-        unlistenState();
-      }
-      if (unlistenRectCommitted) {
-        unlistenRectCommitted();
-      }
-      if (unlistenShapeUpdated) {
-        unlistenShapeUpdated();
-      }
+      listenerGroup.dispose();
     };
   }, [commitAnnotations, pushAnnotation, runtimeAvailable, selectShapeAnnotation, session]);
 
@@ -10388,236 +10140,6 @@ function encodeUrlSafeBase64Utf8(value: string) {
     .replace(/=+$/g, "");
 }
 
-function buildToolHotkeyMap(): ReadonlyMap<string, ToolKind> {
-  const map = new Map<string, ToolKind>();
-
-  for (const [shortcut, tool] of FIXED_SCREENSHOT_TOOL_HOTKEYS) {
-    const normalized = normalizeOverlayShortcut(shortcut);
-    if (!normalized) {
-      continue;
-    }
-    map.set(normalized, tool);
-  }
-
-  return map;
-}
-
-function resolveToolHotkeyFromKeyboardEvent(
-  event: KeyboardEvent,
-  toolHotkeyMap: ReadonlyMap<string, ToolKind>,
-): ToolKind | null {
-  const normalized = normalizeOverlayKeyboardEvent(event);
-  if (!normalized) {
-    return null;
-  }
-
-  return toolHotkeyMap.get(normalized) ?? null;
-}
-
-function normalizeOverlayShortcut(value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const modifiers = new Set<string>();
-  let key: string | null = null;
-
-  for (const part of trimmed.split("+")) {
-    const token = normalizeOverlayShortcutToken(part);
-    if (!token) {
-      return null;
-    }
-
-    if (isOverlayModifierToken(token)) {
-      modifiers.add(token);
-      continue;
-    }
-
-    if (key) {
-      return null;
-    }
-    key = token;
-  }
-
-  if (!key && modifiers.size === 0) {
-    return null;
-  }
-
-  return formatOverlayHotkey(modifiers, key);
-}
-
-function normalizeOverlayKeyboardEvent(event: KeyboardEvent): string | null {
-  const modifiers = new Set<string>();
-  if (event.ctrlKey) {
-    modifiers.add("ctrl");
-  }
-  if (event.altKey) {
-    modifiers.add("alt");
-  }
-  if (event.shiftKey) {
-    modifiers.add("shift");
-  }
-  if (event.metaKey) {
-    modifiers.add("super");
-  }
-
-  const keyToken = normalizeOverlayKeyboardKey(event.key);
-  if (!keyToken) {
-    return null;
-  }
-
-  if (isOverlayModifierToken(keyToken)) {
-    modifiers.add(keyToken);
-    return formatOverlayHotkey(modifiers, null);
-  }
-
-  return formatOverlayHotkey(modifiers, keyToken);
-}
-
-function formatOverlayHotkey(modifiers: ReadonlySet<string>, key: string | null): string {
-  const parts: string[] = [];
-  for (const token of ["ctrl", "alt", "shift", "super"]) {
-    if (modifiers.has(token)) {
-      parts.push(token);
-    }
-  }
-  if (key) {
-    parts.push(key);
-  }
-  return parts.join("+");
-}
-
-function normalizeOverlayKeyboardKey(input: string): string | null {
-  const normalized = input.trim().toLowerCase();
-  if (!normalized) {
-    return null;
-  }
-
-  if (/^[a-z0-9]$/.test(normalized)) {
-    return normalized;
-  }
-
-  if (/^f([1-9]|1[0-9]|2[0-4])$/.test(normalized)) {
-    return normalized;
-  }
-
-  switch (normalized) {
-    case "control":
-    case "ctrl":
-      return "ctrl";
-    case "alt":
-    case "altgraph":
-      return "alt";
-    case "shift":
-      return "shift";
-    case "meta":
-    case "super":
-    case "os":
-      return "super";
-    case " ":
-    case "spacebar":
-      return "space";
-    case "tab":
-      return "tab";
-    case "enter":
-    case "return":
-      return "enter";
-    case "backspace":
-      return "backspace";
-    case "delete":
-    case "del":
-      return "delete";
-    case "escape":
-    case "esc":
-      return "escape";
-    case "arrowup":
-    case "arrowdown":
-    case "arrowleft":
-    case "arrowright":
-      return normalized;
-    default:
-      return null;
-  }
-}
-
-function normalizeOverlayShortcutToken(input: string): string | null {
-  const normalized = input.trim().toLowerCase();
-  if (!normalized) {
-    return null;
-  }
-
-  if (/^[a-z0-9]$/.test(normalized)) {
-    return normalized;
-  }
-
-  if (/^f([1-9]|1[0-9]|2[0-4])$/.test(normalized)) {
-    return normalized;
-  }
-
-  switch (normalized) {
-    case "ctrl":
-    case "control":
-    case "lctrl":
-    case "leftctrl":
-    case "leftcontrol":
-    case "rctrl":
-    case "rightctrl":
-    case "rightcontrol":
-      return "ctrl";
-    case "alt":
-    case "lalt":
-    case "leftalt":
-    case "ralt":
-    case "rightalt":
-    case "altgraph":
-      return "alt";
-    case "shift":
-    case "lshift":
-    case "leftshift":
-    case "rshift":
-    case "rightshift":
-      return "shift";
-    case "super":
-    case "meta":
-    case "win":
-    case "windows":
-    case "lwin":
-    case "leftwin":
-    case "leftwindows":
-    case "rwin":
-    case "rightwin":
-    case "rightwindows":
-      return "super";
-    case "space":
-      return "space";
-    case "tab":
-      return "tab";
-    case "enter":
-    case "return":
-      return "enter";
-    case "backspace":
-      return "backspace";
-    case "delete":
-    case "del":
-      return "delete";
-    case "escape":
-    case "esc":
-      return "escape";
-    case "arrowup":
-    case "arrowdown":
-    case "arrowleft":
-    case "arrowright":
-      return normalized;
-    default:
-      return null;
-  }
-}
-
-function isOverlayModifierToken(token: string) {
-  return token === "ctrl" || token === "alt" || token === "shift" || token === "super";
-}
-
 function formatNowForFileName() {
   const now = new Date();
   const year = now.getFullYear();
@@ -10627,110 +10149,4 @@ function formatNowForFileName() {
   const minutes = `${now.getMinutes()}`.padStart(2, "0");
   const seconds = `${now.getSeconds()}`.padStart(2, "0");
   return `${year}${month}${day}-${hours}${minutes}${seconds}`;
-}
-
-function areNativeInteractionStatesEqual(
-  left: NativeInteractionStateView | null,
-  right: NativeInteractionStateView | null,
-) {
-  if (!left && !right) {
-    return true;
-  }
-  if (!left || !right) {
-    return false;
-  }
-  return (
-    left.backendKind === right.backendKind &&
-    left.lifecycleState === right.lifecycleState &&
-    left.hasActiveSession === right.hasActiveSession &&
-    areNativeEditableShapesEqual(left.activeShape ?? null, right.activeShape ?? null) &&
-    areNativeEditableShapesEqual(left.activeShapeDraft ?? null, right.activeShapeDraft ?? null) &&
-    left.hoveredHitRegion === right.hoveredHitRegion &&
-    left.dragMode === right.dragMode &&
-    left.selectionRevision === right.selectionRevision &&
-    left.activeShapeRevision === right.activeShapeRevision &&
-    left.interactionMode === right.interactionMode &&
-    areSelectionRectsEqual(left.selection ?? null, right.selection ?? null) &&
-    areSelectionRectsEqual(left.rectDraft ?? null, right.rectDraft ?? null)
-  );
-}
-
-function buildNativeInteractionRuntimeRequestKey(
-  request: NativeInteractionRuntimeRequest,
-) {
-  return JSON.stringify({
-    sessionId: request.sessionId,
-    visible: request.visible,
-    mode: request.mode,
-    exclusionRects: request.exclusionRects.map((rect) => ({
-      x: roundRuntimeGeometry(rect.x),
-      y: roundRuntimeGeometry(rect.y),
-      width: roundRuntimeGeometry(rect.width),
-      height: roundRuntimeGeometry(rect.height),
-    })),
-    selection: request.selection
-      ? {
-          x: roundRuntimeGeometry(request.selection.x),
-          y: roundRuntimeGeometry(request.selection.y),
-          width: roundRuntimeGeometry(request.selection.width),
-          height: roundRuntimeGeometry(request.selection.height),
-        }
-      : null,
-    activeShape: request.activeShape
-      ? {
-          id: request.activeShape.id,
-          kind: request.activeShape.kind,
-          color: request.activeShape.color,
-          strokeWidth: roundRuntimeGeometry(request.activeShape.strokeWidth),
-          start: {
-            x: roundRuntimeGeometry(request.activeShape.start.x),
-            y: roundRuntimeGeometry(request.activeShape.start.y),
-          },
-          end: {
-            x: roundRuntimeGeometry(request.activeShape.end.x),
-            y: roundRuntimeGeometry(request.activeShape.end.y),
-          },
-        }
-      : null,
-    shapeCandidates: request.shapeCandidates.map((shape) => ({
-      id: shape.id,
-      kind: shape.kind,
-      color: shape.color,
-      strokeWidth: roundRuntimeGeometry(shape.strokeWidth),
-      start: {
-        x: roundRuntimeGeometry(shape.start.x),
-        y: roundRuntimeGeometry(shape.start.y),
-      },
-      end: {
-        x: roundRuntimeGeometry(shape.end.x),
-        y: roundRuntimeGeometry(shape.end.y),
-      },
-    })),
-    color: request.color,
-    strokeWidth: roundRuntimeGeometry(request.strokeWidth),
-  });
-}
-
-function roundRuntimeGeometry(value: number) {
-  return Number(value.toFixed(3));
-}
-
-function areNativeEditableShapesEqual(
-  left: NativeInteractionEditableShape | null,
-  right: NativeInteractionEditableShape | null,
-) {
-  if (!left && !right) {
-    return true;
-  }
-  if (!left || !right) {
-    return false;
-  }
-  return (
-    left.id === right.id &&
-    left.kind === right.kind &&
-    left.color === right.color &&
-    left.strokeWidth === right.strokeWidth &&
-    arePointsEqual(left.start, right.start) &&
-    arePointsEqual(left.end, right.end)
-  );
 }

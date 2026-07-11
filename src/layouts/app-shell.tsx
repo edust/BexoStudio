@@ -11,8 +11,10 @@ export function AppShell() {
   const location = useLocation();
   const routeKey = routeKeyFromPathname(location.pathname);
   const sidebarContent = sidebarContentByRoute[routeKey];
-  const showSectionSidebar = routeKey !== "history" && routeKey !== "codexAuth";
-  const routeOwnsScroll = routeKey === "history" || routeKey === "codexAuth";
+  const showSectionSidebar =
+    routeKey !== "history" && routeKey !== "codexAuth" && routeKey !== "prompts";
+  const routeOwnsScroll =
+    routeKey === "history" || routeKey === "codexAuth" || routeKey === "prompts";
 
   return (
     <div className="h-screen overflow-hidden bg-background p-2">

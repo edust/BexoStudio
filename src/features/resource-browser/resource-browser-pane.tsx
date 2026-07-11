@@ -166,6 +166,8 @@ export function ResourceBrowserPane({
   } | null>(null);
   const watchRefreshTimerRef = useRef<number | null>(null);
   const watchEventPathsRef = useRef<Set<string>>(new Set());
+  const failedWatchSignatureRef = useRef<string | null>(null);
+  const warnedWatchSignatureRef = useRef<string | null>(null);
   const lastWatchRefreshAtRef = useRef(0);
   const dragInFlightRef = useRef(false);
   const treeScrollRafRef = useRef<number | null>(null);
@@ -243,6 +245,8 @@ export function ResourceBrowserPane({
     refreshQueuedRef.current = false;
     queuedRefreshPathsRef.current.clear();
     watchEventPathsRef.current.clear();
+    failedWatchSignatureRef.current = null;
+    warnedWatchSignatureRef.current = null;
     lastWatchRefreshAtRef.current = 0;
     if (watchRefreshTimerRef.current !== null) {
       window.clearTimeout(watchRefreshTimerRef.current);
@@ -936,6 +940,22 @@ export function ResourceBrowserPane({
 
     let disposed = false;
     const unwatchers: FsUnwatchFn[] = [];
+    const watchSignature = `${normalizePath(watchRootPath)}\n${watchTargets.join("\n")}`;
+    const detachAll = () => {
+      while (unwatchers.length) {
+        const stopWatching = unwatchers.pop();
+        try {
+          stopWatching?.();
+        } catch (error) {
+          console.warn("stop native resource watcher failed", getErrorSummary(error));
+        }
+      }
+    };
+
+    if (failedWatchSignatureRef.current === watchSignature) {
+      setWatchStrategy("polling");
+      return;
+    }
 
     const setupWatch = async () => {
       try {
@@ -968,16 +988,22 @@ export function ResourceBrowserPane({
         }
 
         if (!disposed) {
+          failedWatchSignatureRef.current = null;
           setWatchStrategy("native");
         }
       } catch (error) {
+        detachAll();
         if (disposed) {
           return;
         }
+        failedWatchSignatureRef.current = watchSignature;
         setWatchStrategy("polling");
-        toast.warning("原生文件监听启动失败，已回退到轮询刷新", {
-          description: getErrorSummary(error).message,
-        });
+        if (warnedWatchSignatureRef.current !== watchSignature) {
+          warnedWatchSignatureRef.current = watchSignature;
+          toast.warning("原生文件监听启动失败，已回退到轮询刷新", {
+            description: getErrorSummary(error).message,
+          });
+        }
       }
     };
 
@@ -990,9 +1016,7 @@ export function ResourceBrowserPane({
         watchRefreshTimerRef.current = null;
       }
       watchEventPathsRef.current.clear();
-      for (const stopWatching of unwatchers) {
-        stopWatching();
-      }
+      detachAll();
     };
   }, [scheduleWatchRefresh, watchRootPath, watchTargets]);
 

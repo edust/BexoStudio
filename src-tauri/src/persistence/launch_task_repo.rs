@@ -6,8 +6,9 @@ use crate::{
     domain::{
         validate_launch_task_args, validate_launch_task_command, validate_launch_task_id,
         validate_launch_task_retry_policy, validate_launch_task_timeout, validate_launch_task_type,
-        validate_launch_task_working_dir, validate_optional_uuid, DeleteResult, LaunchTaskRecord,
-        LaunchTaskRetryPolicy, UpsertLaunchTaskInput,
+        validate_launch_task_working_dir, validate_optional_uuid, validate_ordered_uuid_list,
+        DeleteResult, LaunchTaskRecord, LaunchTaskRetryPolicy, ReorderLaunchTasksInput,
+        UpsertLaunchTaskInput, MAX_REORDER_ITEMS,
     },
     error::{AppError, AppResult},
 };
@@ -223,6 +224,51 @@ pub fn upsert_launch_task(
         })
 }
 
+pub fn reorder_launch_tasks(
+    connection: &mut Connection,
+    input: ReorderLaunchTasksInput,
+) -> AppResult<Vec<LaunchTaskRecord>> {
+    let project_id = validate_optional_uuid("projectId", Some(input.project_id))?
+        .ok_or_else(|| AppError::validation("projectId is required"))?;
+    let launch_task_ids =
+        validate_ordered_uuid_list("launchTaskIds", input.launch_task_ids, MAX_REORDER_ITEMS)?;
+    let transaction = connection.savepoint().map_err(|error| {
+        AppError::new(
+            "DB_WRITE_FAILED",
+            "failed to open launch task reorder transaction",
+        )
+        .with_detail("reason", error.to_string())
+    })?;
+
+    for (index, launch_task_id) in launch_task_ids.iter().enumerate() {
+        let affected = transaction
+            .execute(
+                "UPDATE launch_tasks SET sort_order = ?1 WHERE id = ?2 AND project_id = ?3",
+                params![index as i64, launch_task_id, project_id],
+            )
+            .map_err(|error| {
+                AppError::new("DB_WRITE_FAILED", "failed to reorder launch tasks")
+                    .with_detail("launchTaskId", launch_task_id.clone())
+                    .with_detail("projectId", project_id.clone())
+                    .with_detail("reason", error.to_string())
+            })?;
+        if affected != 1 {
+            return Err(AppError::new(
+                "LAUNCH_TASK_NOT_FOUND",
+                "launch task was not found in the requested project",
+            )
+            .with_detail("launchTaskId", launch_task_id.clone())
+            .with_detail("projectId", project_id.clone()));
+        }
+    }
+
+    transaction.commit().map_err(|error| {
+        AppError::new("DB_WRITE_FAILED", "failed to commit launch task reorder")
+            .with_detail("reason", error.to_string())
+    })?;
+    list_launch_tasks(connection, project_id)
+}
+
 pub fn delete_launch_task(connection: &mut Connection, id: String) -> AppResult<DeleteResult> {
     let id =
         validate_launch_task_id(Some(id))?.ok_or_else(|| AppError::validation("id is required"))?;
@@ -242,4 +288,74 @@ pub fn delete_launch_task(connection: &mut Connection, id: String) -> AppResult<
     }
 
     Ok(DeleteResult { id })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reorder_launch_tasks_rolls_back_the_entire_batch_on_missing_task() {
+        let mut connection = Connection::open_in_memory().expect("open sqlite memory database");
+        connection
+            .execute_batch(crate::persistence::schema::SCHEMA)
+            .expect("initialize schema");
+        let workspace_id = Uuid::new_v4().to_string();
+        let project_id = Uuid::new_v4().to_string();
+        let first_task_id = Uuid::new_v4().to_string();
+        let second_task_id = Uuid::new_v4().to_string();
+        let timestamp = Utc::now().to_rfc3339();
+        connection
+            .execute(
+                "INSERT INTO workspaces (id, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
+                params![workspace_id, "Workspace", timestamp],
+            )
+            .expect("insert workspace");
+        connection
+            .execute(
+                "INSERT INTO projects (id, workspace_id, name, path, platform, terminal_type, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+                params![project_id, workspace_id, "Project", "C:\\Project", "windows", "windows_terminal", timestamp],
+            )
+            .expect("insert project");
+        for (task_id, name, sort_order) in [
+            (&first_task_id, "First", 7_i64),
+            (&second_task_id, "Second", 8_i64),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO launch_tasks (id, project_id, name, task_type, command, working_dir, retry_policy_json, sort_order) VALUES (?1, ?2, ?3, 'terminal_command', 'echo test', 'C:\\Project', '{}', ?4)",
+                    params![task_id, project_id, name, sort_order],
+                )
+                .expect("insert launch task");
+        }
+
+        let error = reorder_launch_tasks(
+            &mut connection,
+            ReorderLaunchTasksInput {
+                project_id: project_id.clone(),
+                launch_task_ids: vec![first_task_id.clone(), Uuid::new_v4().to_string()],
+            },
+        )
+        .expect_err("missing task must roll back batch");
+        assert_eq!(error.code, "LAUNCH_TASK_NOT_FOUND");
+        let first_sort_order: i64 = connection
+            .query_row(
+                "SELECT sort_order FROM launch_tasks WHERE id = ?1",
+                [first_task_id.as_str()],
+                |row| row.get(0),
+            )
+            .expect("query first task sort order");
+        assert_eq!(first_sort_order, 7);
+
+        let reordered = reorder_launch_tasks(
+            &mut connection,
+            ReorderLaunchTasksInput {
+                project_id,
+                launch_task_ids: vec![second_task_id.clone(), first_task_id.clone()],
+            },
+        )
+        .expect("reorder tasks");
+        assert_eq!(reordered[0].id, second_task_id);
+        assert_eq!(reordered[1].id, first_task_id);
+    }
 }

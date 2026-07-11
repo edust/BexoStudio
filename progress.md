@@ -1,5 +1,66 @@
 # progress
 
+## 2026-07-11 UI 缩放与布局回归
+
+- 已初始化 `scripts/work/2026-07-11-ui-scale-layout-regression/`。
+- 已记录用户两张宽屏截图的跨页面症状，进入 Git、全局样式、主题、zoom/DPI 和公共组件只读诊断。
+- Chrome/Vite 运行时样式注入与 computed style 正常，根因已从通用前端源码收敛到 Tauri/WebView2 或构建/运行态差异。
+- 独立 Tauri dev 正常；production debug 通过 CDP 复现 Input/Button border 被覆盖为 0px，STEP 1 根因定位进入官方兼容方案核实。
+- production HOME/Prompts 同元素与截图复核完成，STEP 1 根因定位关闭；进入回归测试与官方 layer 修复设计。
+- 新增 runtime style CSP nonce 回归测试，已先确认旧实现失败，再实施 HTML nonce bootstrap + Ant ConfigProvider nonce；专项测试转为通过。
+- 前端 27/27 与 production build 通过；Tauri production debug 重建后 CDP 确认 Ant/Icons/Sonner runtime styles 全部带 nonce 且阻断为 0，亮色 HOME/Prompts 截图恢复。
+- 暗色 production HOME/Prompts 截图与 computed style 通过，进入文档同步、Rust/diff 门禁和最终进程清理。
+
+## 2026-07-10 常用 Prompts 模块
+
+- 已初始化 `scripts/work/2026-07-10-prompt-library/`。
+- 已完成 STEP 1 文档、代码全量索引、契约定稿和 Review，无阻断遗留。
+- 进行中：STEP 2 Rust 领域、持久化和 Tauri 命令实现。
+
+## 2026-07-10 Prompt 全局热键快速粘贴
+
+- 已初始化 `scripts/work/2026-07-10-prompt-quick-paste-hotkeys/` 的 task plan、notes 与 deliverable。
+- 已按 AGENTS 顺序复核 README、产品需求、技术架构、UI 系统、路线图和根级 planning 最新内容。
+- 已确认复用现有 HotkeyService/Preferences/Prompt SQLite/system notification，不新增平行热键系统。
+- 进行中：读取具体数据类型、服务路由、设置页组件与测试，定稿文件级实现方案。
+- STEP 1 已完成：Preferences cache、Hotkey atomic apply、Prompt managed state、Windows 输入依赖、Settings 三列样式和测试边界均已确认。
+- 进入 STEP 2：实现 5 槽位数据契约、默认值、兼容 repair、全局去重与 action 映射。
+- STEP 2 第一版契约已落地；专项自查发现截图错误文案兼容性需要保留，正在补测试和修正后再进入 Rust 执行链路。
+- STEP 2 首次 `cargo check` 精确发现 Prompt action 尚未接入执行分支；错误已记录，将由 STEP 3 的真实快速粘贴服务关闭，不添加占位 match。
+- STEP 3 首次组合补丁因模块文件上下文不匹配而原子拒绝，确认没有部分写入；改为按 domain/repo/service/app/hotkey 小批次实施。
+- STEP 2 已完成：5 槽位默认/serde 兼容/repair/UUID/启用前 Prompt 必填/运行态全局 shortcut 去重全部落地。
+- STEP 3 已完成：Prompt 单条读取、触发 Released 分流、剪贴板有界退避、修饰键释放门禁、SendInput、串行化和结果事件已接通。
+- 阶段验证：`cargo check` 与 `npm run web:build` 通过；仅存在既有 Ant vendor chunk 体积警告。
+- 进入 STEP 4：Settings 五槽位配置 UI、Prompt 列表绑定徽标与通知交互。
+- STEP 4 首次验证：21/21 前端测试通过；TypeScript 发现 recorder 抽取后 `isRiskyCtrlAltHotkey` 的 modifier helper 缺失，已补回并记录。
+- 新增快速粘贴测试后前端 25/25 通过；Rust 生产库 check 通过，test-only 显式 imports 缺 7 项已补齐。
+- Rust `cargo check` 与 `cargo test --all-targets --no-run` 已通过；进入 Product Design screenshot audit 预检。
+- 已用受控 Vite + Edge headless（全部 GPU 禁用参数）捕获并检查 `audit/01-settings-hotkeys.png`；临时 Vite PID 46960/子进程已清理，1420 监听为 0。
+- 截图 Review 发现 1440px 下槽位内部 Select 与热键关联偏弱，已将内部并排 breakpoint 从 2xl 调整为 xl，准备复拍确认。
+- 第二张截图因 Edge rasterizer 黑块被拒绝；第三张亮色与第四张暗色截图已检查并接受，布局补缺有效，菜单和主题无视觉遗留。
+- 运行链路 Review 发现 3 个需补缺点：SendInput 部分发送按键清理、修饰键超时前置、非 Windows 平台失败副作用；正在修复后复测。
+- 系统通知 Review 发现前端 listener 依赖窗口初始化时序；已核实当前插件 Rust API，准备改为 Rust 直接通知 + 前端 Toast。
+- 运营级架构复盘新增两项补缺：Windows paste adapter 分层、Prompt 徽标屏幕阅读器文本；尚未关闭前不进入最终交付。
+- 已完成 adapter 分层、`sr-only` 完整快捷键、Rust 直接系统通知、按键清理与副作用顺序补缺。
+- 最终门禁中 release check 与 all-targets test compile 通过；fmt 需应用一次，严格 Clippy 被仓库既有 56/57 条跨模块告警阻断，本轮新增文件未出现在 Clippy 报告中。
+- 最终复测通过：Rust fmt check、release check、all-targets test compile、前端 25/25、production build、Tauri debug no-bundle build。
+- 最终 Review 循环已关闭：UI breakpoint、亮/暗主题、菜单、adapter 分层、系统通知、按键释放、平台门禁、稳定 ID 和可访问文本均无本轮遗留。
+- 已按最新反馈取消快速粘贴成功后的 Windows 系统通知与应用内 Toast；失败通知保持不变，并新增静默成功回归测试。最终通过前端 26/26、production build、Rust fmt/release check/all-targets test compile 与 `git diff --check`。
+- 临时 Vite/Edge 进程树全部清理，1420 监听为 0；未修改依赖、lockfile、环境变量或用户系统设置。
+- STEP 2 已完成并通过 Rust 编译、Clippy、测试目标编译与命令权限一致性检查；进入 STEP 3 前端实现。
+- STEP 3 已完成并通过 18 项前端测试、production build 和空状态视觉验收；进入 STEP 4 全量集成与二次 Review。
+- STEP 4 与最终二次 Review 已完成；补齐控制字符/NUL 输入边界和 deferred 搜索后，19 项前端测试及全量 Rust/Tauri 构建门禁通过。
+- 本轮临时 Vite/Edge 进程均已关闭，最终 1420 端口无监听。
+- STEP 5 实机长简介回归已修复：移除 `block` 对 `line-clamp-2` 的层叠覆盖，并为简介、内容按钮和固定条目增加三层裁剪边界。
+- 新增列表裁剪回归测试；前端测试更新为 20/20，production build 通过，编译 CSS/Prompt chunk 已确认不存在冲突组合。
+- 已完成亮/暗主题长中文、无空格长串和多行内容截图复核；专用 Headless Edge Profile 与进程均已清理，残留为 0。
+- STEP 6 第一轮已完成 WORKBENCH 对照与实现：Prompt item 对齐卡片状态面，常规列表排序改为 Motion Reorder + stable IDs + layoutScroll + shared spring；长列表保留虚拟化回退。
+- Prompt 排序增加 optimistic query update 与失败回滚；20/20 前端测试和 production build 通过，进入视觉与交互 Review。
+- STEP 6 第二轮补齐精确禁用 Tooltip 和长列表 fallback layout 动画；亮暗视觉、编译产物、Tauri debug no-bundle、diff/lazy audit 与进程清理全部通过。
+- STEP 7 修复暗色 hover 白块：Prompt item 已完整复制 WORKBENCH 的 themeMode 条件分支；20/20 测试、web build、编译产物、Rust release check 和 release desktop binary build 通过。
+- 当前用户运行的 workspace debug PID 48736 锁定 debug exe，Tauri CLI 无法覆盖；该进程未由 Codex 启动且未被终止。
+- 最终进程复核确认用户的 `tauri dev` PID 47128、Vite PID 19276、debug app PID 48736 与 1420 监听仍在；均创建于本轮前且未由 Codex 启动，因此按进程所有权规则保留。
+
 ## 2026-05-06 Terminal Shell Preference
 - 已初始化规划文件：
   - `scripts/work/2026-05-06-terminal-shell-preference/task_plan.md`
@@ -2256,3 +2317,40 @@ pm run web:build。
   - 导入本机真实 Codex `auth.json/config.toml`。
   - 切换授权后确认目标 Codex 配置目录文件内容正确。
   - 使用非过期 `auth_mode=chatgpt` OAuth token 查询额度。
+## 2026-07-10 Windows 开机启动可靠性修复
+
+- 已初始化 `scripts/work/2026-07-10-windows-auto-start/` 的计划、决策与交付文件。
+- 已完成本机只读诊断：确认 Windows Shell 实际执行启动项；Run、策略与安装路径检查正常，未发现 Defender、CodeIntegrity 或 AppLocker 的相关阻止证据。
+- 已修复生产日志对启动工作目录的依赖，并配置 1 MiB × 5 的有界日志轮转。
+- 已将 Windows 自启动写入权收敛到 Rust 自有适配器，完成幂等校验、原值快照、写后读回、失败回滚、缺失 `StartupApproved` 不创建、安全 UTF-16 解码与注册表竞态处理。
+- 已串行化偏好更新，只在 `launchAtLogin` 变化时修改系统状态，并为 store/cache 失败补齐副作用回滚。
+- 已将单实例插件移到首个注册位置，并保留非 Windows 平台 autostart 插件。
+- 已补日志路径、命令解析、注册表字符串、StartupApproved 状态、命令长度和开发构建路径保留测试；测试目标编译通过。
+- 已通过 `cargo check`、`cargo check --release`、`npm run web:build`、`npm run desktop:build:debug`；MSI 与 NSIS 调试安装包成功生成。
+- 已知验证限制：本机 Rust 测试二进制在装载阶段返回 `0xc0000139 (STATUS_ENTRYPOINT_NOT_FOUND)`，未执行到测试函数；未重复失败命令。
+- 独立复审指出的 enable/disable 并发回滚覆盖、StartupApproved 跨版本兼容、异常注册表值上限与回滚失败只日志问题均已修复。
+- 最新代码已再次通过开发/发布 `cargo check`、测试目标编译与完整 desktop debug 打包；严格全仓 Clippy 被 49+ 条既有跨模块告警阻断，本次新增/触及逻辑的局部样式告警已收敛。
+- 最终进程复查确认仓库运行进程为 0，开发端口 5173/1420 均无监听；用户原有安装版 PID 37884 未被终止。
+- 最终 NSIS/MSI 已在最后一次源码修改后重新生成并记录 SHA-256；`cargo fmt --check` 与 `git diff --check` 最终复检通过。
+
+## 2026-07-10 全项目审查问题全量修复与二次审查
+
+- 已创建 `scripts/work/2026-07-10-full-review-remediation/` 的 task plan、notes、findings、progress 与 deliverable。
+- 已按 AGENTS 顺序复核 README、产品需求、技术架构、UI 系统、路线图及根级 planning 最新内容。
+- 已把 11 个 finding 映射为 8 个实施阶段，当前进入 DB/Native 库 API 与最终设计核实。
+- 已完成全部 11 项修复：DB 确定终态、Native typed owner thread、Preferences patch、Hotkey health、Auth summary/detail 与事务回滚、Restore/listener/watcher 生命周期、窗口级 ACL/CSP、Screenshot lazy/test/module 边界、Phase6C example。
+- 二次 review 新发现的 9 个问题也已修复，包括 Win32 message pump、Auth atomic replace/profile mutation lock、custom protocol label gate、生产/dev CSP 分离和事务化 reorder。
+- 最终通过：`npm run web:test` 11/11、`npm run web:build`、Rust fmt/release/all-targets no-run/Clippy、Tauri debug no-bundle build。
+- 最终进程复查：本任务进程 0，1420 监听 0；用户原有安装版进程未终止。
+- 未新增依赖、lockfile、配置键或环境变量。
+
+## 2026-07-11 UI 缩放与布局回归修复
+
+- 已创建 `scripts/work/2026-07-11-ui-scale-layout-regression/` 规划、诊断与交付文件，并完成源码、构建产物和 production WebView 三层取证。
+- 已确定根因：Tauri production CSP nonce 使无 nonce 的 Ant CSS-in-JS、Icons 与 Sonner runtime style 被浏览器拒绝，导致 WORKBENCH 与 Prompts 跨页退化为裸控件；与快速粘贴成功通知静默改动无关。
+- 已在 `index.html` 增加静态 nonce 锚点与模块加载前 style nonce bridge，在 `AppProviders` 向 Ant `ConfigProvider.csp` 传递同页 nonce；未关闭或放宽 production CSP。
+- 已新增 production runtime style nonce 回归测试，并同步 README、技术架构与 UI 系统文档。
+- production audit 结果：HOME/Prompts runtime styles blocked=0；Input 的 1px border、8px radius、padding/height、Icons、Empty 与 Sonner 均恢复。亮色、暗色与 Prompt 编辑/错误 Toast 截图通过。
+- 最终自动门禁通过：`npm run web:test` 27/27、`npm run web:build`、`cargo fmt --check`、`cargo check --release`、`cargo test --all-targets --no-run`、`git diff --check`。
+- 未新增依赖、lockfile 变更、环境变量、持久化配置、API 或数据库合同。
+- 最终进程清理完成：本轮 audit debug app 与 WebView2 子进程树全部退出，1420/9223 无监听；未触碰其他项目进程。

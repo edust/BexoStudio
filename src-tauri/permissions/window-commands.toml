@@ -1,0 +1,94 @@
+[[set]]
+identifier = "main-window-commands"
+description = "Allows the trusted main window to invoke all Bexo Studio application commands."
+permissions = [
+  "allow-get-bootstrap-state",
+  "allow-get-native-interaction-state",
+  "allow-update-native-interaction-exclusion-rects",
+  "allow-update-native-interaction-runtime",
+  "allow-get-app-preferences",
+  "allow-update-app-preferences",
+  "allow-get-hotkey-health",
+  "allow-retry-hotkey-registration",
+  "allow-get-codex-home-directory",
+  "allow-detect-editors-from-path",
+  "allow-open-codex-history-window",
+  "allow-list-codex-history-sessions",
+  "allow-list-all-codex-history-sessions",
+  "allow-get-codex-history-messages",
+  "allow-list-codex-auth-profiles",
+  "allow-get-codex-auth-profile-detail",
+  "allow-import-current-codex-auth-profile",
+  "allow-upsert-codex-auth-profile",
+  "allow-delete-codex-auth-profile",
+  "allow-switch-codex-auth-profile",
+  "allow-query-codex-auth-quota",
+  "allow-refresh-all-codex-auth-quotas",
+  "allow-list-prompts",
+  "allow-upsert-prompt",
+  "allow-delete-prompt",
+  "allow-reorder-prompts",
+  "allow-list-workspaces",
+  "allow-upsert-workspace",
+  "allow-reorder-workspaces",
+  "allow-delete-workspace",
+  "allow-register-workspace-folder",
+  "allow-remove-workspace-registration",
+  "allow-open-workspace-terminal",
+  "allow-open-workspace-terminal-at-path",
+  "allow-open-workspace-in-editor",
+  "allow-run-workspace-terminal-command",
+  "allow-run-workspace-terminal-commands",
+  "allow-upsert-project",
+  "allow-list-workspace-resource-children",
+  "allow-allow-workspace-resource-scope",
+  "allow-get-workspace-resource-git-statuses",
+  "allow-list-launch-tasks",
+  "allow-upsert-launch-task",
+  "allow-reorder-launch-tasks",
+  "allow-delete-launch-task",
+  "allow-list-codex-profiles",
+  "allow-upsert-codex-profile",
+  "allow-list-snapshots",
+  "allow-create-snapshot",
+  "allow-update-snapshot",
+  "allow-start-screenshot-session",
+  "allow-get-screenshot-session",
+  "allow-get-screenshot-preview-rgba",
+  "allow-get-screenshot-selection-render",
+  "allow-copy-screenshot-selection",
+  "allow-save-screenshot-selection",
+  "allow-cancel-screenshot-session",
+  "allow-preview-restore",
+  "allow-start-restore-dry-run",
+  "allow-get-restore-capabilities",
+  "allow-start-restore-run",
+  "allow-cancel-restore-run",
+  "allow-cancel-restore-action",
+  "allow-list-recent-restore-targets",
+  "allow-restore-recent-target",
+  "allow-list-restore-runs",
+  "allow-get-restore-run-detail",
+  "allow-open-log-directory"
+]
+
+[[set]]
+identifier = "screenshot-overlay-commands"
+description = "Allows the screenshot overlay to access only its active session and native interaction runtime."
+permissions = [
+  "allow-update-native-interaction-runtime",
+  "allow-get-screenshot-session",
+  "allow-get-screenshot-selection-render",
+  "allow-copy-screenshot-selection",
+  "allow-save-screenshot-selection",
+  "allow-cancel-screenshot-session"
+]
+
+[[set]]
+identifier = "codex-history-window-commands"
+description = "Allows detached history windows read-only history and view preference access."
+permissions = [
+  "allow-get-app-preferences",
+  "allow-list-codex-history-sessions",
+  "allow-get-codex-history-messages"
+]

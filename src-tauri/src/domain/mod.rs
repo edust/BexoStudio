@@ -7,6 +7,7 @@ mod launch_task;
 mod native_interaction;
 mod preferences;
 mod project;
+mod prompt;
 mod resource_browser;
 mod restore_event;
 mod restore_run;
@@ -25,8 +26,9 @@ pub use adapter::{
 };
 pub use codex_auth::{
     ensure_absolute_path, validate_codex_auth_json, validate_codex_config_toml, CodexAuthJson,
-    CodexAuthProfileRecord, CodexAuthQuotaRefreshBatchResult, CodexAuthQuotaResult,
-    CodexAuthQuotaTier, CodexAuthSwitchResult, UpsertCodexAuthProfileInput,
+    CodexAuthProfileDetail, CodexAuthProfileRecord, CodexAuthProfileSummary,
+    CodexAuthQuotaRefreshBatchResult, CodexAuthQuotaResult, CodexAuthQuotaTier,
+    CodexAuthSwitchResult, UpsertCodexAuthProfileInput,
 };
 pub use codex_history::{
     CodexHistoryGlobalSessionsResponse, CodexHistoryMessage, CodexHistoryMessagesInput,
@@ -34,12 +36,16 @@ pub use codex_history::{
     ListCodexHistorySessionsInput, OpenCodexHistoryWindowResult,
 };
 pub use codex_profile::{CodexProfileRecord, UpsertCodexProfileInput};
-pub use hotkey::{HotkeyAction, HotkeyTriggerEvent, HOTKEY_TRIGGER_EVENT_NAME};
+pub use hotkey::{
+    HotkeyAction, HotkeyHealth, HotkeyHealthStatus, HotkeyRegisteredBindingView,
+    HotkeyTriggerEvent, PromptQuickPasteResultEvent, PromptQuickPasteResultStatus,
+    HOTKEY_TRIGGER_EVENT_NAME, PROMPT_QUICK_PASTE_RESULT_EVENT_NAME,
+};
 pub use launch_task::{
     validate_launch_task_args, validate_launch_task_command, validate_launch_task_id,
     validate_launch_task_retry_policy, validate_launch_task_timeout, validate_launch_task_type,
     validate_launch_task_working_dir, LaunchTaskRecord, LaunchTaskRetryPolicy,
-    SnapshotLaunchTaskPayload, UpsertLaunchTaskInput,
+    ReorderLaunchTasksInput, SnapshotLaunchTaskPayload, UpsertLaunchTaskInput,
 };
 pub use native_interaction::{
     NATIVE_INTERACTION_SHAPE_ANNOTATION_COMMITTED_EVENT_NAME,
@@ -48,16 +54,22 @@ pub use native_interaction::{
 };
 #[allow(unused_imports)]
 pub use preferences::{
-    AppPreferences, CodexAuthPreferences, CodexAuthProxyPreferences, CodexHistoryViewPreferences,
-    CodexHomeDirectoryInfo, CustomEditorPreference, DiagnosticsPreferences, HotkeyPreferences,
-    IdePreferences, StartupPreferences, TerminalCommandShell, TerminalCommandTemplate,
-    TerminalPreferences, TrayPreferences, WorkspacePreferences, DEFAULT_CODEX_AUTH_PROXY_MODE,
-    DEFAULT_CODEX_AUTH_QUOTA_REFRESH_INTERVAL_SECONDS, DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE,
+    AppPreferences, AppPreferencesPatch, CodexAuthPreferences, CodexAuthProxyPreferences,
+    CodexHistoryViewPreferences, CodexHomeDirectoryInfo, CustomEditorPreference,
+    DiagnosticsPreferences, HotkeyPreferences, IdePreferences, PromptQuickPasteHotkeySlot,
+    StartupPreferences, TerminalCommandShell, TerminalCommandTemplate, TerminalPreferences,
+    TrayPreferences, WorkspacePreferences, WorkspacePreferencesPatch,
+    DEFAULT_CODEX_AUTH_PROXY_MODE, DEFAULT_CODEX_AUTH_QUOTA_REFRESH_INTERVAL_SECONDS,
+    DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE, DEFAULT_PROMPT_QUICK_PASTE_HOTKEYS,
     DEFAULT_SCREENSHOT_CAPTURE_HOTKEY, DEFAULT_TERMINAL_COMMAND_SHELL,
     EARLIER_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY, LEGACY_SCREENSHOT_CAPTURE_HOTKEY,
-    PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY,
+    PREVIOUS_DEFAULT_SCREENSHOT_CAPTURE_HOTKEY, PROMPT_QUICK_PASTE_SLOT_COUNT,
 };
 pub use project::{ProjectRecord, UpsertProjectInput};
+pub use prompt::{
+    validate_prompt_content, validate_prompt_id, validate_prompt_title, PromptRecord,
+    ReorderPromptsInput, UpsertPromptInput, MAX_PROMPTS,
+};
 pub use resource_browser::{
     WorkspaceResourceEntry, WorkspaceResourceGitStatusEntry, WorkspaceResourceGitStatusResponse,
 };
@@ -85,9 +97,9 @@ pub use snapshot::{
 };
 pub use validation::{
     ensure_absolute_directory, parse_color_or_none, parse_json_string_list, parse_restore_mode,
-    require_non_empty, validate_optional_uuid,
+    require_non_empty, validate_optional_uuid, validate_ordered_uuid_list, MAX_REORDER_ITEMS,
 };
-pub use workspace::{DeleteResult, UpsertWorkspaceInput, WorkspaceRecord};
+pub use workspace::{DeleteResult, ReorderWorkspacesInput, UpsertWorkspaceInput, WorkspaceRecord};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -97,7 +109,7 @@ pub struct RouteSection {
     pub summary: &'static str,
 }
 
-pub fn primary_sections() -> [RouteSection; 6] {
+pub fn primary_sections() -> [RouteSection; 5] {
     [
         RouteSection {
             key: "home",
@@ -105,24 +117,19 @@ pub fn primary_sections() -> [RouteSection; 6] {
             summary: "恢复入口、最近运行与桌面状态。",
         },
         RouteSection {
-            key: "workspaces",
-            label: "Workspaces",
-            summary: "工作区与项目编排总览。",
+            key: "history",
+            label: "Session / History",
+            summary: "全局只读查看 Codex 历史会话。",
         },
         RouteSection {
-            key: "snapshots",
-            label: "Snapshots",
-            summary: "快照与恢复预览入口。",
+            key: "codex_auth",
+            label: "Codex Auth",
+            summary: "管理本机 Codex 授权配置。",
         },
         RouteSection {
-            key: "profiles",
-            label: "Profiles",
-            summary: "Codex Profile 与工具偏好。",
-        },
-        RouteSection {
-            key: "logs",
-            label: "Logs",
-            summary: "恢复结果与诊断记录。",
+            key: "prompts",
+            label: "Prompts",
+            summary: "保存、排序并快速复制常用 Prompt。",
         },
         RouteSection {
             key: "settings",

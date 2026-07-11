@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
   AppPreferences,
+  AppPreferencesPatch,
   AppError,
   CancelScreenshotSessionResult,
   CancelRestoreActionResult,
@@ -12,7 +13,8 @@ import type {
   CodexHistoryMessagesPage,
   CodexHistoryMessagesPayload,
   CodexHistorySessionsResponse,
-  CodexAuthProfileRecord,
+  CodexAuthProfileDetail,
+  CodexAuthProfileSummary,
   CodexAuthQuotaRefreshBatchResult,
   CodexAuthSwitchResult,
   CopyScreenshotSelectionResult,
@@ -22,6 +24,7 @@ import type {
   DeleteResult,
   EditorPathDetectionResult,
   HotkeyTriggerEvent,
+  HotkeyHealth,
   LaunchTaskRecord,
   NativeInteractionExclusionRect,
   NativeInteractionEditableShape,
@@ -35,10 +38,15 @@ import type {
   OpenCodexHistoryWindowResult,
   OpenWorkspaceInEditorResult,
   OpenWorkspaceTerminalResult,
+  PromptQuickPasteResultEvent,
+  PromptRecord,
   SaveScreenshotSelectionResult,
   RunWorkspaceTerminalCommandResult,
   RunWorkspaceTerminalCommandsResult,
   RecentRestoreTarget,
+  ReorderLaunchTasksPayload,
+  ReorderPromptsPayload,
+  ReorderWorkspacesPayload,
   RestoreCapabilities,
   RestoreRunEvent,
   RestorePreview,
@@ -59,6 +67,7 @@ import type {
   UpsertCodexProfilePayload,
   UpsertCodexAuthProfilePayload,
   UpsertLaunchTaskPayload,
+  UpsertPromptPayload,
   UpsertProjectPayload,
   UpsertWorkspacePayload,
   WorkspaceRecord,
@@ -140,8 +149,16 @@ export function getAppPreferences() {
   return invokeCommand<AppPreferences>("get_app_preferences");
 }
 
-export function updateAppPreferences(input: AppPreferences) {
+export function updateAppPreferences(input: AppPreferencesPatch) {
   return invokeCommand<AppPreferences>("update_app_preferences", { input });
+}
+
+export function getHotkeyHealth() {
+  return invokeCommand<HotkeyHealth>("get_hotkey_health");
+}
+
+export function retryHotkeyRegistration() {
+  return invokeCommand<HotkeyHealth>("retry_hotkey_registration");
 }
 
 export function getCodexHomeDirectory() {
@@ -154,6 +171,10 @@ export function detectEditorsFromPath() {
 
 export function upsertWorkspace(input: UpsertWorkspacePayload) {
   return invokeCommand<WorkspaceRecord>("upsert_workspace", { input });
+}
+
+export function reorderWorkspaces(input: ReorderWorkspacesPayload) {
+  return invokeCommand<WorkspaceRecord[]>("reorder_workspaces", { input });
 }
 
 export function deleteWorkspace(id: string) {
@@ -228,6 +249,10 @@ export function upsertLaunchTask(input: UpsertLaunchTaskPayload) {
   return invokeCommand<LaunchTaskRecord>("upsert_launch_task", { input });
 }
 
+export function reorderLaunchTasks(input: ReorderLaunchTasksPayload) {
+  return invokeCommand<LaunchTaskRecord[]>("reorder_launch_tasks", { input });
+}
+
 export function deleteLaunchTask(id: string) {
   return invokeCommand<DeleteResult>("delete_launch_task", { id });
 }
@@ -241,15 +266,19 @@ export function upsertCodexProfile(input: UpsertCodexProfilePayload) {
 }
 
 export function listCodexAuthProfiles() {
-  return invokeCommand<CodexAuthProfileRecord[]>("list_codex_auth_profiles");
+  return invokeCommand<CodexAuthProfileSummary[]>("list_codex_auth_profiles");
+}
+
+export function getCodexAuthProfileDetail(id: string) {
+  return invokeCommand<CodexAuthProfileDetail>("get_codex_auth_profile_detail", { id });
 }
 
 export function importCurrentCodexAuthProfile() {
-  return invokeCommand<CodexAuthProfileRecord>("import_current_codex_auth_profile");
+  return invokeCommand<CodexAuthProfileSummary>("import_current_codex_auth_profile");
 }
 
 export function upsertCodexAuthProfile(input: UpsertCodexAuthProfilePayload) {
-  return invokeCommand<CodexAuthProfileRecord>("upsert_codex_auth_profile", { input });
+  return invokeCommand<CodexAuthProfileSummary>("upsert_codex_auth_profile", { input });
 }
 
 export function deleteCodexAuthProfile(id: string) {
@@ -261,11 +290,27 @@ export function switchCodexAuthProfile(id: string) {
 }
 
 export function queryCodexAuthQuota(id: string) {
-  return invokeCommand<CodexAuthProfileRecord>("query_codex_auth_quota", { id });
+  return invokeCommand<CodexAuthProfileSummary>("query_codex_auth_quota", { id });
 }
 
 export function refreshAllCodexAuthQuotas() {
   return invokeCommand<CodexAuthQuotaRefreshBatchResult>("refresh_all_codex_auth_quotas");
+}
+
+export function listPrompts() {
+  return invokeCommand<PromptRecord[]>("list_prompts");
+}
+
+export function upsertPrompt(input: UpsertPromptPayload) {
+  return invokeCommand<PromptRecord>("upsert_prompt", { input });
+}
+
+export function deletePrompt(id: string) {
+  return invokeCommand<DeleteResult>("delete_prompt", { id });
+}
+
+export function reorderPrompts(input: ReorderPromptsPayload) {
+  return invokeCommand<PromptRecord[]>("reorder_prompts", { input });
 }
 
 export function openCodexHistoryWindow(workspaceId: string) {
@@ -487,6 +532,21 @@ export async function listenToScreenshotSessionUpdatedEvents(
   return listen<ScreenshotSessionUpdatedEvent>("screenshot://session-updated", (event) => {
     handler(event.payload);
   });
+}
+
+export async function listenToPromptQuickPasteResultEvents(
+  handler: (event: PromptQuickPasteResultEvent) => void,
+): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    desktopRuntimeRequired();
+  }
+
+  return listen<PromptQuickPasteResultEvent>(
+    "hotkey://prompt-quick-paste-result",
+    (event) => {
+      handler(event.payload);
+    },
+  );
 }
 
 export async function listenToScreenshotEscapePressedEvents(

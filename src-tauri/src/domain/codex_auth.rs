@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexAuthProfileRecord {
     pub id: String,
@@ -16,6 +16,70 @@ pub struct CodexAuthProfileRecord {
     pub last_quota_checked_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexAuthProfileSummary {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub codex_home: String,
+    pub is_active: bool,
+    pub last_quota: Option<CodexAuthQuotaResult>,
+    pub last_quota_checked_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexAuthProfileDetail {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub codex_home: String,
+    pub auth_json: String,
+    pub config_toml: String,
+    pub is_active: bool,
+    pub last_quota: Option<CodexAuthQuotaResult>,
+    pub last_quota_checked_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl From<&CodexAuthProfileRecord> for CodexAuthProfileSummary {
+    fn from(profile: &CodexAuthProfileRecord) -> Self {
+        Self {
+            id: profile.id.clone(),
+            name: profile.name.clone(),
+            description: profile.description.clone(),
+            codex_home: profile.codex_home.clone(),
+            is_active: profile.is_active,
+            last_quota: profile.last_quota.clone(),
+            last_quota_checked_at: profile.last_quota_checked_at.clone(),
+            created_at: profile.created_at.clone(),
+            updated_at: profile.updated_at.clone(),
+        }
+    }
+}
+
+impl From<CodexAuthProfileRecord> for CodexAuthProfileDetail {
+    fn from(profile: CodexAuthProfileRecord) -> Self {
+        Self {
+            id: profile.id,
+            name: profile.name,
+            description: profile.description,
+            codex_home: profile.codex_home,
+            auth_json: profile.auth_json,
+            config_toml: profile.config_toml,
+            is_active: profile.is_active,
+            last_quota: profile.last_quota,
+            last_quota_checked_at: profile.last_quota_checked_at,
+            created_at: profile.created_at,
+            updated_at: profile.updated_at,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -52,7 +116,7 @@ pub struct CodexAuthQuotaResult {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexAuthSwitchResult {
-    pub profile: CodexAuthProfileRecord,
+    pub profile: CodexAuthProfileSummary,
     pub auth_path: String,
     pub config_path: String,
 }
@@ -65,7 +129,7 @@ pub struct CodexAuthQuotaRefreshBatchResult {
     pub failed: usize,
     pub started_at: String,
     pub finished_at: String,
-    pub profiles: Vec<CodexAuthProfileRecord>,
+    pub profiles: Vec<CodexAuthProfileSummary>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

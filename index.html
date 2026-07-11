@@ -6,15 +6,7 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0"
     />
-    <script>
-      (function () {
-        var params = new URLSearchParams(window.location.search);
-        if (params.get("overlay") === "screenshot") {
-          document.documentElement.dataset.overlay = "screenshot";
-        }
-      })();
-    </script>
-    <style>
+    <style id="bexo-runtime-style-nonce">
       html[data-overlay="screenshot"],
       html[data-overlay="screenshot"] body,
       html[data-overlay="screenshot"] #root,
@@ -22,6 +14,29 @@
         background: transparent !important;
       }
     </style>
+    <script id="bexo-runtime-style-bootstrap">
+      (function () {
+        var nonceAnchor = document.getElementById("bexo-runtime-style-nonce");
+        var runtimeStyleNonce = nonceAnchor ? nonceAnchor.nonce : "";
+
+        if (runtimeStyleNonce) {
+          var createElement = document.createElement.bind(document);
+          document.createElement = function (tagName, options) {
+            var element = createElement(tagName, options);
+            var normalizedTagName = String(tagName).toLowerCase();
+            if (normalizedTagName === "style") {
+              element.nonce = runtimeStyleNonce;
+            }
+            return element;
+          };
+        }
+
+        var params = new URLSearchParams(window.location.search);
+        if (params.get("overlay") === "screenshot") {
+          document.documentElement.dataset.overlay = "screenshot";
+        }
+      })();
+    </script>
     <title>Bexo Studio</title>
   </head>
   <body>

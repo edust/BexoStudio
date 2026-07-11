@@ -5,6 +5,7 @@ pub mod codex_profile;
 pub mod launch_task;
 pub mod native_interaction;
 pub mod preferences;
+pub mod prompt;
 pub mod resource_browser;
 pub mod restore;
 pub mod screenshot;

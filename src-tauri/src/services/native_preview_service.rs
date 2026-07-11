@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+#[cfg(target_os = "windows")]
+use std::{sync::mpsc, thread, time::Duration};
 use std::{
     sync::{Arc, Mutex},
     time::Instant,
@@ -19,7 +21,7 @@ pub struct NativePreviewService {
 #[derive(Debug)]
 struct NativePreviewState {
     backend_kind: Option<NativePreviewBackendKind>,
-    backend_handle: Option<NativePreviewBackendHandle>,
+    backend_runtime: Option<NativePreviewBackendRuntime>,
     runtime_mode: NativePreviewRuntimeMode,
     lifecycle_state: NativePreviewLifecycleState,
     initialized_at: Option<Instant>,
@@ -119,7 +121,7 @@ pub struct NativePreviewStateView {
 
 #[derive(Debug)]
 struct NativePreviewBackendBootstrap {
-    backend_handle: NativePreviewBackendHandle,
+    backend_runtime: NativePreviewBackendRuntime,
     backend_kind: NativePreviewBackendKind,
     runtime_mode: NativePreviewRuntimeMode,
     composition_stack: &'static str,
@@ -143,54 +145,51 @@ struct NativePreviewPrepareMetrics {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
-struct NativePreviewBackendHandle {
-    raw: usize,
-    kind: NativePreviewBackendKind,
-}
-
-impl NativePreviewBackendHandle {
+struct NativePreviewBackendRuntime {
     #[cfg(target_os = "windows")]
-    fn from_windows_directcomposition(
-        backend: native_preview_backend_windows::NativePreviewWindowsBackend,
-    ) -> Self {
-        Self {
-            raw: Box::into_raw(Box::new(backend)) as usize,
-            kind: NativePreviewBackendKind::WindowsDirectCompositionSkeleton,
-        }
-    }
-
+    command_sender: mpsc::Sender<NativePreviewOwnerCommand>,
     #[cfg(target_os = "windows")]
-    unsafe fn drop_windows_directcomposition(raw: usize) {
-        if raw == 0 {
-            return;
-        }
-        drop(unsafe {
-            Box::from_raw(raw as *mut native_preview_backend_windows::NativePreviewWindowsBackend)
-        });
-    }
+    owner_thread: Option<thread::JoinHandle<()>>,
 }
 
-impl Drop for NativePreviewBackendHandle {
-    fn drop(&mut self) {
-        #[cfg(target_os = "windows")]
-        if matches!(
-            self.kind,
-            NativePreviewBackendKind::WindowsDirectCompositionSkeleton
-        ) {
-            unsafe {
-                Self::drop_windows_directcomposition(self.raw);
-            }
-            self.raw = 0;
-        }
-    }
+#[cfg(target_os = "windows")]
+enum NativePreviewOwnerCommand {
+    Prepare {
+        session: NativePreviewSessionSpec,
+        bgra_top_down: Arc<Vec<u8>>,
+        reply: mpsc::SyncSender<AppResult<NativePreviewPrepareMetrics>>,
+    },
+    Show {
+        reply: mpsc::SyncSender<AppResult<()>>,
+    },
+    ShowBelowWindow {
+        anchor_hwnd_raw: isize,
+        reply: mpsc::SyncSender<AppResult<()>>,
+    },
+    Hide {
+        reply: mpsc::SyncSender<AppResult<()>>,
+    },
+    SyncZOrderBelowWindow {
+        anchor_hwnd_raw: isize,
+        reply: mpsc::SyncSender<AppResult<()>>,
+    },
+    Shutdown,
 }
+
+#[cfg(target_os = "windows")]
+const NATIVE_PREVIEW_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(target_os = "windows")]
+const NATIVE_PREVIEW_PREPARE_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(target_os = "windows")]
+const NATIVE_PREVIEW_STARTUP_TIMEOUT: Duration = Duration::from_secs(8);
+#[cfg(target_os = "windows")]
+const NATIVE_PREVIEW_MESSAGE_PUMP_INTERVAL: Duration = Duration::from_millis(8);
 
 impl Default for NativePreviewState {
     fn default() -> Self {
         Self {
             backend_kind: None,
-            backend_handle: None,
+            backend_runtime: None,
             runtime_mode: NativePreviewRuntimeMode::Uninitialized,
             lifecycle_state: NativePreviewLifecycleState::Uninitialized,
             initialized_at: None,
@@ -217,7 +216,7 @@ impl NativePreviewService {
         })?;
 
         state.backend_kind = Some(bootstrap.backend_kind);
-        state.backend_handle = Some(bootstrap.backend_handle);
+        state.backend_runtime = Some(bootstrap.backend_runtime);
         state.runtime_mode = bootstrap.runtime_mode;
         state.lifecycle_state = NativePreviewLifecycleState::Ready;
         state.initialized_at = Some(Instant::now());
@@ -278,7 +277,7 @@ impl NativePreviewService {
     pub fn prepare_session_frame(
         &self,
         session: NativePreviewSessionSpec,
-        bgra_top_down: &[u8],
+        bgra_top_down: Arc<Vec<u8>>,
     ) -> AppResult<()> {
         validate_session_spec(&session)?;
         let mut state = self.state.lock().map_err(|_| {
@@ -305,7 +304,8 @@ impl NativePreviewService {
                 "native preview backend 不可用",
             )
         })?;
-        let prepare = prepare_native_preview_backend_frame(&mut state, &session, bgra_top_down)?;
+        let prepare =
+            prepare_native_preview_backend_frame(&mut state, session.clone(), bgra_top_down)?;
 
         state.active_session = Some(session.clone());
         state.lifecycle_state = NativePreviewLifecycleState::Prepared;
@@ -501,7 +501,7 @@ impl NativePreviewService {
         }
 
         state.active_session = None;
-        let _backend_is_ready = state.backend_handle.is_some();
+        let _backend_is_ready = state.backend_runtime.is_some();
         if state.backend_kind.is_some() {
             state.lifecycle_state = NativePreviewLifecycleState::Ready;
         }
@@ -563,34 +563,24 @@ fn validate_session_spec(session: &NativePreviewSessionSpec) -> AppResult<()> {
 
 #[cfg(target_os = "windows")]
 fn prepare_native_preview_backend_frame(
-    state: &mut NativePreviewState,
-    session: &NativePreviewSessionSpec,
-    bgra_top_down: &[u8],
+    state: &NativePreviewState,
+    session: NativePreviewSessionSpec,
+    bgra_top_down: Arc<Vec<u8>>,
 ) -> AppResult<NativePreviewPrepareMetrics> {
-    let handle = state.backend_handle.as_mut().ok_or_else(|| {
+    let runtime = state.backend_runtime.as_ref().ok_or_else(|| {
         AppError::new(
             "NATIVE_PREVIEW_BACKEND_UNAVAILABLE",
             "native preview backend 不可用",
         )
     })?;
-    let backend = unsafe { handle.windows_directcomposition_mut()? };
-    let prepare = backend.prepare_session(session, bgra_top_down)?;
-    Ok(NativePreviewPrepareMetrics {
-        resize_ms: prepare.resize_ms,
-        frame_commit_ms: prepare.frame_commit_ms,
-        total_ms: prepare.total_ms,
-        window_x: prepare.window_x,
-        window_y: prepare.window_y,
-        window_width: prepare.window_width,
-        window_height: prepare.window_height,
-    })
+    runtime.prepare_session(session, bgra_top_down)
 }
 
 #[cfg(not(target_os = "windows"))]
 fn prepare_native_preview_backend_frame(
-    _state: &mut NativePreviewState,
-    _session: &NativePreviewSessionSpec,
-    _bgra_top_down: &[u8],
+    _state: &NativePreviewState,
+    _session: NativePreviewSessionSpec,
+    _bgra_top_down: Arc<Vec<u8>>,
 ) -> AppResult<NativePreviewPrepareMetrics> {
     Err(AppError::new(
         "NATIVE_PREVIEW_UNSUPPORTED",
@@ -599,35 +589,33 @@ fn prepare_native_preview_backend_frame(
 }
 
 #[cfg(target_os = "windows")]
-fn show_native_preview_backend(state: &mut NativePreviewState) -> AppResult<()> {
-    let handle = state.backend_handle.as_mut().ok_or_else(|| {
+fn show_native_preview_backend(state: &NativePreviewState) -> AppResult<()> {
+    let runtime = state.backend_runtime.as_ref().ok_or_else(|| {
         AppError::new(
             "NATIVE_PREVIEW_BACKEND_UNAVAILABLE",
             "native preview backend 不可用",
         )
     })?;
-    let backend = unsafe { handle.windows_directcomposition_mut()? };
-    backend.show()
+    runtime.show()
 }
 
 #[cfg(target_os = "windows")]
 fn show_native_preview_backend_below_window(
-    state: &mut NativePreviewState,
+    state: &NativePreviewState,
     anchor_hwnd_raw: isize,
 ) -> AppResult<()> {
-    let handle = state.backend_handle.as_mut().ok_or_else(|| {
+    let runtime = state.backend_runtime.as_ref().ok_or_else(|| {
         AppError::new(
             "NATIVE_PREVIEW_BACKEND_UNAVAILABLE",
             "native preview backend 不可用",
         )
     })?;
-    let backend = unsafe { handle.windows_directcomposition_mut()? };
-    backend.show_below_window(anchor_hwnd_raw)
+    runtime.show_below_window(anchor_hwnd_raw)
 }
 
 #[cfg(not(target_os = "windows"))]
 fn show_native_preview_backend_below_window(
-    _state: &mut NativePreviewState,
+    _state: &NativePreviewState,
     _anchor_hwnd_raw: isize,
 ) -> AppResult<()> {
     Err(AppError::new(
@@ -637,7 +625,7 @@ fn show_native_preview_backend_below_window(
 }
 
 #[cfg(not(target_os = "windows"))]
-fn show_native_preview_backend(_state: &mut NativePreviewState) -> AppResult<()> {
+fn show_native_preview_backend(_state: &NativePreviewState) -> AppResult<()> {
     Err(AppError::new(
         "NATIVE_PREVIEW_UNSUPPORTED",
         "native preview 仅支持 Windows",
@@ -645,35 +633,33 @@ fn show_native_preview_backend(_state: &mut NativePreviewState) -> AppResult<()>
 }
 
 #[cfg(target_os = "windows")]
-fn hide_native_preview_backend(state: &mut NativePreviewState) -> AppResult<()> {
-    let handle = state.backend_handle.as_mut().ok_or_else(|| {
+fn hide_native_preview_backend(state: &NativePreviewState) -> AppResult<()> {
+    let runtime = state.backend_runtime.as_ref().ok_or_else(|| {
         AppError::new(
             "NATIVE_PREVIEW_BACKEND_UNAVAILABLE",
             "native preview backend 不可用",
         )
     })?;
-    let backend = unsafe { handle.windows_directcomposition_mut()? };
-    backend.hide()
+    runtime.hide()
 }
 
 #[cfg(target_os = "windows")]
 fn sync_native_preview_backend_below_window(
-    state: &mut NativePreviewState,
+    state: &NativePreviewState,
     anchor_hwnd_raw: isize,
 ) -> AppResult<()> {
-    let handle = state.backend_handle.as_mut().ok_or_else(|| {
+    let runtime = state.backend_runtime.as_ref().ok_or_else(|| {
         AppError::new(
             "NATIVE_PREVIEW_BACKEND_UNAVAILABLE",
             "native preview backend 不可用",
         )
     })?;
-    let backend = unsafe { handle.windows_directcomposition_mut()? };
-    backend.sync_z_order_below_window(anchor_hwnd_raw)
+    runtime.sync_z_order_below_window(anchor_hwnd_raw)
 }
 
 #[cfg(not(target_os = "windows"))]
 fn sync_native_preview_backend_below_window(
-    _state: &mut NativePreviewState,
+    _state: &NativePreviewState,
     _anchor_hwnd_raw: isize,
 ) -> AppResult<()> {
     Err(AppError::new(
@@ -683,7 +669,7 @@ fn sync_native_preview_backend_below_window(
 }
 
 #[cfg(not(target_os = "windows"))]
-fn hide_native_preview_backend(_state: &mut NativePreviewState) -> AppResult<()> {
+fn hide_native_preview_backend(_state: &NativePreviewState) -> AppResult<()> {
     Err(AppError::new(
         "NATIVE_PREVIEW_UNSUPPORTED",
         "native preview 仅支持 Windows",
@@ -692,10 +678,50 @@ fn hide_native_preview_backend(_state: &mut NativePreviewState) -> AppResult<()>
 
 #[cfg(target_os = "windows")]
 fn bootstrap_native_preview_backend() -> AppResult<NativePreviewBackendBootstrap> {
-    let (backend_handle, started) = native_preview_backend_windows::initialize()?;
+    let (command_sender, command_receiver) = mpsc::channel();
+    let (startup_sender, startup_receiver) = mpsc::sync_channel(1);
+    let owner_thread = thread::Builder::new()
+        .name("bexo-native-preview-owner".to_string())
+        .spawn(move || run_native_preview_owner(command_receiver, startup_sender))
+        .map_err(|error| {
+            AppError::new(
+                "NATIVE_PREVIEW_OWNER_START_FAILED",
+                "启动 native preview owner thread 失败",
+            )
+            .with_detail("reason", error.to_string())
+        })?;
+
+    let started = match startup_receiver.recv_timeout(NATIVE_PREVIEW_STARTUP_TIMEOUT) {
+        Ok(Ok(started)) => started,
+        Ok(Err(error)) => {
+            if owner_thread.join().is_err() {
+                log::warn!(
+                    target: "bexo::service::native_preview",
+                    "native_preview_owner_panicked_after_startup_failure"
+                );
+            }
+            return Err(error);
+        }
+        Err(error) => {
+            let _ = command_sender.send(NativePreviewOwnerCommand::Shutdown);
+            return Err(AppError::new(
+                "NATIVE_PREVIEW_OWNER_START_TIMEOUT",
+                "native preview owner thread 启动超时",
+            )
+            .with_detail(
+                "timeoutMs",
+                NATIVE_PREVIEW_STARTUP_TIMEOUT.as_millis().to_string(),
+            )
+            .with_detail("reason", error.to_string())
+            .retryable(false));
+        }
+    };
 
     Ok(NativePreviewBackendBootstrap {
-        backend_handle: NativePreviewBackendHandle::from_windows_directcomposition(backend_handle),
+        backend_runtime: NativePreviewBackendRuntime {
+            command_sender,
+            owner_thread: Some(owner_thread),
+        },
         backend_kind: NativePreviewBackendKind::WindowsDirectCompositionSkeleton,
         runtime_mode: NativePreviewRuntimeMode::PhaseBScaffold,
         composition_stack: "win32+d3d11+dxgi+swapchain+dcomp",
@@ -717,28 +743,173 @@ fn bootstrap_native_preview_backend() -> AppResult<NativePreviewBackendBootstrap
 }
 
 #[cfg(target_os = "windows")]
-impl NativePreviewBackendHandle {
-    unsafe fn windows_directcomposition_mut(
-        &mut self,
-    ) -> AppResult<&mut native_preview_backend_windows::NativePreviewWindowsBackend> {
-        if self.raw == 0 {
-            return Err(AppError::new(
-                "NATIVE_PREVIEW_BACKEND_UNAVAILABLE",
-                "native preview backend 不可用",
-            ));
-        }
-        if !matches!(
-            self.kind,
-            NativePreviewBackendKind::WindowsDirectCompositionSkeleton
-        ) {
-            return Err(AppError::new(
-                "NATIVE_PREVIEW_BACKEND_KIND_INVALID",
-                "native preview backend 类型无效",
-            ));
-        }
-
-        Ok(unsafe {
-            &mut *(self.raw as *mut native_preview_backend_windows::NativePreviewWindowsBackend)
+impl NativePreviewBackendRuntime {
+    fn prepare_session(
+        &self,
+        session: NativePreviewSessionSpec,
+        bgra_top_down: Arc<Vec<u8>>,
+    ) -> AppResult<NativePreviewPrepareMetrics> {
+        self.request("prepare_session", NATIVE_PREVIEW_PREPARE_TIMEOUT, |reply| {
+            NativePreviewOwnerCommand::Prepare {
+                session,
+                bgra_top_down,
+                reply,
+            }
         })
+    }
+
+    fn show(&self) -> AppResult<()> {
+        self.request("show", NATIVE_PREVIEW_REQUEST_TIMEOUT, |reply| {
+            NativePreviewOwnerCommand::Show { reply }
+        })
+    }
+
+    fn show_below_window(&self, anchor_hwnd_raw: isize) -> AppResult<()> {
+        self.request(
+            "show_below_window",
+            NATIVE_PREVIEW_REQUEST_TIMEOUT,
+            |reply| NativePreviewOwnerCommand::ShowBelowWindow {
+                anchor_hwnd_raw,
+                reply,
+            },
+        )
+    }
+
+    fn hide(&self) -> AppResult<()> {
+        self.request("hide", NATIVE_PREVIEW_REQUEST_TIMEOUT, |reply| {
+            NativePreviewOwnerCommand::Hide { reply }
+        })
+    }
+
+    fn sync_z_order_below_window(&self, anchor_hwnd_raw: isize) -> AppResult<()> {
+        self.request(
+            "sync_z_order_below_window",
+            NATIVE_PREVIEW_REQUEST_TIMEOUT,
+            |reply| NativePreviewOwnerCommand::SyncZOrderBelowWindow {
+                anchor_hwnd_raw,
+                reply,
+            },
+        )
+    }
+
+    fn request<T>(
+        &self,
+        operation: &'static str,
+        timeout: Duration,
+        build_command: impl FnOnce(mpsc::SyncSender<AppResult<T>>) -> NativePreviewOwnerCommand,
+    ) -> AppResult<T>
+    where
+        T: Send + 'static,
+    {
+        let (reply_sender, reply_receiver) = mpsc::sync_channel(1);
+        self.command_sender
+            .send(build_command(reply_sender))
+            .map_err(|error| {
+                AppError::new(
+                    "NATIVE_PREVIEW_OWNER_UNAVAILABLE",
+                    "native preview owner thread 不可用",
+                )
+                .with_detail("operation", operation)
+                .with_detail("reason", error.to_string())
+            })?;
+
+        reply_receiver.recv_timeout(timeout).map_err(|error| {
+            let code = match error {
+                mpsc::RecvTimeoutError::Timeout => "NATIVE_PREVIEW_OWNER_TIMEOUT",
+                mpsc::RecvTimeoutError::Disconnected => "NATIVE_PREVIEW_OWNER_UNAVAILABLE",
+            };
+            AppError::new(code, "native preview owner request 失败")
+                .with_detail("operation", operation)
+                .with_detail("timeoutMs", timeout.as_millis().to_string())
+                .with_detail("reason", error.to_string())
+                .retryable(false)
+        })?
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for NativePreviewBackendRuntime {
+    fn drop(&mut self) {
+        let _ = self
+            .command_sender
+            .send(NativePreviewOwnerCommand::Shutdown);
+        if let Some(owner_thread) = self.owner_thread.take() {
+            if owner_thread.join().is_err() {
+                log::warn!(
+                    target: "bexo::service::native_preview",
+                    "native_preview_owner_panicked_during_shutdown"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn run_native_preview_owner(
+    command_receiver: mpsc::Receiver<NativePreviewOwnerCommand>,
+    startup_sender: mpsc::SyncSender<
+        AppResult<native_preview_backend_windows::NativePreviewWindowsBackendStarted>,
+    >,
+) {
+    let (mut backend, started) = match native_preview_backend_windows::initialize() {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = startup_sender.send(Err(error));
+            return;
+        }
+    };
+
+    if startup_sender.send(Ok(started)).is_err() {
+        return;
+    }
+
+    loop {
+        if !native_preview_backend_windows::pump_messages() {
+            break;
+        }
+        let command = match command_receiver.recv_timeout(NATIVE_PREVIEW_MESSAGE_PUMP_INTERVAL) {
+            Ok(command) => command,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        };
+        match command {
+            NativePreviewOwnerCommand::Prepare {
+                session,
+                bgra_top_down,
+                reply,
+            } => {
+                let result = backend
+                    .prepare_session(&session, bgra_top_down.as_slice())
+                    .map(|prepare| NativePreviewPrepareMetrics {
+                        resize_ms: prepare.resize_ms,
+                        frame_commit_ms: prepare.frame_commit_ms,
+                        total_ms: prepare.total_ms,
+                        window_x: prepare.window_x,
+                        window_y: prepare.window_y,
+                        window_width: prepare.window_width,
+                        window_height: prepare.window_height,
+                    });
+                let _ = reply.send(result);
+            }
+            NativePreviewOwnerCommand::Show { reply } => {
+                let _ = reply.send(backend.show());
+            }
+            NativePreviewOwnerCommand::ShowBelowWindow {
+                anchor_hwnd_raw,
+                reply,
+            } => {
+                let _ = reply.send(backend.show_below_window(anchor_hwnd_raw));
+            }
+            NativePreviewOwnerCommand::Hide { reply } => {
+                let _ = reply.send(backend.hide());
+            }
+            NativePreviewOwnerCommand::SyncZOrderBelowWindow {
+                anchor_hwnd_raw,
+                reply,
+            } => {
+                let _ = reply.send(backend.sync_z_order_below_window(anchor_hwnd_raw));
+            }
+            NativePreviewOwnerCommand::Shutdown => break,
+        }
     }
 }

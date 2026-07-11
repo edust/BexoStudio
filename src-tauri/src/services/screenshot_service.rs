@@ -4895,7 +4895,7 @@ fn prepare_and_show_native_preview<R: Runtime>(
         return Ok(None);
     };
     let native_preview_service = app.state::<crate::services::NativePreviewService>();
-    native_preview_service.prepare_session_frame(spec, bgra_top_down.as_slice())?;
+    native_preview_service.prepare_session_frame(spec, bgra_top_down)?;
     if let Some(anchor_hwnd_raw) = overlay_anchor_hwnd_raw {
         native_preview_service.show_prepared_session_below_window(anchor_hwnd_raw)?;
     } else {

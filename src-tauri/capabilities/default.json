@@ -1,9 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "default",
-  "description": "Capability for the main Bexo Studio window",
-  "windows": ["main", "screenshot_overlay", "codex_history_*"],
+  "identifier": "main-window",
+  "description": "Full application capability for the trusted main Bexo Studio window",
+  "windows": ["main"],
   "permissions": [
+    "main-window-commands",
     "core:default",
     "autostart:default",
     "dialog:default",

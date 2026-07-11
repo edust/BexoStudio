@@ -4,7 +4,7 @@ use std::{
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Command, Output, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -20,6 +20,8 @@ use crate::error::{AppError, AppResult};
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+const PROCESS_TREE_TERMINATION_TIMEOUT: Duration = Duration::from_secs(5);
+const PROCESS_TREE_TERMINATION_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 #[derive(Debug, Clone)]
 pub struct LaunchCommand {
@@ -267,7 +269,7 @@ impl ChildProcessRegistry {
                 for tracked in processes.values() {
                     flattened.extend(tracked.iter().cloned());
                 }
-                unique_processes(flattened.into_iter())
+                unique_processes(flattened)
             })
             .unwrap_or_default();
 
@@ -580,20 +582,21 @@ fn terminate_process_tree(pid: u32) -> AppResult<bool> {
     {
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    let output = command
+    let child = command
         .args(["/PID", &pid.to_string(), "/T", "/F"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()
+        .spawn()
         .map_err(|error| {
             AppError::new(
                 "PROCESS_KILL_FAILED",
-                "failed to terminate external command",
+                "failed to start process tree termination",
             )
             .with_detail("processId", pid.to_string())
             .with_detail("reason", error.to_string())
         })?;
+    let output = wait_for_termination_command(child, pid)?;
 
     if output.status.success() {
         return Ok(true);
@@ -623,6 +626,55 @@ fn terminate_process_tree(pid: u32) -> AppResult<bool> {
             .with_detail("stdout", stdout)
             .with_detail("stderr", stderr),
     )
+}
+
+fn wait_for_termination_command(mut child: std::process::Child, pid: u32) -> AppResult<Output> {
+    let started_at = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                return child.wait_with_output().map_err(|error| {
+                    AppError::new(
+                        "PROCESS_KILL_FAILED",
+                        "failed to collect process tree termination result",
+                    )
+                    .with_detail("processId", pid.to_string())
+                    .with_detail("reason", error.to_string())
+                });
+            }
+            Ok(None) if started_at.elapsed() < PROCESS_TREE_TERMINATION_TIMEOUT => {
+                thread::sleep(PROCESS_TREE_TERMINATION_POLL_INTERVAL);
+            }
+            Ok(None) => {
+                let kill_result = child.kill();
+                let wait_result = child.wait();
+                let mut error =
+                    AppError::new("PROCESS_KILL_TIMEOUT", "process tree termination timed out")
+                        .with_detail("processId", pid.to_string())
+                        .with_detail(
+                            "timeoutMs",
+                            PROCESS_TREE_TERMINATION_TIMEOUT.as_millis().to_string(),
+                        );
+                if let Err(kill_error) = kill_result {
+                    error = error.with_detail("cleanupKillReason", kill_error.to_string());
+                }
+                if let Err(wait_error) = wait_result {
+                    error = error.with_detail("cleanupWaitReason", wait_error.to_string());
+                }
+                return Err(error);
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(AppError::new(
+                    "PROCESS_KILL_FAILED",
+                    "failed while waiting for process tree termination",
+                )
+                .with_detail("processId", pid.to_string())
+                .with_detail("reason", error.to_string()));
+            }
+        }
+    }
 }
 
 fn unique_processes<I>(tracked: I) -> HashMap<u32, TrackedChildProcess>

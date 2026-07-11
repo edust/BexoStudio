@@ -34,6 +34,7 @@ import {
   getErrorSummary,
   hasDesktopRuntime,
   listWorkspaces,
+  reorderLaunchTasks,
   runWorkspaceTerminalCommand,
   runWorkspaceTerminalCommands,
   upsertLaunchTask,
@@ -198,13 +199,10 @@ export default function HomePage() {
         throw new Error("当前工作区没有可配置的项目目录");
       }
 
-      for (const [index, task] of nextTasks.entries()) {
-        await upsertLaunchTask(
-          buildLaunchTaskPayload(task, selectedProject.id, workspacePath, {
-            sortOrder: index,
-          }),
-        );
-      }
+      return reorderLaunchTasks({
+        projectId: selectedProject.id,
+        launchTaskIds: nextTasks.map((task) => task.id),
+      });
     },
     onMutate: ({ nextTasks }) => {
       setOrderedTasks(nextTasks);

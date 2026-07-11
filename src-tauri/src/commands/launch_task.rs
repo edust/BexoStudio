@@ -1,7 +1,7 @@
 use tauri::State;
 
 use crate::{
-    domain::{DeleteResult, LaunchTaskRecord, UpsertLaunchTaskInput},
+    domain::{DeleteResult, LaunchTaskRecord, ReorderLaunchTasksInput, UpsertLaunchTaskInput},
     error::{AppError, CommandResponse},
     services::WorkspaceService,
 };
@@ -29,6 +29,20 @@ pub async fn upsert_launch_task(
         Ok(data) => Ok(CommandResponse::success(data)),
         Err(error) => {
             log::error!(target: "bexo::command::launch_task", "upsert_launch_task failed: {}", error);
+            Ok(CommandResponse::failure(error))
+        }
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn reorder_launch_tasks(
+    workspace_service: State<'_, WorkspaceService>,
+    input: ReorderLaunchTasksInput,
+) -> Result<CommandResponse<Vec<LaunchTaskRecord>>, AppError> {
+    match workspace_service.reorder_launch_tasks(input).await {
+        Ok(data) => Ok(CommandResponse::success(data)),
+        Err(error) => {
+            log::error!(target: "bexo::command::launch_task", "reorder_launch_tasks failed: {}", error);
             Ok(CommandResponse::failure(error))
         }
     }

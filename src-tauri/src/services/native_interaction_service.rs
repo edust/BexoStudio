@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+#[cfg(target_os = "windows")]
+use std::{sync::mpsc, thread, time::Duration};
 use std::{
     sync::{Arc, Mutex},
     time::Instant,
@@ -24,7 +26,7 @@ pub struct NativeInteractionService {
 
 struct NativeInteractionState {
     backend_kind: Option<NativeInteractionBackendKind>,
-    backend_handle: Option<NativeInteractionBackendHandle>,
+    backend_runtime: Option<NativeInteractionBackendRuntime>,
     lifecycle_state: NativeInteractionLifecycleState,
     initialized_at: Option<Instant>,
     last_error: Option<AppError>,
@@ -254,7 +256,7 @@ pub struct NativeInteractionRuntimeUpdateInput {
 
 #[derive(Debug)]
 struct NativeInteractionBackendBootstrap {
-    backend_handle: NativeInteractionBackendHandle,
+    backend_runtime: NativeInteractionBackendRuntime,
     backend_kind: NativeInteractionBackendKind,
     window_create_ms: u128,
     initial_hide_ms: u128,
@@ -360,55 +362,56 @@ pub(crate) type NativeInteractionEventSink =
     Arc<dyn Fn(NativeInteractionBackendEvent) + Send + Sync>;
 
 #[derive(Debug)]
-struct NativeInteractionBackendHandle {
-    raw: usize,
-    kind: NativeInteractionBackendKind,
-}
-
-impl NativeInteractionBackendHandle {
+struct NativeInteractionBackendRuntime {
     #[cfg(target_os = "windows")]
-    fn from_windows_interaction_window(
-        backend: native_interaction_backend_windows::NativeInteractionWindowsBackend,
-    ) -> Self {
-        Self {
-            raw: Box::into_raw(Box::new(backend)) as usize,
-            kind: NativeInteractionBackendKind::WindowsLayeredSelectionMvp,
-        }
-    }
-
+    command_sender: mpsc::Sender<NativeInteractionOwnerCommand>,
     #[cfg(target_os = "windows")]
-    unsafe fn drop_windows_interaction_window(raw: usize) {
-        if raw == 0 {
-            return;
-        }
-        drop(unsafe {
-            Box::from_raw(
-                raw as *mut native_interaction_backend_windows::NativeInteractionWindowsBackend,
-            )
-        });
-    }
+    owner_thread: Option<thread::JoinHandle<()>>,
 }
 
-impl Drop for NativeInteractionBackendHandle {
-    fn drop(&mut self) {
-        #[cfg(target_os = "windows")]
-        if matches!(
-            self.kind,
-            NativeInteractionBackendKind::WindowsLayeredSelectionMvp
-        ) {
-            unsafe {
-                Self::drop_windows_interaction_window(self.raw);
-            }
-            self.raw = 0;
-        }
-    }
+#[cfg(target_os = "windows")]
+enum NativeInteractionOwnerCommand {
+    Prepare {
+        session: NativeInteractionSessionSpec,
+        reply: mpsc::SyncSender<AppResult<NativeInteractionPrepareMetrics>>,
+    },
+    Show {
+        reply: mpsc::SyncSender<AppResult<()>>,
+    },
+    Hide {
+        reply: mpsc::SyncSender<AppResult<()>>,
+    },
+    Clear {
+        reply: mpsc::SyncSender<AppResult<()>>,
+    },
+    Snapshot {
+        reply: mpsc::SyncSender<AppResult<NativeInteractionSelectionSnapshot>>,
+    },
+    UpdateExclusionRects {
+        rects: Vec<NativeInteractionExclusionRect>,
+        reply: mpsc::SyncSender<AppResult<()>>,
+    },
+    UpdateRuntime {
+        input: NativeInteractionRuntimeUpdateInput,
+        reply: mpsc::SyncSender<AppResult<()>>,
+    },
+    Shutdown,
 }
+
+#[cfg(target_os = "windows")]
+const NATIVE_INTERACTION_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(target_os = "windows")]
+const NATIVE_INTERACTION_PREPARE_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(target_os = "windows")]
+const NATIVE_INTERACTION_STARTUP_TIMEOUT: Duration = Duration::from_secs(8);
+#[cfg(target_os = "windows")]
+const NATIVE_INTERACTION_MESSAGE_PUMP_INTERVAL: Duration = Duration::from_millis(8);
 
 impl Default for NativeInteractionState {
     fn default() -> Self {
         Self {
             backend_kind: None,
-            backend_handle: None,
+            backend_runtime: None,
             lifecycle_state: NativeInteractionLifecycleState::Uninitialized,
             initialized_at: None,
             last_error: None,
@@ -425,9 +428,9 @@ impl NativeInteractionService {
         }
     }
 
-    pub fn initialize<R: tauri::Runtime>(&self, _app_handle: &AppHandle<R>) -> AppResult<()> {
-        let bootstrap = bootstrap_native_interaction_backend()?;
-        let event_sink = build_native_interaction_event_sink(_app_handle);
+    pub fn initialize<R: tauri::Runtime>(&self, app_handle: &AppHandle<R>) -> AppResult<()> {
+        let event_sink = build_native_interaction_event_sink(app_handle);
+        let bootstrap = bootstrap_native_interaction_backend(event_sink.clone())?;
         let mut state = self.state.lock().map_err(|_| {
             AppError::new(
                 "NATIVE_INTERACTION_STATE_LOCK_FAILED",
@@ -436,12 +439,11 @@ impl NativeInteractionService {
         })?;
 
         state.backend_kind = Some(bootstrap.backend_kind);
-        state.backend_handle = Some(bootstrap.backend_handle);
+        state.backend_runtime = Some(bootstrap.backend_runtime);
         state.lifecycle_state = NativeInteractionLifecycleState::Ready;
         state.initialized_at = Some(Instant::now());
         state.last_error = None;
         state.event_sink = Some(event_sink.clone());
-        set_native_interaction_backend_event_sink(&mut state, event_sink)?;
 
         log::info!(
             target: "bexo::service::native_interaction",
@@ -1010,33 +1012,21 @@ fn validate_session_spec(session: &NativeInteractionSessionSpec) -> AppResult<()
 
 #[cfg(target_os = "windows")]
 fn prepare_native_interaction_backend(
-    state: &mut NativeInteractionState,
+    state: &NativeInteractionState,
     session: &NativeInteractionSessionSpec,
 ) -> AppResult<NativeInteractionPrepareMetrics> {
-    let handle = state.backend_handle.as_mut().ok_or_else(|| {
+    let runtime = state.backend_runtime.as_ref().ok_or_else(|| {
         AppError::new(
             "NATIVE_INTERACTION_BACKEND_UNAVAILABLE",
             "native interaction backend 不可用",
         )
     })?;
-    let backend = unsafe { handle.windows_interaction_window_mut()? };
-    let prepare = backend.prepare_session(session)?;
-    Ok(NativeInteractionPrepareMetrics {
-        total_ms: prepare.total_ms,
-        window_x: prepare.window_x,
-        window_y: prepare.window_y,
-        window_width: prepare.window_width,
-        window_height: prepare.window_height,
-        present_ms: prepare.present_ms,
-        copy_ms: prepare.copy_ms,
-        update_ms: prepare.update_ms,
-        surface_recreated: prepare.surface_recreated,
-    })
+    runtime.prepare_session(session.clone())
 }
 
 #[cfg(not(target_os = "windows"))]
 fn prepare_native_interaction_backend(
-    _state: &mut NativeInteractionState,
+    _state: &NativeInteractionState,
     _session: &NativeInteractionSessionSpec,
 ) -> AppResult<NativeInteractionPrepareMetrics> {
     Err(AppError::new(
@@ -1046,19 +1036,18 @@ fn prepare_native_interaction_backend(
 }
 
 #[cfg(target_os = "windows")]
-fn show_native_interaction_backend(state: &mut NativeInteractionState) -> AppResult<()> {
-    let handle = state.backend_handle.as_mut().ok_or_else(|| {
+fn show_native_interaction_backend(state: &NativeInteractionState) -> AppResult<()> {
+    let runtime = state.backend_runtime.as_ref().ok_or_else(|| {
         AppError::new(
             "NATIVE_INTERACTION_BACKEND_UNAVAILABLE",
             "native interaction backend 不可用",
         )
     })?;
-    let backend = unsafe { handle.windows_interaction_window_mut()? };
-    backend.show()
+    runtime.show()
 }
 
 #[cfg(not(target_os = "windows"))]
-fn show_native_interaction_backend(_state: &mut NativeInteractionState) -> AppResult<()> {
+fn show_native_interaction_backend(_state: &NativeInteractionState) -> AppResult<()> {
     Err(AppError::new(
         "NATIVE_INTERACTION_UNSUPPORTED",
         "native interaction 仅支持 Windows",
@@ -1066,19 +1055,18 @@ fn show_native_interaction_backend(_state: &mut NativeInteractionState) -> AppRe
 }
 
 #[cfg(target_os = "windows")]
-fn hide_native_interaction_backend(state: &mut NativeInteractionState) -> AppResult<()> {
-    let handle = state.backend_handle.as_mut().ok_or_else(|| {
+fn hide_native_interaction_backend(state: &NativeInteractionState) -> AppResult<()> {
+    let runtime = state.backend_runtime.as_ref().ok_or_else(|| {
         AppError::new(
             "NATIVE_INTERACTION_BACKEND_UNAVAILABLE",
             "native interaction backend 不可用",
         )
     })?;
-    let backend = unsafe { handle.windows_interaction_window_mut()? };
-    backend.hide()
+    runtime.hide()
 }
 
 #[cfg(not(target_os = "windows"))]
-fn hide_native_interaction_backend(_state: &mut NativeInteractionState) -> AppResult<()> {
+fn hide_native_interaction_backend(_state: &NativeInteractionState) -> AppResult<()> {
     Err(AppError::new(
         "NATIVE_INTERACTION_UNSUPPORTED",
         "native interaction 仅支持 Windows",
@@ -1086,50 +1074,47 @@ fn hide_native_interaction_backend(_state: &mut NativeInteractionState) -> AppRe
 }
 
 #[cfg(target_os = "windows")]
-fn clear_native_interaction_backend(state: &mut NativeInteractionState) -> AppResult<()> {
-    let handle = state.backend_handle.as_mut().ok_or_else(|| {
+fn clear_native_interaction_backend(state: &NativeInteractionState) -> AppResult<()> {
+    let runtime = state.backend_runtime.as_ref().ok_or_else(|| {
         AppError::new(
             "NATIVE_INTERACTION_BACKEND_UNAVAILABLE",
             "native interaction backend 不可用",
         )
     })?;
-    let backend = unsafe { handle.windows_interaction_window_mut()? };
-    backend.clear()
+    runtime.clear()
 }
 
 #[cfg(target_os = "windows")]
 fn update_native_interaction_backend_exclusion_rects(
-    state: &mut NativeInteractionState,
+    state: &NativeInteractionState,
     rects: &[NativeInteractionExclusionRect],
 ) -> AppResult<()> {
-    let handle = state.backend_handle.as_mut().ok_or_else(|| {
+    let runtime = state.backend_runtime.as_ref().ok_or_else(|| {
         AppError::new(
             "NATIVE_INTERACTION_BACKEND_UNAVAILABLE",
             "native interaction backend 不可用",
         )
     })?;
-    let backend = unsafe { handle.windows_interaction_window_mut()? };
-    backend.update_exclusion_rects(rects)
+    runtime.update_exclusion_rects(rects.to_vec())
 }
 
 #[cfg(target_os = "windows")]
 fn update_native_interaction_backend_runtime(
-    state: &mut NativeInteractionState,
+    state: &NativeInteractionState,
     input: &NativeInteractionRuntimeUpdateInput,
 ) -> AppResult<()> {
-    let handle = state.backend_handle.as_mut().ok_or_else(|| {
+    let runtime = state.backend_runtime.as_ref().ok_or_else(|| {
         AppError::new(
             "NATIVE_INTERACTION_BACKEND_UNAVAILABLE",
             "native interaction backend 不可用",
         )
     })?;
-    let backend = unsafe { handle.windows_interaction_window_mut()? };
-    backend.update_runtime(input)
+    runtime.update_runtime(input.clone())
 }
 
 #[cfg(not(target_os = "windows"))]
 fn update_native_interaction_backend_runtime(
-    _state: &mut NativeInteractionState,
+    _state: &NativeInteractionState,
     _input: &NativeInteractionRuntimeUpdateInput,
 ) -> AppResult<()> {
     Err(AppError::new(
@@ -1138,35 +1123,9 @@ fn update_native_interaction_backend_runtime(
     ))
 }
 
-#[cfg(target_os = "windows")]
-fn set_native_interaction_backend_event_sink(
-    state: &mut NativeInteractionState,
-    event_sink: NativeInteractionEventSink,
-) -> AppResult<()> {
-    let handle = state.backend_handle.as_mut().ok_or_else(|| {
-        AppError::new(
-            "NATIVE_INTERACTION_BACKEND_UNAVAILABLE",
-            "native interaction backend 不可用",
-        )
-    })?;
-    let backend = unsafe { handle.windows_interaction_window_mut()? };
-    backend.set_event_sink(event_sink)
-}
-
-#[cfg(not(target_os = "windows"))]
-fn set_native_interaction_backend_event_sink(
-    _state: &mut NativeInteractionState,
-    _event_sink: NativeInteractionEventSink,
-) -> AppResult<()> {
-    Err(AppError::new(
-        "NATIVE_INTERACTION_UNSUPPORTED",
-        "native interaction 仅支持 Windows",
-    ))
-}
-
 #[cfg(not(target_os = "windows"))]
 fn update_native_interaction_backend_exclusion_rects(
-    _state: &mut NativeInteractionState,
+    _state: &NativeInteractionState,
     _rects: &[NativeInteractionExclusionRect],
 ) -> AppResult<()> {
     Err(AppError::new(
@@ -1176,7 +1135,7 @@ fn update_native_interaction_backend_exclusion_rects(
 }
 
 #[cfg(not(target_os = "windows"))]
-fn clear_native_interaction_backend(_state: &mut NativeInteractionState) -> AppResult<()> {
+fn clear_native_interaction_backend(_state: &NativeInteractionState) -> AppResult<()> {
     Err(AppError::new(
         "NATIVE_INTERACTION_UNSUPPORTED",
         "native interaction 仅支持 Windows",
@@ -1185,21 +1144,20 @@ fn clear_native_interaction_backend(_state: &mut NativeInteractionState) -> AppR
 
 #[cfg(target_os = "windows")]
 fn snapshot_native_interaction_backend(
-    state: &mut NativeInteractionState,
+    state: &NativeInteractionState,
 ) -> AppResult<NativeInteractionSelectionSnapshot> {
-    let handle = state.backend_handle.as_mut().ok_or_else(|| {
+    let runtime = state.backend_runtime.as_ref().ok_or_else(|| {
         AppError::new(
             "NATIVE_INTERACTION_BACKEND_UNAVAILABLE",
             "native interaction backend 不可用",
         )
     })?;
-    let backend = unsafe { handle.windows_interaction_window_mut()? };
-    backend.snapshot_selection()
+    runtime.snapshot()
 }
 
 #[cfg(not(target_os = "windows"))]
 fn snapshot_native_interaction_backend(
-    _state: &mut NativeInteractionState,
+    _state: &NativeInteractionState,
 ) -> AppResult<NativeInteractionSelectionSnapshot> {
     Err(AppError::new(
         "NATIVE_INTERACTION_UNSUPPORTED",
@@ -1208,10 +1166,53 @@ fn snapshot_native_interaction_backend(
 }
 
 #[cfg(target_os = "windows")]
-fn bootstrap_native_interaction_backend() -> AppResult<NativeInteractionBackendBootstrap> {
-    let (backend, started) = native_interaction_backend_windows::initialize()?;
+fn bootstrap_native_interaction_backend(
+    event_sink: NativeInteractionEventSink,
+) -> AppResult<NativeInteractionBackendBootstrap> {
+    let (command_sender, command_receiver) = mpsc::channel();
+    let (startup_sender, startup_receiver) = mpsc::sync_channel(1);
+    let owner_thread = thread::Builder::new()
+        .name("bexo-native-interaction-owner".to_string())
+        .spawn(move || run_native_interaction_owner(command_receiver, startup_sender, event_sink))
+        .map_err(|error| {
+            AppError::new(
+                "NATIVE_INTERACTION_OWNER_START_FAILED",
+                "启动 native interaction owner thread 失败",
+            )
+            .with_detail("reason", error.to_string())
+        })?;
+
+    let started = match startup_receiver.recv_timeout(NATIVE_INTERACTION_STARTUP_TIMEOUT) {
+        Ok(Ok(started)) => started,
+        Ok(Err(error)) => {
+            if owner_thread.join().is_err() {
+                log::warn!(
+                    target: "bexo::service::native_interaction",
+                    "native_interaction_owner_panicked_after_startup_failure"
+                );
+            }
+            return Err(error);
+        }
+        Err(error) => {
+            let _ = command_sender.send(NativeInteractionOwnerCommand::Shutdown);
+            return Err(AppError::new(
+                "NATIVE_INTERACTION_OWNER_START_TIMEOUT",
+                "native interaction owner thread 启动超时",
+            )
+            .with_detail(
+                "timeoutMs",
+                NATIVE_INTERACTION_STARTUP_TIMEOUT.as_millis().to_string(),
+            )
+            .with_detail("reason", error.to_string())
+            .retryable(false));
+        }
+    };
+
     Ok(NativeInteractionBackendBootstrap {
-        backend_handle: NativeInteractionBackendHandle::from_windows_interaction_window(backend),
+        backend_runtime: NativeInteractionBackendRuntime {
+            command_sender,
+            owner_thread: Some(owner_thread),
+        },
         backend_kind: NativeInteractionBackendKind::WindowsLayeredSelectionMvp,
         window_create_ms: started.window_create_ms,
         initial_hide_ms: started.initial_hide_ms,
@@ -1219,7 +1220,9 @@ fn bootstrap_native_interaction_backend() -> AppResult<NativeInteractionBackendB
 }
 
 #[cfg(not(target_os = "windows"))]
-fn bootstrap_native_interaction_backend() -> AppResult<NativeInteractionBackendBootstrap> {
+fn bootstrap_native_interaction_backend(
+    _event_sink: NativeInteractionEventSink,
+) -> AppResult<NativeInteractionBackendBootstrap> {
     Err(AppError::new(
         "NATIVE_INTERACTION_UNSUPPORTED",
         "native interaction 仅支持 Windows",
@@ -1227,29 +1230,180 @@ fn bootstrap_native_interaction_backend() -> AppResult<NativeInteractionBackendB
 }
 
 #[cfg(target_os = "windows")]
-impl NativeInteractionBackendHandle {
-    unsafe fn windows_interaction_window_mut(
-        &mut self,
-    ) -> AppResult<&mut native_interaction_backend_windows::NativeInteractionWindowsBackend> {
-        if self.raw == 0 {
-            return Err(AppError::new(
-                "NATIVE_INTERACTION_BACKEND_UNAVAILABLE",
-                "native interaction backend 不可用",
-            ));
-        }
-        if !matches!(
-            self.kind,
-            NativeInteractionBackendKind::WindowsLayeredSelectionMvp
-        ) {
-            return Err(AppError::new(
-                "NATIVE_INTERACTION_BACKEND_KIND_INVALID",
-                "native interaction backend 类型无效",
-            ));
-        }
+impl NativeInteractionBackendRuntime {
+    fn prepare_session(
+        &self,
+        session: NativeInteractionSessionSpec,
+    ) -> AppResult<NativeInteractionPrepareMetrics> {
+        self.request(
+            "prepare_session",
+            NATIVE_INTERACTION_PREPARE_TIMEOUT,
+            |reply| NativeInteractionOwnerCommand::Prepare { session, reply },
+        )
+    }
 
-        Ok(unsafe {
-            &mut *(self.raw
-                as *mut native_interaction_backend_windows::NativeInteractionWindowsBackend)
+    fn show(&self) -> AppResult<()> {
+        self.request("show", NATIVE_INTERACTION_REQUEST_TIMEOUT, |reply| {
+            NativeInteractionOwnerCommand::Show { reply }
         })
+    }
+
+    fn hide(&self) -> AppResult<()> {
+        self.request("hide", NATIVE_INTERACTION_REQUEST_TIMEOUT, |reply| {
+            NativeInteractionOwnerCommand::Hide { reply }
+        })
+    }
+
+    fn clear(&self) -> AppResult<()> {
+        self.request("clear", NATIVE_INTERACTION_REQUEST_TIMEOUT, |reply| {
+            NativeInteractionOwnerCommand::Clear { reply }
+        })
+    }
+
+    fn snapshot(&self) -> AppResult<NativeInteractionSelectionSnapshot> {
+        self.request("snapshot", NATIVE_INTERACTION_REQUEST_TIMEOUT, |reply| {
+            NativeInteractionOwnerCommand::Snapshot { reply }
+        })
+    }
+
+    fn update_exclusion_rects(&self, rects: Vec<NativeInteractionExclusionRect>) -> AppResult<()> {
+        self.request(
+            "update_exclusion_rects",
+            NATIVE_INTERACTION_REQUEST_TIMEOUT,
+            |reply| NativeInteractionOwnerCommand::UpdateExclusionRects { rects, reply },
+        )
+    }
+
+    fn update_runtime(&self, input: NativeInteractionRuntimeUpdateInput) -> AppResult<()> {
+        self.request(
+            "update_runtime",
+            NATIVE_INTERACTION_REQUEST_TIMEOUT,
+            |reply| NativeInteractionOwnerCommand::UpdateRuntime { input, reply },
+        )
+    }
+
+    fn request<T>(
+        &self,
+        operation: &'static str,
+        timeout: Duration,
+        build_command: impl FnOnce(mpsc::SyncSender<AppResult<T>>) -> NativeInteractionOwnerCommand,
+    ) -> AppResult<T>
+    where
+        T: Send + 'static,
+    {
+        let (reply_sender, reply_receiver) = mpsc::sync_channel(1);
+        self.command_sender
+            .send(build_command(reply_sender))
+            .map_err(|error| {
+                AppError::new(
+                    "NATIVE_INTERACTION_OWNER_UNAVAILABLE",
+                    "native interaction owner thread 不可用",
+                )
+                .with_detail("operation", operation)
+                .with_detail("reason", error.to_string())
+            })?;
+
+        reply_receiver.recv_timeout(timeout).map_err(|error| {
+            let code = match error {
+                mpsc::RecvTimeoutError::Timeout => "NATIVE_INTERACTION_OWNER_TIMEOUT",
+                mpsc::RecvTimeoutError::Disconnected => "NATIVE_INTERACTION_OWNER_UNAVAILABLE",
+            };
+            AppError::new(code, "native interaction owner request 失败")
+                .with_detail("operation", operation)
+                .with_detail("timeoutMs", timeout.as_millis().to_string())
+                .with_detail("reason", error.to_string())
+                .retryable(false)
+        })?
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for NativeInteractionBackendRuntime {
+    fn drop(&mut self) {
+        let _ = self
+            .command_sender
+            .send(NativeInteractionOwnerCommand::Shutdown);
+        if let Some(owner_thread) = self.owner_thread.take() {
+            if owner_thread.join().is_err() {
+                log::warn!(
+                    target: "bexo::service::native_interaction",
+                    "native_interaction_owner_panicked_during_shutdown"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn run_native_interaction_owner(
+    command_receiver: mpsc::Receiver<NativeInteractionOwnerCommand>,
+    startup_sender: mpsc::SyncSender<
+        AppResult<native_interaction_backend_windows::NativeInteractionWindowsBackendStarted>,
+    >,
+    event_sink: NativeInteractionEventSink,
+) {
+    let (mut backend, started) = match native_interaction_backend_windows::initialize() {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = startup_sender.send(Err(error));
+            return;
+        }
+    };
+
+    if let Err(error) = backend.set_event_sink(event_sink) {
+        let _ = startup_sender.send(Err(error));
+        return;
+    }
+    if startup_sender.send(Ok(started)).is_err() {
+        return;
+    }
+
+    loop {
+        if !native_interaction_backend_windows::pump_messages() {
+            break;
+        }
+        let command = match command_receiver.recv_timeout(NATIVE_INTERACTION_MESSAGE_PUMP_INTERVAL)
+        {
+            Ok(command) => command,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        };
+        match command {
+            NativeInteractionOwnerCommand::Prepare { session, reply } => {
+                let result = backend.prepare_session(&session).map(|prepare| {
+                    NativeInteractionPrepareMetrics {
+                        total_ms: prepare.total_ms,
+                        window_x: prepare.window_x,
+                        window_y: prepare.window_y,
+                        window_width: prepare.window_width,
+                        window_height: prepare.window_height,
+                        present_ms: prepare.present_ms,
+                        copy_ms: prepare.copy_ms,
+                        update_ms: prepare.update_ms,
+                        surface_recreated: prepare.surface_recreated,
+                    }
+                });
+                let _ = reply.send(result);
+            }
+            NativeInteractionOwnerCommand::Show { reply } => {
+                let _ = reply.send(backend.show());
+            }
+            NativeInteractionOwnerCommand::Hide { reply } => {
+                let _ = reply.send(backend.hide());
+            }
+            NativeInteractionOwnerCommand::Clear { reply } => {
+                let _ = reply.send(backend.clear());
+            }
+            NativeInteractionOwnerCommand::Snapshot { reply } => {
+                let _ = reply.send(backend.snapshot_selection());
+            }
+            NativeInteractionOwnerCommand::UpdateExclusionRects { rects, reply } => {
+                let _ = reply.send(backend.update_exclusion_rects(&rects));
+            }
+            NativeInteractionOwnerCommand::UpdateRuntime { input, reply } => {
+                let _ = reply.send(backend.update_runtime(&input));
+            }
+            NativeInteractionOwnerCommand::Shutdown => break,
+        }
     }
 }

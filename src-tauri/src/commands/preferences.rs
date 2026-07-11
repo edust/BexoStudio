@@ -1,7 +1,10 @@
 use tauri::State;
 
 use crate::{
-    domain::{AppPreferences, CodexHomeDirectoryInfo, EditorPathDetectionResult},
+    domain::{
+        AppPreferences, AppPreferencesPatch, CodexHomeDirectoryInfo, EditorPathDetectionResult,
+        HotkeyHealth,
+    },
     error::{AppError, CommandResponse},
     services::{HotkeyService, PreferencesService},
 };
@@ -28,7 +31,7 @@ pub async fn update_app_preferences(
     app_handle: tauri::AppHandle,
     preferences_service: State<'_, PreferencesService>,
     hotkey_service: State<'_, HotkeyService>,
-    input: AppPreferences,
+    input: AppPreferencesPatch,
 ) -> Result<CommandResponse<AppPreferences>, AppError> {
     match preferences_service.update_preferences(&app_handle, hotkey_service.inner(), input) {
         Ok(data) => {
@@ -45,6 +48,48 @@ pub async fn update_app_preferences(
             log::error!(
                 target: "bexo::command::preferences",
                 "update_app_preferences failed code={} message={} details={:?}",
+                error.code.as_str(),
+                error.message.as_str(),
+                error.details.as_ref()
+            );
+            Ok(CommandResponse::failure(error))
+        }
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn get_hotkey_health(
+    hotkey_service: State<'_, HotkeyService>,
+) -> Result<CommandResponse<HotkeyHealth>, AppError> {
+    match hotkey_service.health() {
+        Ok(data) => Ok(CommandResponse::success(data)),
+        Err(error) => {
+            log::error!(
+                target: "bexo::command::preferences",
+                "get_hotkey_health failed: {}",
+                error
+            );
+            Ok(CommandResponse::failure(error))
+        }
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn retry_hotkey_registration(
+    app_handle: tauri::AppHandle,
+    preferences_service: State<'_, PreferencesService>,
+    hotkey_service: State<'_, HotkeyService>,
+) -> Result<CommandResponse<HotkeyHealth>, AppError> {
+    let result = preferences_service
+        .get_preferences()
+        .and_then(|preferences| hotkey_service.apply_preferences(&app_handle, &preferences))
+        .and_then(|()| hotkey_service.health());
+    match result {
+        Ok(data) => Ok(CommandResponse::success(data)),
+        Err(error) => {
+            log::error!(
+                target: "bexo::command::preferences",
+                "retry_hotkey_registration failed code={} message={} details={:?}",
                 error.code.as_str(),
                 error.message.as_str(),
                 error.details.as_ref()

@@ -31,6 +31,12 @@ pub struct UpsertWorkspaceInput {
     pub is_archived: Option<bool>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReorderWorkspacesInput {
+    pub workspace_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeleteResult {

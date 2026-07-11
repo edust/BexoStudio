@@ -8,7 +8,10 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use crate::{
-    domain::{AppPreferences, HotkeyAction, HotkeyTriggerEvent, HOTKEY_TRIGGER_EVENT_NAME},
+    domain::{
+        AppPreferences, HotkeyAction, HotkeyHealth, HotkeyHealthStatus,
+        HotkeyRegisteredBindingView, HotkeyTriggerEvent, HOTKEY_TRIGGER_EVENT_NAME,
+    },
     error::{AppError, AppResult},
 };
 
@@ -18,17 +21,33 @@ use super::{
         classify_supported_shortcut, requires_windows_hook, HotkeyShortcutKind,
         HotkeyTriggeredCallback, WindowsHookHotkeyBinding, WindowsHookHotkeyManager,
     },
+    PromptQuickPasteService,
 };
 
 #[derive(Clone)]
 pub struct HotkeyService {
     state: Arc<Mutex<HotkeyServiceState>>,
+    apply_lock: Arc<Mutex<()>>,
     hook_manager: Arc<WindowsHookHotkeyManager>,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 struct HotkeyServiceState {
     registered: Vec<RegisteredHotkeyBinding>,
+    status: HotkeyHealthStatus,
+    last_error: Option<AppError>,
+    updated_at: Option<String>,
+}
+
+impl Default for HotkeyServiceState {
+    fn default() -> Self {
+        Self {
+            registered: Vec::new(),
+            status: HotkeyHealthStatus::Uninitialized,
+            last_error: None,
+            updated_at: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +60,7 @@ impl HotkeyService {
     pub fn new() -> Self {
         Self {
             state: Arc::new(Mutex::new(HotkeyServiceState::default())),
+            apply_lock: Arc::new(Mutex::new(())),
             hook_manager: Arc::new(WindowsHookHotkeyManager::new()),
         }
     }
@@ -58,19 +78,22 @@ impl HotkeyService {
         app: &AppHandle<R>,
         preferences: &AppPreferences,
     ) -> AppResult<()> {
+        let _apply_guard = self.apply_lock.lock().map_err(|_| {
+            AppError::new(
+                "HOTKEY_APPLY_LOCK_FAILED",
+                "热键更新状态异常，请重启 Bexo Studio 后重试",
+            )
+        })?;
         let desired = build_desired_bindings(preferences);
         let previous = self.current_registered()?;
         if previous == desired {
-            return Ok(());
+            return self.replace_health(desired, HotkeyHealthStatus::Ready, None);
         }
 
         self.unregister_bindings(app, &previous);
 
         match self.register_bindings(app, &desired) {
-            Ok(()) => {
-                self.replace_registered(desired)?;
-                Ok(())
-            }
+            Ok(()) => self.replace_health(desired, HotkeyHealthStatus::Ready, None),
             Err(error) => {
                 let rollback_result = self.register_bindings(app, &previous);
                 if let Err(rollback_error) = rollback_result {
@@ -79,16 +102,35 @@ impl HotkeyService {
                         "hotkey rollback failed: {}",
                         rollback_error
                     );
-                    self.replace_registered(Vec::new())?;
-                    return Err(error
+                    let failure = error
                         .with_detail("rollback", "failed")
-                        .with_detail("rollbackReason", rollback_error.to_string()));
+                        .with_detail("rollbackReason", rollback_error.to_string());
+                    return Err(self.record_failure(Vec::new(), failure));
                 }
 
-                self.replace_registered(previous)?;
-                Err(error)
+                Err(self.record_failure(previous, error))
             }
         }
+    }
+
+    pub fn health(&self) -> AppResult<HotkeyHealth> {
+        let state = self.state.lock().map_err(|_| {
+            AppError::new("HOTKEY_LOCK_FAILED", "failed to read hotkey health state")
+        })?;
+        Ok(HotkeyHealth {
+            status: state.status,
+            initialized: state.status != HotkeyHealthStatus::Uninitialized,
+            registered_bindings: state
+                .registered
+                .iter()
+                .map(|binding| HotkeyRegisteredBindingView {
+                    action: binding.action,
+                    shortcut: binding.shortcut.clone(),
+                })
+                .collect(),
+            last_error: state.last_error.clone(),
+            updated_at: state.updated_at.clone(),
+        })
     }
 
     fn register_bindings<R: Runtime>(
@@ -165,15 +207,26 @@ impl HotkeyService {
 
         app.global_shortcut()
             .on_shortcut(shortcut.as_str(), move |app, _shortcut, event| {
-                if event.state == ShortcutState::Pressed {
+                let should_handle = if action.prompt_quick_paste_slot().is_some() {
+                    event.state == ShortcutState::Released
+                } else {
+                    event.state == ShortcutState::Pressed
+                };
+                if should_handle {
+                    let state = if event.state == ShortcutState::Released {
+                        "released"
+                    } else {
+                        "pressed"
+                    };
                     log::info!(
                         target: "bexo::service::hotkey",
-                        "received hotkey action={} shortcut={} source=global_shortcut state=pressed",
+                        "received hotkey action={} shortcut={} source=global_shortcut state={}",
                         action.key(),
-                        shortcut_for_event
+                        shortcut_for_event,
+                        state
                     );
                     emit_hotkey_trigger(app, action, &shortcut_for_event, "global_shortcut");
-                    handle_hotkey_action(app, action);
+                    handle_hotkey_action(app, action, shortcut_for_event.as_str());
                 }
             })
             .map_err(|error| register_shortcut_error(binding, error.to_string()))?;
@@ -266,15 +319,43 @@ impl HotkeyService {
             })
     }
 
-    fn replace_registered(&self, registered: Vec<RegisteredHotkeyBinding>) -> AppResult<()> {
+    fn replace_health(
+        &self,
+        registered: Vec<RegisteredHotkeyBinding>,
+        status: HotkeyHealthStatus,
+        last_error: Option<AppError>,
+    ) -> AppResult<()> {
         let mut guard = self.state.lock().map_err(|_| {
-            AppError::new(
-                "HOTKEY_LOCK_FAILED",
-                "failed to update hotkey registration state",
-            )
+            AppError::new("HOTKEY_LOCK_FAILED", "failed to update hotkey health state")
         })?;
         guard.registered = registered;
+        guard.status = status;
+        guard.last_error = last_error;
+        guard.updated_at = Some(Utc::now().to_rfc3339());
         Ok(())
+    }
+
+    fn record_failure(
+        &self,
+        registered: Vec<RegisteredHotkeyBinding>,
+        error: AppError,
+    ) -> AppError {
+        match self.replace_health(
+            registered,
+            HotkeyHealthStatus::Degraded,
+            Some(error.clone()),
+        ) {
+            Ok(()) => error,
+            Err(health_error) => error
+                .with_detail("healthStateUpdate", "failed")
+                .with_detail("healthStateReason", health_error.to_string()),
+        }
+    }
+}
+
+impl Default for HotkeyService {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -295,30 +376,34 @@ fn build_desired_bindings(preferences: &AppPreferences) -> Vec<RegisteredHotkeyB
         });
     }
 
-    if let Some(voice_toggle) = normalize_optional_shortcut(
-        preferences
-            .hotkey
-            .voice_input_toggle
-            .as_ref()
-            .map(|value| value.as_str()),
-    ) {
+    if let Some(voice_toggle) =
+        normalize_optional_shortcut(preferences.hotkey.voice_input_toggle.as_deref())
+    {
         bindings.push(RegisteredHotkeyBinding {
             action: HotkeyAction::VoiceInputToggle,
             shortcut: voice_toggle,
         });
     }
 
-    if let Some(voice_hold) = normalize_optional_shortcut(
-        preferences
-            .hotkey
-            .voice_input_hold
-            .as_ref()
-            .map(|value| value.as_str()),
-    ) {
+    if let Some(voice_hold) =
+        normalize_optional_shortcut(preferences.hotkey.voice_input_hold.as_deref())
+    {
         bindings.push(RegisteredHotkeyBinding {
             action: HotkeyAction::VoiceInputHold,
             shortcut: voice_hold,
         });
+    }
+
+    for slot in &preferences.hotkey.prompt_quick_paste_slots {
+        if !slot.enabled || slot.prompt_id.is_none() {
+            continue;
+        }
+        if let Some(action) = HotkeyAction::from_prompt_quick_paste_slot(slot.slot) {
+            bindings.push(RegisteredHotkeyBinding {
+                action,
+                shortcut: slot.shortcut.trim().to_string(),
+            });
+        }
     }
 
     bindings
@@ -362,7 +447,7 @@ fn build_windows_hook_callback<R: Runtime>(app: &AppHandle<R>) -> HotkeyTriggere
             shortcut
         );
         emit_hotkey_trigger(&app_handle, action, shortcut.as_str(), "windows_hook");
-        handle_hotkey_action(&app_handle, action);
+        handle_hotkey_action(&app_handle, action, shortcut.as_str());
     })
 }
 
@@ -390,7 +475,7 @@ fn emit_hotkey_trigger<R: Runtime>(
     }
 }
 
-fn handle_hotkey_action<R: Runtime>(app: &AppHandle<R>, action: HotkeyAction) {
+fn handle_hotkey_action<R: Runtime>(app: &AppHandle<R>, action: HotkeyAction, shortcut: &str) {
     match action {
         HotkeyAction::ScreenshotCapture => {
             let app_handle = app.clone();
@@ -419,6 +504,18 @@ fn handle_hotkey_action<R: Runtime>(app: &AppHandle<R>, action: HotkeyAction) {
             });
         }
         HotkeyAction::VoiceInputToggle | HotkeyAction::VoiceInputHold => {}
+        HotkeyAction::PromptQuickPaste1
+        | HotkeyAction::PromptQuickPaste2
+        | HotkeyAction::PromptQuickPaste3
+        | HotkeyAction::PromptQuickPaste4
+        | HotkeyAction::PromptQuickPaste5 => {
+            let app_handle = app.clone();
+            let shortcut = shortcut.to_string();
+            let service = app.state::<PromptQuickPasteService>().inner().clone();
+            tauri::async_runtime::spawn(async move {
+                service.execute(app_handle, action, shortcut).await;
+            });
+        }
     }
 }
 
@@ -465,4 +562,28 @@ fn register_hook_bindings_error(bindings: &[WindowsHookHotkeyBinding], reason: S
         )
         .with_detail("source", "windows_hook")
         .with_detail("reason", reason)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn desired_bindings_include_only_enabled_prompt_slots_with_ids() {
+        let mut preferences = AppPreferences::default();
+        preferences.hotkey.prompt_quick_paste_slots[0].enabled = true;
+        preferences.hotkey.prompt_quick_paste_slots[0].prompt_id =
+            Some(uuid::Uuid::new_v4().to_string());
+        preferences.hotkey.prompt_quick_paste_slots[1].prompt_id =
+            Some(uuid::Uuid::new_v4().to_string());
+
+        let bindings = build_desired_bindings(&preferences);
+        assert!(bindings.iter().any(|binding| {
+            binding.action == HotkeyAction::PromptQuickPaste1
+                && binding.shortcut == "Ctrl+Alt+Shift+1"
+        }));
+        assert!(!bindings
+            .iter()
+            .any(|binding| binding.action == HotkeyAction::PromptQuickPaste2));
+    }
 }

@@ -1,5 +1,3 @@
-#![cfg(target_os = "windows")]
-
 use std::{
     mem::{size_of, zeroed},
     ptr::{copy_nonoverlapping, null},
@@ -19,13 +17,14 @@ use windows_sys::Win32::{
     UI::{
         Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
         WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, LoadCursorW,
-            RegisterClassExW, SetCursor, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-            UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, HTCLIENT, HTTRANSPARENT,
-            HWND_TOPMOST, IDC_ARROW, IDC_CROSS, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
-            IDC_SIZENWSE, IDC_SIZEWE, SWP_HIDEWINDOW, SWP_NOACTIVATE, SW_HIDE, SW_SHOWNOACTIVATE,
-            ULW_ALPHA, WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE,
-            WM_NCDESTROY, WM_NCHITTEST, WM_SETCURSOR, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
+            CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetWindowLongPtrW,
+            LoadCursorW, PeekMessageW, RegisterClassExW, SetCursor, SetWindowLongPtrW,
+            SetWindowPos, ShowWindow, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW,
+            CS_VREDRAW, GWLP_USERDATA, HTCLIENT, HTTRANSPARENT, HWND_TOPMOST, IDC_ARROW, IDC_CROSS,
+            IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, MSG,
+            PM_REMOVE, SWP_HIDEWINDOW, SWP_NOACTIVATE, SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA,
+            WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY,
+            WM_NCHITTEST, WM_QUIT, WM_SETCURSOR, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
             WS_EX_TOPMOST, WS_POPUP,
         },
     },
@@ -362,6 +361,20 @@ pub fn initialize() -> AppResult<(
             initial_hide_ms,
         },
     ))
+}
+
+pub fn pump_messages() -> bool {
+    let mut message = unsafe { zeroed::<MSG>() };
+    while unsafe { PeekMessageW(&mut message, 0, 0, 0, PM_REMOVE) } != 0 {
+        if message.message == WM_QUIT {
+            return false;
+        }
+        unsafe {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+    }
+    true
 }
 
 impl NativeInteractionWindowsBackend {

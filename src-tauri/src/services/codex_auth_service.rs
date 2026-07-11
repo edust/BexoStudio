@@ -1,3 +1,5 @@
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -12,27 +14,47 @@ use serde::Deserialize;
 use crate::{
     domain::{
         validate_codex_auth_json, validate_codex_config_toml, CodexAuthJson,
-        CodexAuthProfileRecord, CodexAuthProxyPreferences, CodexAuthQuotaRefreshBatchResult,
-        CodexAuthQuotaResult, CodexAuthQuotaTier, CodexAuthSwitchResult, DeleteResult,
-        UpsertCodexAuthProfileInput,
+        CodexAuthProfileDetail, CodexAuthProfileRecord, CodexAuthProfileSummary,
+        CodexAuthProxyPreferences, CodexAuthQuotaRefreshBatchResult, CodexAuthQuotaResult,
+        CodexAuthQuotaTier, CodexAuthSwitchResult, DeleteResult, UpsertCodexAuthProfileInput,
     },
     error::{AppError, AppResult},
     persistence::{
-        delete_codex_auth_profile, get_codex_auth_profile, list_codex_auth_profiles,
-        mark_codex_auth_profile_active, update_codex_auth_profile_quota, upsert_codex_auth_profile,
-        Database,
+        delete_codex_auth_profile, get_active_codex_auth_profile_id, get_codex_auth_profile,
+        list_codex_auth_profiles, mark_codex_auth_profile_active,
+        restore_codex_auth_active_profile, update_codex_auth_profile_quota,
+        upsert_codex_auth_profile, Database,
     },
     services::PreferencesService,
 };
 
 const CODEX_QUOTA_ENDPOINT: &str = "https://chatgpt.com/backend-api/wham/usage";
 const CODEX_QUOTA_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(windows)]
+const MOVE_FILE_REPLACE_EXISTING: u32 = 0x0000_0001;
+#[cfg(windows)]
+const MOVE_FILE_WRITE_THROUGH: u32 = 0x0000_0008;
+
+#[cfg(windows)]
+#[link(name = "Kernel32")]
+unsafe extern "system" {
+    fn MoveFileExW(existing_file_name: *const u16, new_file_name: *const u16, flags: u32) -> i32;
+}
+
+#[derive(Debug)]
+struct LiveCodexConfigSnapshot {
+    auth_path: PathBuf,
+    config_path: PathBuf,
+    previous_auth: Option<String>,
+    previous_config: Option<String>,
+}
 
 #[derive(Debug, Clone)]
 pub struct CodexAuthService {
     database: Database,
     preferences_service: PreferencesService,
     refresh_lock: Arc<tokio::sync::Mutex<()>>,
+    profile_mutation_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl CodexAuthService {
@@ -41,27 +63,56 @@ impl CodexAuthService {
             database,
             preferences_service,
             refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
+            profile_mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
-    pub async fn list_profiles(&self) -> AppResult<Vec<CodexAuthProfileRecord>> {
+    async fn list_profile_records(&self) -> AppResult<Vec<CodexAuthProfileRecord>> {
         self.database
             .read("list_codex_auth_profiles", list_codex_auth_profiles)
             .await
     }
 
+    pub async fn list_profiles(&self) -> AppResult<Vec<CodexAuthProfileSummary>> {
+        Ok(self
+            .list_profile_records()
+            .await?
+            .iter()
+            .map(CodexAuthProfileSummary::from)
+            .collect())
+    }
+
+    pub async fn get_profile_detail(&self, id: String) -> AppResult<CodexAuthProfileDetail> {
+        self.database
+            .read("get_codex_auth_profile_detail", move |connection| {
+                get_codex_auth_profile(connection, &id)
+            })
+            .await?
+            .map(CodexAuthProfileDetail::from)
+            .ok_or_else(|| {
+                AppError::new(
+                    "CODEX_AUTH_PROFILE_NOT_FOUND",
+                    "codex auth profile was not found",
+                )
+            })
+    }
+
     pub async fn upsert_profile(
         &self,
         input: UpsertCodexAuthProfileInput,
-    ) -> AppResult<CodexAuthProfileRecord> {
-        self.database
+    ) -> AppResult<CodexAuthProfileSummary> {
+        let _mutation_guard = self.profile_mutation_lock.lock().await;
+        let profile = self
+            .database
             .write("upsert_codex_auth_profile", move |connection| {
                 upsert_codex_auth_profile(connection, input)
             })
-            .await
+            .await?;
+        Ok(CodexAuthProfileSummary::from(&profile))
     }
 
     pub async fn delete_profile(&self, id: String) -> AppResult<DeleteResult> {
+        let _mutation_guard = self.profile_mutation_lock.lock().await;
         self.database
             .write("delete_codex_auth_profile", move |connection| {
                 delete_codex_auth_profile(connection, id)
@@ -73,7 +124,7 @@ impl CodexAuthService {
         &self,
         app_handle: &tauri::AppHandle<R>,
         preferences_service: &PreferencesService,
-    ) -> AppResult<CodexAuthProfileRecord> {
+    ) -> AppResult<CodexAuthProfileSummary> {
         let directory = preferences_service.get_codex_home_directory(app_handle)?;
         let codex_home = directory.path.ok_or_else(|| {
             AppError::new(
@@ -123,6 +174,13 @@ impl CodexAuthService {
     }
 
     pub async fn switch_profile(&self, id: String) -> AppResult<CodexAuthSwitchResult> {
+        let _mutation_guard = self.profile_mutation_lock.lock().await;
+        let previous_active_id = self
+            .database
+            .read("get_active_codex_auth_profile_before_switch", {
+                move |connection| get_active_codex_auth_profile_id(connection)
+            })
+            .await?;
         let profile = self
             .database
             .read("get_codex_auth_profile_for_switch", {
@@ -141,26 +199,44 @@ impl CodexAuthService {
         validate_codex_config_toml(&profile.config_toml)?;
 
         let codex_home = PathBuf::from(&profile.codex_home);
-        let auth_path = codex_home.join("auth.json");
-        let config_path = codex_home.join("config.toml");
+        let live_snapshot =
+            write_live_codex_config(&codex_home, &profile.auth_json, &profile.config_toml)?;
 
-        write_live_codex_config(&codex_home, &profile.auth_json, &profile.config_toml)?;
-
-        let active_profile = self
+        let active_profile = match self
             .database
             .write("mark_codex_auth_profile_active", move |connection| {
                 mark_codex_auth_profile_active(connection, id)
             })
-            .await?;
+            .await
+        {
+            Ok(profile) => profile,
+            Err(error) => {
+                let mut rollback_failures = rollback_live_codex_config(&live_snapshot);
+                if let Err(rollback_error) = self
+                    .database
+                    .write("restore_codex_auth_active_profile", move |connection| {
+                        restore_codex_auth_active_profile(connection, previous_active_id)
+                    })
+                    .await
+                {
+                    rollback_failures.push(format!("database: {rollback_error}"));
+                }
+                return Err(attach_codex_auth_rollback_failures(
+                    error,
+                    rollback_failures,
+                ));
+            }
+        };
 
         Ok(CodexAuthSwitchResult {
-            profile: active_profile,
-            auth_path: auth_path.display().to_string(),
-            config_path: config_path.display().to_string(),
+            profile: CodexAuthProfileSummary::from(&active_profile),
+            auth_path: live_snapshot.auth_path.display().to_string(),
+            config_path: live_snapshot.config_path.display().to_string(),
         })
     }
 
-    pub async fn query_quota(&self, id: String) -> AppResult<CodexAuthProfileRecord> {
+    pub async fn query_quota(&self, id: String) -> AppResult<CodexAuthProfileSummary> {
+        let _mutation_guard = self.profile_mutation_lock.lock().await;
         let profile = self
             .database
             .read("get_codex_auth_profile_for_quota", {
@@ -176,17 +252,20 @@ impl CodexAuthService {
             })?;
 
         let quota = self.query_quota_for_profile(&profile).await;
-        self.database
+        let updated = self
+            .database
             .write("update_codex_auth_profile_quota", move |connection| {
                 update_codex_auth_profile_quota(connection, id, quota)
             })
-            .await
+            .await?;
+        Ok(CodexAuthProfileSummary::from(&updated))
     }
 
     pub async fn refresh_all_quotas(&self) -> AppResult<CodexAuthQuotaRefreshBatchResult> {
         let _refresh_guard = self.refresh_lock.lock().await;
+        let _mutation_guard = self.profile_mutation_lock.lock().await;
         let started_at = Utc::now().to_rfc3339();
-        let profiles = self.list_profiles().await?;
+        let profiles = self.list_profile_records().await?;
         let total = profiles.len();
         let mut failed = 0usize;
         let mut refreshed_profiles = Vec::with_capacity(total);
@@ -207,7 +286,7 @@ impl CodexAuthService {
                     },
                 )
                 .await?;
-            refreshed_profiles.push(refreshed_profile);
+            refreshed_profiles.push(CodexAuthProfileSummary::from(&refreshed_profile));
         }
 
         Ok(CodexAuthQuotaRefreshBatchResult {
@@ -456,7 +535,11 @@ fn parse_codex_credentials_from_profile(
     Ok((access_token, tokens.account_id, stale_message))
 }
 
-fn write_live_codex_config(codex_home: &Path, auth_json: &str, config_toml: &str) -> AppResult<()> {
+fn write_live_codex_config(
+    codex_home: &Path,
+    auth_json: &str,
+    config_toml: &str,
+) -> AppResult<LiveCodexConfigSnapshot> {
     fs::create_dir_all(codex_home).map_err(|error| {
         AppError::new(
             "CODEX_AUTH_SWITCH_FAILED",
@@ -468,21 +551,29 @@ fn write_live_codex_config(codex_home: &Path, auth_json: &str, config_toml: &str
 
     let auth_path = codex_home.join("auth.json");
     let config_path = codex_home.join("config.toml");
-    let previous_auth = read_existing_file(&auth_path)?;
-    let previous_config = read_existing_file(&config_path)?;
+    let snapshot = LiveCodexConfigSnapshot {
+        previous_auth: read_existing_file(&auth_path)?,
+        previous_config: read_existing_file(&config_path)?,
+        auth_path,
+        config_path,
+    };
 
-    if let Err(error) = write_file_replace(&auth_path, auth_json) {
-        rollback_file(&auth_path, previous_auth.as_deref());
-        rollback_file(&config_path, previous_config.as_deref());
-        return Err(error);
+    if let Err(error) = write_file_replace(&snapshot.auth_path, auth_json) {
+        let rollback_failures = rollback_live_codex_config(&snapshot);
+        return Err(attach_codex_auth_rollback_failures(
+            error,
+            rollback_failures,
+        ));
     }
-    if let Err(error) = write_file_replace(&config_path, config_toml) {
-        rollback_file(&auth_path, previous_auth.as_deref());
-        rollback_file(&config_path, previous_config.as_deref());
-        return Err(error);
+    if let Err(error) = write_file_replace(&snapshot.config_path, config_toml) {
+        let rollback_failures = rollback_live_codex_config(&snapshot);
+        return Err(attach_codex_auth_rollback_failures(
+            error,
+            rollback_failures,
+        ));
     }
 
-    Ok(())
+    Ok(snapshot)
 }
 
 fn read_existing_file(path: &Path) -> AppResult<Option<String>> {
@@ -532,47 +623,106 @@ fn write_file_replace(path: &Path, content: &str) -> AppResult<()> {
         .with_detail("reason", error.to_string())
     })?;
 
-    if path.exists() {
-        fs::remove_file(path).map_err(|error| {
-            let _ = fs::remove_file(&temp_path);
-            AppError::new(
-                "CODEX_AUTH_SWITCH_FAILED",
-                "failed to replace existing Codex config file",
-            )
-            .with_detail("path", path.display().to_string())
-            .with_detail("reason", error.to_string())
-        })?;
-    }
-
-    fs::rename(&temp_path, path).map_err(|error| {
+    replace_file_from_temp(&temp_path, path).map_err(|error| {
         let _ = fs::remove_file(&temp_path);
         AppError::new(
             "CODEX_AUTH_SWITCH_FAILED",
-            "failed to move Codex config file into place",
+            "failed to atomically replace Codex config file",
         )
         .with_detail("path", path.display().to_string())
         .with_detail("reason", error.to_string())
     })
 }
 
-fn rollback_file(path: &Path, previous: Option<&str>) {
+#[cfg(windows)]
+fn replace_file_from_temp(temp_path: &Path, destination_path: &Path) -> std::io::Result<()> {
+    let temp_wide = temp_path
+        .as_os_str()
+        .encode_wide()
+        .chain([0])
+        .collect::<Vec<_>>();
+    let destination_wide = destination_path
+        .as_os_str()
+        .encode_wide()
+        .chain([0])
+        .collect::<Vec<_>>();
+    let result = unsafe {
+        MoveFileExW(
+            temp_wide.as_ptr(),
+            destination_wide.as_ptr(),
+            MOVE_FILE_REPLACE_EXISTING | MOVE_FILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+fn replace_file_from_temp(temp_path: &Path, destination_path: &Path) -> std::io::Result<()> {
+    fs::rename(temp_path, destination_path)
+}
+
+fn rollback_file(path: &Path, previous: Option<&str>) -> AppResult<()> {
     match previous {
-        Some(content) => {
-            if let Err(error) = fs::write(path, content) {
-                log::error!(
-                    target: "bexo::service::codex_auth",
-                    "rollback Codex config file failed path={} reason={}",
-                    path.display(),
-                    error
-                );
-            }
-        }
+        Some(content) => write_file_replace(path, content),
         None => {
             if path.exists() {
-                let _ = fs::remove_file(path);
+                fs::remove_file(path).map_err(|error| {
+                    AppError::new(
+                        "CODEX_AUTH_ROLLBACK_FAILED",
+                        "failed to remove newly created Codex config file",
+                    )
+                    .with_detail("path", path.display().to_string())
+                    .with_detail("reason", error.to_string())
+                })?;
             }
+            Ok(())
         }
     }
+}
+
+fn rollback_live_codex_config(snapshot: &LiveCodexConfigSnapshot) -> Vec<String> {
+    let mut failures = Vec::new();
+    for (label, path, previous) in [
+        (
+            "auth.json",
+            &snapshot.auth_path,
+            snapshot.previous_auth.as_deref(),
+        ),
+        (
+            "config.toml",
+            &snapshot.config_path,
+            snapshot.previous_config.as_deref(),
+        ),
+    ] {
+        if let Err(error) = rollback_file(path, previous) {
+            failures.push(format!("{label}: {error}"));
+            continue;
+        }
+        match read_existing_file(path) {
+            Ok(actual) if actual.as_deref() == previous => {}
+            Ok(_) => failures.push(format!("{label}: rollback verification mismatch")),
+            Err(error) => failures.push(format!("{label}: verification failed: {error}")),
+        }
+    }
+    failures
+}
+
+fn attach_codex_auth_rollback_failures(
+    mut error: AppError,
+    rollback_failures: Vec<String>,
+) -> AppError {
+    if rollback_failures.is_empty() {
+        return error.with_detail("rollback", "completed");
+    }
+    error = error
+        .with_detail("rollback", "failed")
+        .with_detail("stateConsistency", "unknown")
+        .with_detail("rollbackFailures", rollback_failures.join(" | "));
+    error
 }
 
 fn is_codex_token_stale(last_refresh: &str) -> bool {
@@ -644,4 +794,78 @@ fn window_seconds_to_tier_name(seconds: i64) -> String {
 
 fn unix_ts_to_iso(timestamp: i64) -> Option<String> {
     chrono::DateTime::from_timestamp(timestamp, 0).map(|value| value.to_rfc3339())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unique_codex_home(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "bexo-codex-auth-{label}-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ))
+    }
+
+    #[test]
+    fn summary_serialization_excludes_credentials() {
+        let record = CodexAuthProfileRecord {
+            id: "profile-1".to_string(),
+            name: "Profile".to_string(),
+            description: None,
+            codex_home: "C:\\Codex".to_string(),
+            auth_json: "{\"secret\":\"token\"}".to_string(),
+            config_toml: "secret = 'value'".to_string(),
+            is_active: false,
+            last_quota: None,
+            last_quota_checked_at: None,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+
+        let value = serde_json::to_value(CodexAuthProfileSummary::from(&record))
+            .expect("serialize summary");
+        assert!(value.get("authJson").is_none());
+        assert!(value.get("configToml").is_none());
+        assert!(!value.to_string().contains("token"));
+    }
+
+    #[test]
+    fn live_config_rollback_restores_and_verifies_both_files() {
+        let codex_home = unique_codex_home("rollback-existing");
+        fs::create_dir_all(&codex_home).expect("create codex home");
+        let auth_path = codex_home.join("auth.json");
+        let config_path = codex_home.join("config.toml");
+        fs::write(&auth_path, "{\"old\":true}").expect("write old auth");
+        fs::write(&config_path, "old = true").expect("write old config");
+
+        let snapshot = write_live_codex_config(&codex_home, "{\"new\":true}", "new = true")
+            .expect("write live config");
+        let failures = rollback_live_codex_config(&snapshot);
+
+        assert!(failures.is_empty(), "rollback failures: {failures:?}");
+        assert_eq!(
+            fs::read_to_string(auth_path).expect("read auth"),
+            "{\"old\":true}"
+        );
+        assert_eq!(
+            fs::read_to_string(config_path).expect("read config"),
+            "old = true"
+        );
+        fs::remove_dir_all(codex_home).expect("remove codex home");
+    }
+
+    #[test]
+    fn live_config_rollback_removes_files_that_did_not_exist() {
+        let codex_home = unique_codex_home("rollback-new");
+        let snapshot = write_live_codex_config(&codex_home, "{\"new\":true}", "new = true")
+            .expect("write live config");
+        let failures = rollback_live_codex_config(&snapshot);
+
+        assert!(failures.is_empty(), "rollback failures: {failures:?}");
+        assert!(!snapshot.auth_path.exists());
+        assert!(!snapshot.config_path.exists());
+        fs::remove_dir_all(codex_home).expect("remove codex home");
+    }
 }

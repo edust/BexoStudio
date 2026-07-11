@@ -34,10 +34,10 @@ import {
   openWorkspaceInEditor,
   openWorkspaceTerminal,
   registerWorkspaceFolder,
+  reorderWorkspaces,
   removeWorkspaceRegistration,
   runWorkspaceTerminalCommands,
   upsertProject,
-  upsertWorkspace,
 } from "@/lib/command-client";
 import { sendDesktopNotification } from "@/lib/desktop-notification";
 import { reorderLayoutTransition } from "@/lib/reorder-motion";
@@ -304,9 +304,9 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
       nextItems: WorkspaceSidebarItem[];
       successMessage?: string | null;
     }) => {
-      for (const [index, item] of nextItems.entries()) {
-        await upsertWorkspace(buildWorkspaceReorderPayload(item.workspace, index));
-      }
+      return reorderWorkspaces({
+        workspaceIds: nextItems.map((item) => item.workspace.id),
+      });
     },
     onMutate: ({ nextItems }) => {
       setOrderedWorkspaceItems(nextItems);
@@ -412,7 +412,11 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
           );
 
           queryClient.setQueryData(appPreferencesQueryKey, nextPreferences);
-          const updatedPreferences = await updatePreferencesMutation.mutateAsync(nextPreferences);
+          const updatedPreferences = await updatePreferencesMutation.mutateAsync({
+            workspace: {
+              selectedWorkspaceIds: selectedWorkspaceIdsRef.current,
+            },
+          });
           queryClient.setQueryData(appPreferencesQueryKey, updatedPreferences);
         })
         .catch((error) => {
@@ -445,7 +449,11 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
           );
 
           queryClient.setQueryData(appPreferencesQueryKey, nextPreferences);
-          const updatedPreferences = await updatePreferencesMutation.mutateAsync(nextPreferences);
+          const updatedPreferences = await updatePreferencesMutation.mutateAsync({
+            workspace: {
+              pinnedWorkspaceIds: pinnedWorkspaceIdsRef.current,
+            },
+          });
           queryClient.setQueryData(appPreferencesQueryKey, updatedPreferences);
         });
 
@@ -1891,19 +1899,6 @@ function setWorkspaceProjectEditorKey(
           }
         : project,
     ),
-  };
-}
-
-function buildWorkspaceReorderPayload(workspace: WorkspaceRecord, sortOrder: number) {
-  return {
-    id: workspace.id,
-    name: workspace.name,
-    description: workspace.description ?? undefined,
-    icon: workspace.icon ?? undefined,
-    color: workspace.color ?? undefined,
-    sortOrder,
-    isDefault: workspace.isDefault,
-    isArchived: workspace.isArchived,
   };
 }
 

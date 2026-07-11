@@ -107,6 +107,15 @@ export type CodexProfileRecord = {
   updatedAt: string;
 };
 
+export type PromptRecord = {
+  id: string;
+  title: string;
+  content: string;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type CodexAuthQuotaTier = {
   name: string;
   utilization: number;
@@ -123,13 +132,11 @@ export type CodexAuthQuotaResult = {
   queriedAt: string;
 };
 
-export type CodexAuthProfileRecord = {
+export type CodexAuthProfileSummary = {
   id: string;
   name: string;
   description?: string | null;
   codexHome: string;
-  authJson: string;
-  configToml: string;
   isActive: boolean;
   lastQuota?: CodexAuthQuotaResult | null;
   lastQuotaCheckedAt?: string | null;
@@ -137,8 +144,13 @@ export type CodexAuthProfileRecord = {
   updatedAt: string;
 };
 
+export type CodexAuthProfileDetail = CodexAuthProfileSummary & {
+  authJson: string;
+  configToml: string;
+};
+
 export type CodexAuthSwitchResult = {
-  profile: CodexAuthProfileRecord;
+  profile: CodexAuthProfileSummary;
   authPath: string;
   configPath: string;
 };
@@ -149,7 +161,7 @@ export type CodexAuthQuotaRefreshBatchResult = {
   failed: number;
   startedAt: string;
   finishedAt: string;
-  profiles: CodexAuthProfileRecord[];
+  profiles: CodexAuthProfileSummary[];
 };
 
 export type OpenCodexHistoryWindowResult = {
@@ -493,6 +505,14 @@ export type HotkeyPreferences = {
   screenshotCapture: string;
   voiceInputToggle?: string | null;
   voiceInputHold?: string | null;
+  promptQuickPasteSlots: PromptQuickPasteHotkeySlot[];
+};
+
+export type PromptQuickPasteHotkeySlot = {
+  slot: number;
+  enabled: boolean;
+  promptId?: string | null;
+  shortcut: string;
 };
 
 export type AppPreferences = {
@@ -505,6 +525,38 @@ export type AppPreferences = {
   diagnostics: DiagnosticsPreferences;
   codexHistory: CodexHistoryViewPreferences;
   codexAuth: CodexAuthPreferences;
+};
+
+export type WorkspacePreferencesPatch = {
+  selectedWorkspaceIds?: string[];
+  pinnedWorkspaceIds?: string[];
+};
+
+export type AppPreferencesPatch = {
+  terminal?: TerminalPreferences;
+  ide?: IdePreferences;
+  workspace?: WorkspacePreferencesPatch;
+  startup?: StartupPreferences;
+  hotkey?: HotkeyPreferences;
+  tray?: TrayPreferences;
+  diagnostics?: DiagnosticsPreferences;
+  codexHistory?: CodexHistoryViewPreferences;
+  codexAuth?: CodexAuthPreferences;
+};
+
+export type HotkeyHealthStatus = "uninitialized" | "ready" | "degraded";
+
+export type HotkeyRegisteredBindingView = {
+  action: HotkeyTriggerAction;
+  shortcut: string;
+};
+
+export type HotkeyHealth = {
+  status: HotkeyHealthStatus;
+  initialized: boolean;
+  registeredBindings: HotkeyRegisteredBindingView[];
+  lastError?: AppError | null;
+  updatedAt?: string | null;
 };
 
 export type OpenLogDirectoryResult = {
@@ -559,7 +611,12 @@ export type RestoreRunEvent = {
 export type HotkeyTriggerAction =
   | "screenshot_capture"
   | "voice_input_toggle"
-  | "voice_input_hold";
+  | "voice_input_hold"
+  | "prompt_quick_paste_1"
+  | "prompt_quick_paste_2"
+  | "prompt_quick_paste_3"
+  | "prompt_quick_paste_4"
+  | "prompt_quick_paste_5";
 
 export type HotkeyTriggerEvent = {
   action: HotkeyTriggerAction;
@@ -577,6 +634,17 @@ export type ScreenshotSelectionInput = {
 
 export type ScreenshotRenderedImageInput = {
   dataUrl: string;
+};
+
+export type PromptQuickPasteResultEvent = {
+  slot: number;
+  shortcut: string;
+  status: "sent" | "failed";
+  promptId?: string | null;
+  promptTitle?: string | null;
+  message: string;
+  error?: AppError | null;
+  occurredAt: string;
 };
 
 export type ScreenshotImageStatus = "loading" | "ready" | "failed";
@@ -780,6 +848,10 @@ export type UpsertWorkspacePayload = {
   isArchived?: boolean;
 };
 
+export type ReorderWorkspacesPayload = {
+  workspaceIds: string[];
+};
+
 export type UpsertProjectPayload = {
   id?: string;
   workspaceId: string;
@@ -808,6 +880,21 @@ export type UpsertLaunchTaskPayload = {
   continueOnFailure?: boolean;
   retryPolicy?: LaunchTaskRetryPolicy;
   sortOrder?: number;
+};
+
+export type ReorderLaunchTasksPayload = {
+  projectId: string;
+  launchTaskIds: string[];
+};
+
+export type UpsertPromptPayload = {
+  id?: string;
+  title: string;
+  content: string;
+};
+
+export type ReorderPromptsPayload = {
+  promptIds: string[];
 };
 
 export type UpsertCodexProfilePayload = {

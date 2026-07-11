@@ -1,5 +1,6 @@
 import {
   deleteCodexAuthProfile,
+  getCodexAuthProfileDetail,
   importCurrentCodexAuthProfile,
   listCodexAuthProfiles,
   queryCodexAuthQuota,
@@ -9,9 +10,12 @@ import {
 } from "@/lib/command-client";
 
 export const codexAuthProfilesQueryKey = ["codexAuthProfiles"] as const;
+export const codexAuthProfileDetailQueryKey = (id: string) =>
+  ["codexAuthProfileDetail", id] as const;
 
 export {
   deleteCodexAuthProfile,
+  getCodexAuthProfileDetail,
   importCurrentCodexAuthProfile,
   listCodexAuthProfiles,
   queryCodexAuthQuota,

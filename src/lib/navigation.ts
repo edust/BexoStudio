@@ -1,11 +1,18 @@
-import { HistoryOutlined, HomeOutlined, KeyOutlined, SettingOutlined } from "@ant-design/icons";
+import {
+  HistoryOutlined,
+  HomeOutlined,
+  KeyOutlined,
+  SettingOutlined,
+} from "@ant-design/icons";
 
+import { PromptLetterIcon } from "@/components/shell/prompt-letter-icon";
 import type { AppRouteKey, PrimaryNavItem, SectionSidebarContent } from "@/types/navigation";
 
 export const primaryNavigation: PrimaryNavItem[] = [
   { key: "home", label: "Workbench", href: "/", icon: HomeOutlined },
   { key: "history", label: "Session / History", href: "/history", icon: HistoryOutlined },
   { key: "codexAuth", label: "Codex Auth", href: "/codex-auth", icon: KeyOutlined },
+  { key: "prompts", label: "Prompts", href: "/prompts", icon: PromptLetterIcon },
   { key: "settings", label: "Settings", href: "/settings", icon: SettingOutlined },
 ];
 
@@ -48,6 +55,13 @@ export const sidebarContentByRoute: Record<AppRouteKey, SectionSidebarContent> =
       },
     ],
   },
+  prompts: {
+    eyebrow: "PROMPTS",
+    title: "",
+    description: "保存、排序并一键复制常用 Prompt。",
+    searchPlaceholder: "搜索 Prompts...",
+    items: [],
+  },
   settings: {
     eyebrow: "SETTINGS",
     title: "",
@@ -76,6 +90,7 @@ export const sidebarContentByRoute: Record<AppRouteKey, SectionSidebarContent> =
 export function routeKeyFromPathname(pathname: string): AppRouteKey {
   if (pathname.startsWith("/history")) return "history";
   if (pathname.startsWith("/codex-auth")) return "codexAuth";
+  if (pathname.startsWith("/prompts")) return "prompts";
   if (pathname.startsWith("/settings")) return "settings";
   if (
     pathname.startsWith("/workspaces") ||

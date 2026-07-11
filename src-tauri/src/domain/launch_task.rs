@@ -83,6 +83,13 @@ pub struct UpsertLaunchTaskInput {
     pub sort_order: Option<i64>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReorderLaunchTasksInput {
+    pub project_id: String,
+    pub launch_task_ids: Vec<String>,
+}
+
 pub fn validate_launch_task_type(value: &str) -> AppResult<String> {
     let normalized = require_non_empty("taskType", value, 40)?;
     if !SUPPORTED_LAUNCH_TASK_TYPES.contains(&normalized.as_str()) {

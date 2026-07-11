@@ -12,14 +12,15 @@ use crate::{
     domain::{
         ensure_absolute_directory, AdapterAvailability, DeleteResult, LaunchTaskRecord,
         OpenWorkspaceInEditorResult, OpenWorkspaceTerminalResult, ProjectRecord,
-        RunWorkspaceTerminalCommandResult, RunWorkspaceTerminalCommandsResult,
-        UpsertLaunchTaskInput, UpsertProjectInput, UpsertWorkspaceInput, WorkspaceRecord,
+        ReorderLaunchTasksInput, ReorderWorkspacesInput, RunWorkspaceTerminalCommandResult,
+        RunWorkspaceTerminalCommandsResult, UpsertLaunchTaskInput, UpsertProjectInput,
+        UpsertWorkspaceInput, WorkspaceRecord,
     },
     error::{AppError, AppResult},
     persistence::{
         delete_launch_task, delete_workspace, list_launch_tasks, list_workspaces,
-        register_workspace_folder, remove_workspace_registration, upsert_launch_task,
-        upsert_project, upsert_workspace, Database,
+        register_workspace_folder, remove_workspace_registration, reorder_launch_tasks,
+        reorder_workspaces, upsert_launch_task, upsert_project, upsert_workspace, Database,
     },
 };
 
@@ -48,6 +49,17 @@ impl WorkspaceService {
         self.database
             .write("upsert_workspace", move |connection| {
                 upsert_workspace(connection, input)
+            })
+            .await
+    }
+
+    pub async fn reorder_workspaces(
+        &self,
+        input: ReorderWorkspacesInput,
+    ) -> AppResult<Vec<WorkspaceRecord>> {
+        self.database
+            .write("reorder_workspaces", move |connection| {
+                reorder_workspaces(connection, input)
             })
             .await
     }
@@ -326,6 +338,17 @@ impl WorkspaceService {
         self.database
             .write("upsert_launch_task", move |connection| {
                 upsert_launch_task(connection, input)
+            })
+            .await
+    }
+
+    pub async fn reorder_launch_tasks(
+        &self,
+        input: ReorderLaunchTasksInput,
+    ) -> AppResult<Vec<LaunchTaskRecord>> {
+        self.database
+            .write("reorder_launch_tasks", move |connection| {
+                reorder_launch_tasks(connection, input)
             })
             .await
     }

@@ -3,8 +3,9 @@ use tauri::State;
 use crate::{
     domain::{
         DeleteResult, OpenWorkspaceInEditorResult, OpenWorkspaceTerminalResult, ProjectRecord,
-        RunWorkspaceTerminalCommandResult, RunWorkspaceTerminalCommandsResult, UpsertProjectInput,
-        UpsertWorkspaceInput, WorkspaceRecord,
+        ReorderWorkspacesInput, RunWorkspaceTerminalCommandResult,
+        RunWorkspaceTerminalCommandsResult, UpsertProjectInput, UpsertWorkspaceInput,
+        WorkspaceRecord,
     },
     error::{AppError, CommandResponse},
     services::{PreferencesService, WorkspaceService},
@@ -32,6 +33,20 @@ pub async fn upsert_workspace(
         Ok(data) => Ok(CommandResponse::success(data)),
         Err(error) => {
             log::error!(target: "bexo::command::workspace", "upsert_workspace failed: {}", error);
+            Ok(CommandResponse::failure(error))
+        }
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn reorder_workspaces(
+    workspace_service: State<'_, WorkspaceService>,
+    input: ReorderWorkspacesInput,
+) -> Result<CommandResponse<Vec<WorkspaceRecord>>, AppError> {
+    match workspace_service.reorder_workspaces(input).await {
+        Ok(data) => Ok(CommandResponse::success(data)),
+        Err(error) => {
+            log::error!(target: "bexo::command::workspace", "reorder_workspaces failed: {}", error);
             Ok(CommandResponse::failure(error))
         }
     }

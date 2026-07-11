@@ -768,11 +768,26 @@ impl RestoreService {
             let runtime_task = match runtime_task {
                 Ok(task) => task,
                 Err(error) => {
-                    self.child_process_registry
+                    let terminated_process_count = self
+                        .child_process_registry
+                        .terminate_run_processes(&runtime_context.run_id)
+                        .await;
+                    let tracked_process_count = self
+                        .child_process_registry
                         .clear_run(&runtime_context.run_id);
+                    log::warn!(
+                        target: "bexo::service::restore",
+                        "restore run {} failed internally; process cleanup completed tracked_processes={} terminated_processes={}",
+                        runtime_context.run_id,
+                        tracked_process_count,
+                        terminated_process_count
+                    );
                     let snapshot_for_finalize = snapshot.clone();
                     let run_id_for_finalize = run_id.clone();
-                    let failure_summary = format!("{}: {}", error.code, error.message);
+                    let failure_summary = format!(
+                        "{}: {}（已清理进程：登记 {}，终止 {}）",
+                        error.code, error.message, tracked_process_count, terminated_process_count
+                    );
                     let failure_summary_for_finalize = failure_summary.clone();
                     let _ = self
                         .database
