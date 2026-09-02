@@ -107,7 +107,7 @@ export function PromptQuickPasteSettings({
   }
 
   return (
-    <section className="mt-3 overflow-hidden rounded-[0] border border-[#eef2f6] bg-white">
+    <section className="mt-3 shrink-0 overflow-hidden rounded-[0] border border-[#eef2f6] bg-white">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[#eef2f6] px-4 py-3">
         <div className="min-w-0">
           <Typography.Text className="block text-[12px] font-semibold text-[#1f2937]">

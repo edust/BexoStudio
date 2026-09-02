@@ -9,10 +9,11 @@ import type {
   CancelRestoreActionResult,
   CancelRestoreRunResult,
   CodexHomeDirectoryInfo,
-  CodexHistoryGlobalSessionsResponse,
+  CodexHistoryGlobalSessionsPage,
   CodexHistoryMessagesPage,
   CodexHistoryMessagesPayload,
   CodexHistorySessionsResponse,
+  ListCodexHistorySessionsPagePayload,
   CodexAuthProfileDetail,
   CodexAuthProfileSummary,
   CodexAuthQuotaRefreshBatchResult,
@@ -39,6 +40,12 @@ import type {
   OpenWorkspaceInEditorResult,
   OpenWorkspaceTerminalResult,
   PromptQuickPasteResultEvent,
+  ApplyPromptListImportPayload,
+  ExportPromptListPayload,
+  ExportPromptListResult,
+  PreviewPromptListImportPayload,
+  PromptImportApplyResult,
+  PromptImportPreview,
   PromptRecord,
   SaveScreenshotSelectionResult,
   RunWorkspaceTerminalCommandResult,
@@ -70,9 +77,39 @@ import type {
   UpsertPromptPayload,
   UpsertProjectPayload,
   UpsertWorkspacePayload,
+  UpdateWorkspaceDescriptionPayload,
   WorkspaceRecord,
+  ApplyWorkspaceListImportPayload,
+  ExportWorkspaceListPayload,
+  ExportWorkspaceListResult,
+  PreviewWorkspaceListImportPayload,
+  WorkspaceImportApplyResult,
+  WorkspaceImportPreview,
   WorkspaceResourceEntry,
   WorkspaceResourceGitStatusResponse,
+  CopyOssObjectPayload,
+  CopyOssObjectResult,
+  CreateOssFolderPayload,
+  CreateOssFolderResult,
+  DeleteOssObjectsPayload,
+  DeleteOssObjectsResult,
+  GetOssObjectDownloadUrlPayload,
+  GetOssObjectDownloadUrlResult,
+  HeadOssObjectPayload,
+  ListOssObjectsPayload,
+  OssAccountSummary,
+  OssObjectMetadata,
+  OssObjectPage,
+  OssOperationPayload,
+  OssProbeResult,
+  OssTargetRecord,
+  OssTransferTaskView,
+  OssTransferStart,
+  StartOssDownloadPayload,
+  StartOssUploadPayload,
+  TestOssTargetPayload,
+  UpsertOssAccountPayload,
+  UpsertOssTargetPayload,
 } from "@/types/backend";
 
 export class CommandClientError extends Error {
@@ -145,6 +182,18 @@ export function listWorkspaces() {
   return invokeCommand<WorkspaceRecord[]>("list_workspaces");
 }
 
+export function exportWorkspaceList(input: ExportWorkspaceListPayload) {
+  return invokeCommand<ExportWorkspaceListResult>("export_workspace_list", { input });
+}
+
+export function previewWorkspaceListImport(input: PreviewWorkspaceListImportPayload) {
+  return invokeCommand<WorkspaceImportPreview>("preview_workspace_list_import", { input });
+}
+
+export function applyWorkspaceListImport(input: ApplyWorkspaceListImportPayload) {
+  return invokeCommand<WorkspaceImportApplyResult>("apply_workspace_list_import", { input });
+}
+
 export function getAppPreferences() {
   return invokeCommand<AppPreferences>("get_app_preferences");
 }
@@ -181,8 +230,15 @@ export function deleteWorkspace(id: string) {
   return invokeCommand<DeleteResult>("delete_workspace", { id });
 }
 
-export function registerWorkspaceFolder(path: string) {
-  return invokeCommand<WorkspaceRecord>("register_workspace_folder", { path });
+export function registerWorkspaceFolder(path: string, description?: string | null) {
+  return invokeCommand<WorkspaceRecord>("register_workspace_folder", {
+    path,
+    description: description ?? null,
+  });
+}
+
+export function updateWorkspaceDescription(input: UpdateWorkspaceDescriptionPayload) {
+  return invokeCommand<WorkspaceRecord>("update_workspace_description", { input });
 }
 
 export function removeWorkspaceRegistration(id: string) {
@@ -313,6 +369,18 @@ export function reorderPrompts(input: ReorderPromptsPayload) {
   return invokeCommand<PromptRecord[]>("reorder_prompts", { input });
 }
 
+export function exportPromptList(input: ExportPromptListPayload) {
+  return invokeCommand<ExportPromptListResult>("export_prompt_list", { input });
+}
+
+export function previewPromptListImport(input: PreviewPromptListImportPayload) {
+  return invokeCommand<PromptImportPreview>("preview_prompt_list_import", { input });
+}
+
+export function applyPromptListImport(input: ApplyPromptListImportPayload) {
+  return invokeCommand<PromptImportApplyResult>("apply_prompt_list_import", { input });
+}
+
 export function openCodexHistoryWindow(workspaceId: string) {
   return invokeCommand<OpenCodexHistoryWindowResult>("open_codex_history_window", { workspaceId });
 }
@@ -323,8 +391,10 @@ export function listCodexHistorySessions(workspaceId: string) {
   });
 }
 
-export function listAllCodexHistorySessions() {
-  return invokeCommand<CodexHistoryGlobalSessionsResponse>("list_all_codex_history_sessions");
+export function listAllCodexHistorySessions(input: ListCodexHistorySessionsPagePayload) {
+  return invokeCommand<CodexHistoryGlobalSessionsPage>("list_all_codex_history_sessions", {
+    input,
+  });
 }
 
 export function getCodexHistoryMessages(input: CodexHistoryMessagesPayload) {
@@ -341,6 +411,82 @@ export function createSnapshot(input: CreateSnapshotPayload) {
 
 export function updateSnapshot(input: UpdateSnapshotPayload) {
   return invokeCommand<SnapshotRecord>("update_snapshot", { input });
+}
+
+export function listOssAccounts() {
+  return invokeCommand<OssAccountSummary[]>("list_oss_accounts");
+}
+
+export function upsertOssAccount(input: UpsertOssAccountPayload) {
+  return invokeCommand<OssAccountSummary>("upsert_oss_account", { input });
+}
+
+export function deleteOssAccount(id: string) {
+  return invokeCommand<DeleteResult>("delete_oss_account", { id });
+}
+
+export function listOssTargets(accountId: string) {
+  return invokeCommand<OssTargetRecord[]>("list_oss_targets", { accountId });
+}
+
+export function upsertOssTarget(input: UpsertOssTargetPayload) {
+  return invokeCommand<OssTargetRecord>("upsert_oss_target", { input });
+}
+
+export function deleteOssTarget(id: string) {
+  return invokeCommand<DeleteResult>("delete_oss_target", { id });
+}
+
+export function listOssObjects(input: ListOssObjectsPayload) {
+  return invokeCommand<OssObjectPage>("list_oss_objects", { input });
+}
+
+export function createOssFolder(input: CreateOssFolderPayload) {
+  return invokeCommand<CreateOssFolderResult>("create_oss_folder", { input });
+}
+
+export function headOssObject(input: HeadOssObjectPayload) {
+  return invokeCommand<OssObjectMetadata>("head_oss_object", { input });
+}
+
+export function getOssObjectDownloadUrl(input: GetOssObjectDownloadUrlPayload) {
+  return invokeCommand<GetOssObjectDownloadUrlResult>("get_oss_object_download_url", { input });
+}
+
+export function testOssTarget(input: TestOssTargetPayload) {
+  return invokeCommand<OssProbeResult>("test_oss_target", { input });
+}
+
+export function listOssTransferTasks() {
+  return invokeCommand<OssTransferTaskView[]>("list_oss_transfer_tasks");
+}
+
+export function startOssUpload(input: StartOssUploadPayload) {
+  return invokeCommand<OssTransferStart>("start_oss_upload", { input });
+}
+
+export function startOssDownload(input: StartOssDownloadPayload) {
+  return invokeCommand<OssTransferStart>("start_oss_download", { input });
+}
+
+export function resumeOssTransfer(input: OssOperationPayload) {
+  return invokeCommand<OssTransferStart>("resume_oss_transfer", { input });
+}
+
+export function cancelOssTransfer(input: OssOperationPayload) {
+  return invokeCommand<OssTransferTaskView>("cancel_oss_transfer", { input });
+}
+
+export function confirmOssTransfer(input: OssOperationPayload) {
+  return invokeCommand<OssTransferTaskView>("confirm_oss_transfer", { input });
+}
+
+export function deleteOssObjects(input: DeleteOssObjectsPayload) {
+  return invokeCommand<DeleteOssObjectsResult>("delete_oss_objects", { input });
+}
+
+export function copyOssObject(input: CopyOssObjectPayload) {
+  return invokeCommand<CopyOssObjectResult>("copy_oss_object", { input });
 }
 
 export function startScreenshotSession() {
@@ -601,4 +747,28 @@ export async function listenToNativeInteractionShapeAnnotationUpdatedEvents(
       handler(event.payload);
     },
   );
+}
+
+export async function listenToOssTransferProgressEvents(
+  handler: (task: OssTransferTaskView) => void,
+): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    desktopRuntimeRequired();
+  }
+
+  return listen<OssTransferTaskView>("oss://transfer-progress", (event) => {
+    handler(event.payload);
+  });
+}
+
+export async function listenToOssTransferStateEvents(
+  handler: (task: OssTransferTaskView) => void,
+): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    desktopRuntimeRequired();
+  }
+
+  return listen<OssTransferTaskView>("oss://transfer-state-changed", (event) => {
+    handler(event.payload);
+  });
 }

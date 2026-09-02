@@ -4,8 +4,8 @@ use crate::{
     domain::{
         DeleteResult, OpenWorkspaceInEditorResult, OpenWorkspaceTerminalResult, ProjectRecord,
         ReorderWorkspacesInput, RunWorkspaceTerminalCommandResult,
-        RunWorkspaceTerminalCommandsResult, UpsertProjectInput, UpsertWorkspaceInput,
-        WorkspaceRecord,
+        RunWorkspaceTerminalCommandsResult, UpdateWorkspaceDescriptionInput, UpsertProjectInput,
+        UpsertWorkspaceInput, WorkspaceRecord,
     },
     error::{AppError, CommandResponse},
     services::{PreferencesService, WorkspaceService},
@@ -33,6 +33,24 @@ pub async fn upsert_workspace(
         Ok(data) => Ok(CommandResponse::success(data)),
         Err(error) => {
             log::error!(target: "bexo::command::workspace", "upsert_workspace failed: {}", error);
+            Ok(CommandResponse::failure(error))
+        }
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn update_workspace_description(
+    workspace_service: State<'_, WorkspaceService>,
+    input: UpdateWorkspaceDescriptionInput,
+) -> Result<CommandResponse<WorkspaceRecord>, AppError> {
+    match workspace_service.update_workspace_description(input).await {
+        Ok(data) => Ok(CommandResponse::success(data)),
+        Err(error) => {
+            log::error!(
+                target: "bexo::command::workspace",
+                "update_workspace_description failed: {}",
+                error
+            );
             Ok(CommandResponse::failure(error))
         }
     }
@@ -70,8 +88,12 @@ pub async fn delete_workspace(
 pub async fn register_workspace_folder(
     workspace_service: State<'_, WorkspaceService>,
     path: String,
+    description: Option<String>,
 ) -> Result<CommandResponse<WorkspaceRecord>, AppError> {
-    match workspace_service.register_workspace_folder(path).await {
+    match workspace_service
+        .register_workspace_folder_with_description(path, description)
+        .await
+    {
         Ok(data) => Ok(CommandResponse::success(data)),
         Err(error) => {
             log::error!(

@@ -5,15 +5,19 @@ import {
   CloseOutlined,
   CodeOutlined,
   CopyOutlined,
+  DownloadOutlined,
   DownOutlined,
+  EditOutlined,
+  FileTextOutlined,
   FolderOpenOutlined,
   HistoryOutlined,
   HolderOutlined,
   PlusOutlined,
   SearchOutlined,
+  UploadOutlined,
 } from "@ant-design/icons";
 import { getCurrentWindow, type DragDropEvent } from "@tauri-apps/api/window";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Button, Checkbox, Dropdown, Empty, Input, Modal, Popconfirm, Tag, Tooltip, Typography, type MenuProps } from "antd";
 import { motion, Reorder, useDragControls } from "motion/react";
@@ -25,6 +29,7 @@ import { copyTextToClipboard, getClipboardErrorMessage } from "@/lib/clipboard";
 import { defaultAppPreferences } from "@/lib/app-preferences";
 import { cn } from "@/lib/cn";
 import {
+  exportWorkspaceList,
   getErrorSummary,
   getRestoreCapabilities,
   hasDesktopRuntime,
@@ -37,10 +42,17 @@ import {
   reorderWorkspaces,
   removeWorkspaceRegistration,
   runWorkspaceTerminalCommands,
+  updateWorkspaceDescription,
   upsertProject,
 } from "@/lib/command-client";
 import { sendDesktopNotification } from "@/lib/desktop-notification";
 import { reorderLayoutTransition } from "@/lib/reorder-motion";
+import {
+  countUnicodeCharacters,
+  filterWorkspaceItems,
+  MAX_WORKSPACE_DESCRIPTION_CHARS,
+  validateWorkspaceDescription,
+} from "@/features/workspaces/workspace-model";
 import {
   appPreferencesQueryKey,
   getAppPreferences,
@@ -50,6 +62,8 @@ import { restoreCapabilitiesQueryKey } from "@/queries/restore-runs";
 import { sidebarWorkspacesQueryKey, workspacesQueryKey } from "@/queries/workspaces";
 import { recentRestoreTargetsQueryKey } from "@/queries/restore-runs";
 import { useShellStore } from "@/stores/shell-store";
+import { WorkspaceNotePopover } from "@/features/workspaces/workspace-note-popover";
+import { WorkspaceTransferDialog } from "@/features/workspaces/workspace-transfer-dialog";
 import type { SectionSidebarContent, SidebarItem } from "@/types/navigation";
 import type {
   AppPreferences,
@@ -71,6 +85,9 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
   const [orderedWorkspaceItems, setOrderedWorkspaceItems] = useState<WorkspaceSidebarItem[]>([]);
   const [draggingWorkspaceId, setDraggingWorkspaceId] = useState<string | null>(null);
   const [workspaceDropPending, setWorkspaceDropPending] = useState(false);
+  const [workspaceCreationPath, setWorkspaceCreationPath] = useState<string | null>(null);
+  const [workspaceCreationDescription, setWorkspaceCreationDescription] = useState("");
+  const [workspaceImportSourcePath, setWorkspaceImportSourcePath] = useState<string | null>(null);
   const location = useLocation();
   const selectedHomeWorkspaceId = useShellStore((state) => state.selectedHomeWorkspaceId);
   const setSelectedHomeWorkspaceId = useShellStore((state) => state.setSelectedHomeWorkspaceId);
@@ -125,7 +142,8 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
   });
 
   const registerWorkspaceMutation = useMutation({
-    mutationFn: registerWorkspaceFolder,
+    mutationFn: ({ path, description }: { path: string; description?: string | null }) =>
+      registerWorkspaceFolder(path, description),
     onSuccess: async (workspace) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: sidebarWorkspacesQueryKey }),
@@ -133,6 +151,34 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
         queryClient.invalidateQueries({ queryKey: recentRestoreTargetsQueryKey }),
       ]);
       toast.success(`已添加工作区：${workspace.name}`);
+    },
+  });
+
+  const exportWorkspaceListMutation = useMutation({ mutationFn: exportWorkspaceList });
+
+  const updateWorkspaceDescriptionMutation = useMutation({
+    mutationFn: updateWorkspaceDescription,
+    onSuccess: async (workspace) => {
+      setOrderedWorkspaceItems((current) => {
+        const nextItems = current.map((item) =>
+          item.workspace.id === workspace.id
+            ? buildWorkspaceSidebarItem(workspace, item.recentRestoreTarget)
+            : item,
+        );
+        latestOrderedWorkspaceItemsRef.current = nextItems;
+        return nextItems;
+      });
+      queryClient.setQueryData<WorkspaceRecord[] | undefined>(sidebarWorkspacesQueryKey, (current) =>
+        replaceWorkspaceRecord(current, workspace),
+      );
+      queryClient.setQueryData<WorkspaceRecord[] | undefined>(workspacesQueryKey, (current) =>
+        replaceWorkspaceRecord(current, workspace),
+      );
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: sidebarWorkspacesQueryKey }),
+        queryClient.invalidateQueries({ queryKey: workspacesQueryKey }),
+      ]);
+      toast.success("项目备注已保存");
     },
   });
 
@@ -356,17 +402,9 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
   }, [recentRestoreTargetsQuery.data]);
 
   const workspaceItems = useMemo<WorkspaceSidebarItem[]>(() => {
-    const baseItems = (workspaceQuery.data ?? []).map((workspace) => ({
-      key: workspace.id,
-      label: workspace.name,
-      description:
-        workspace.projects[0]?.path?.trim() ||
-        workspace.description?.trim() ||
-        `${workspace.projects.length} 个项目`,
-      badge: workspace.isDefault ? "default" : undefined,
-      workspace,
-      recentRestoreTarget: recentRestoreTargetByWorkspaceId.get(workspace.id),
-    }));
+    const baseItems = (workspaceQuery.data ?? []).map((workspace) =>
+      buildWorkspaceSidebarItem(workspace, recentRestoreTargetByWorkspaceId.get(workspace.id)),
+    );
 
     return applyPinnedWorkspaceGrouping(baseItems, persistedPinnedWorkspaceIds);
   }, [persistedPinnedWorkspaceIds, recentRestoreTargetByWorkspaceId, workspaceQuery.data]);
@@ -572,16 +610,7 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
       return [];
     }
 
-    const normalized = query.trim().toLowerCase();
-
-    if (!normalized) {
-      return resolvedItems;
-    }
-
-    return resolvedItems.filter((item) => {
-      const text = `${item.label} ${item.description} ${item.badge ?? ""}`.toLowerCase();
-      return text.includes(normalized);
-    });
+    return filterWorkspaceItems(resolvedItems, query);
   }, [query, resolvedItems]);
 
   const filteredWorkspaceItems = useMemo(() => {
@@ -593,14 +622,7 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
       return [];
     }
 
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) {
-      return orderedWorkspaceItems;
-    }
-
-    return orderedWorkspaceItems.filter((item) => {
-      return item.label.toLowerCase().includes(normalized);
-    });
+    return filterWorkspaceItems(orderedWorkspaceItems, query);
   }, [content.dataSource, orderedWorkspaceItems, query]);
 
   const visibleWorkspaceIds = useMemo(
@@ -640,7 +662,34 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
         return;
       }
 
-      await registerWorkspaceMutation.mutateAsync(selectedDirectory);
+      setWorkspaceCreationPath(selectedDirectory);
+      setWorkspaceCreationDescription("");
+    } catch (error) {
+      toast.error(getErrorSummary(error).message);
+    }
+  }
+
+  function handleCancelCreateWorkspace() {
+    if (registerWorkspaceMutation.isPending) {
+      return;
+    }
+    setWorkspaceCreationPath(null);
+    setWorkspaceCreationDescription("");
+  }
+
+  async function handleConfirmCreateWorkspace() {
+    const path = workspaceCreationPath;
+    if (!path || registerWorkspaceMutation.isPending) {
+      return;
+    }
+
+    try {
+      const workspace = await registerWorkspaceMutation.mutateAsync({
+        path,
+        description: workspaceCreationDescription,
+      });
+      setSelectedHomeWorkspaceId(workspace.id);
+      handleCancelCreateWorkspace();
     } catch (error) {
       toast.error(getErrorSummary(error).message);
     }
@@ -691,7 +740,7 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
       try {
         for (const path of droppedPaths) {
           try {
-            await registerWorkspaceMutation.mutateAsync(path);
+            await registerWorkspaceMutation.mutateAsync({ path, description: null });
           } catch (error) {
             const summary = getErrorSummary(error);
             if (summary.code === "WORKSPACE_PATH_ALREADY_REGISTERED") {
@@ -1109,7 +1158,101 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
     });
   }
 
-  const workspaceActionItems = [
+  async function handleImportWorkspaceList() {
+    if (!desktopRuntimeAvailable || workspaceImportSourcePath || exportWorkspaceListMutation.isPending) {
+      return;
+    }
+    try {
+      const selected = await open({
+        directory: false,
+        multiple: false,
+        title: "选择 Bexo Studio 工作区列表",
+        filters: [
+          {
+            name: "Bexo Studio 工作区列表",
+            extensions: ["json"],
+          },
+        ],
+      });
+      if (typeof selected === "string") {
+        setWorkspaceImportSourcePath(selected);
+      }
+    } catch (error) {
+      const resolved = getErrorSummary(error);
+      toast.error("无法打开工作区列表文件", {
+        description: `${resolved.message}（${resolved.code}）`,
+      });
+    }
+  }
+
+  function confirmExportWorkspaceList() {
+    if (!desktopRuntimeAvailable || exportWorkspaceListMutation.isPending) {
+      return;
+    }
+    Modal.confirm({
+      centered: true,
+      cancelText: "取消",
+      okText: "选择保存位置",
+      title: "导出全部工作区项目列表？",
+      content: (
+        <div className="space-y-2 text-[12px] leading-5 text-[#475467]">
+          <Typography.Paragraph className="!mb-0 !text-[12px] !leading-5 !text-[#475467]">
+            将导出当前全部工作区、项目启动配置、终端命令和置顶状态，用于在本机或另一台电脑恢复列表。
+          </Typography.Paragraph>
+          <Typography.Paragraph className="!mb-0 !text-[12px] !leading-5 !text-[#b54708]">
+            文件会包含绝对目录路径、终端命令和参数，请勿上传到公开仓库或发送给不可信的人。
+          </Typography.Paragraph>
+          <Typography.Paragraph className="!mb-0 !text-[11px] !leading-5 !text-[#667085]">
+            不会导出 Codex/OSS 凭据、日志、快照、恢复历史或全局设置。
+          </Typography.Paragraph>
+        </div>
+      ),
+      onOk: async () => {
+        try {
+          const destinationPath = await save({
+            title: "保存 Bexo Studio 工作区列表",
+            defaultPath: buildWorkspaceExportFileName(),
+            filters: [
+              {
+                name: "Bexo Studio 工作区列表",
+                extensions: ["json"],
+              },
+            ],
+          });
+          if (!destinationPath) {
+            return;
+          }
+          const result = await exportWorkspaceListMutation.mutateAsync({ destinationPath });
+          toast.success("工作区项目列表已导出", {
+            description: `${result.workspaceCount} 个工作区、${result.projectCount} 个项目、${result.launchTaskCount} 条启动任务`,
+          });
+          if (result.warnings.length) {
+            toast.warning("导出完成，但有需要留意的提示", {
+              description: result.warnings.join("；"),
+              duration: 8_000,
+            });
+          }
+        } catch (error) {
+          const resolved = getErrorSummary(error);
+          toast.error("导出工作区项目列表失败", {
+            description: `${resolved.message}（${resolved.code}）`,
+          });
+          throw error;
+        }
+      },
+    });
+  }
+
+  async function handleWorkspaceImportCompleted() {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: sidebarWorkspacesQueryKey }),
+      queryClient.invalidateQueries({ queryKey: workspacesQueryKey }),
+      queryClient.invalidateQueries({ queryKey: recentRestoreTargetsQueryKey }),
+      queryClient.invalidateQueries({ queryKey: appPreferencesQueryKey }),
+    ]);
+  }
+
+  const workspaceActionItems: MenuProps["items"] = [
     {
       key: "create",
       icon: <PlusOutlined />,
@@ -1137,6 +1280,27 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
         !selectedWorkspaceIds.length ||
         runSelectedWorkspacesMutation.isPending,
     },
+    {
+      type: "divider",
+    },
+    {
+      key: "import-list",
+      icon: <UploadOutlined />,
+      label: "导入项目列表",
+      disabled:
+        !desktopRuntimeAvailable ||
+        Boolean(workspaceImportSourcePath) ||
+        exportWorkspaceListMutation.isPending,
+    },
+    {
+      key: "export-list",
+      icon: <DownloadOutlined />,
+      label: "导出项目列表",
+      disabled:
+        !desktopRuntimeAvailable ||
+        !workspaceQuery.data?.length ||
+        exportWorkspaceListMutation.isPending,
+    },
   ];
 
   async function handleWorkspaceActionClick(key: string) {
@@ -1157,6 +1321,16 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
 
     if (key === "run-selected") {
       confirmRunSelectedWorkspaces();
+      return;
+    }
+
+    if (key === "import-list") {
+      await handleImportWorkspaceList();
+      return;
+    }
+
+    if (key === "export-list") {
+      confirmExportWorkspaceList();
     }
   }
 
@@ -1168,8 +1342,13 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
     : "拖动调整工作区顺序";
   const workspaceActionsBusy =
     registerWorkspaceMutation.isPending ||
+    exportWorkspaceListMutation.isPending ||
     runSelectedWorkspacesMutation.isPending ||
     workspaceDropPending;
+  const workspaceCreationDescriptionCount = countUnicodeCharacters(workspaceCreationDescription);
+  const workspaceCreationDescriptionError = validateWorkspaceDescription(
+    workspaceCreationDescription,
+  );
 
     return (
       <aside
@@ -1263,6 +1442,12 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
                     editorKey={resolveWorkspaceEditorKey(item.workspace, workspaceEditorOptions)}
                     editorOptions={workspaceEditorOptions}
                     onCopyPath={() => void handleCopyWorkspacePath(item.workspace)}
+                    onSaveNote={(description) =>
+                      updateWorkspaceDescriptionMutation.mutateAsync({
+                        workspaceId: item.workspace.id,
+                        description,
+                      }).then(() => undefined)
+                    }
                     onOpenCodexHistory={() => void handleOpenCodexHistory(item.workspace)}
                     onChangeEditor={(editorKey) =>
                       void handleWorkspaceEditorChange(item.workspace, editorKey)
@@ -1302,6 +1487,10 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
                       updateWorkspaceEditorMutation.isPending &&
                       updateWorkspaceEditorMutation.variables?.workspace.id === item.workspace.id
                     }
+                    noteSaving={
+                      updateWorkspaceDescriptionMutation.isPending &&
+                      updateWorkspaceDescriptionMutation.variables?.workspaceId === item.workspace.id
+                    }
                     removePending={removeWorkspaceMutation.isPending}
                     reorderEnabled
                     pinned={persistedPinnedWorkspaceIds.includes(item.workspace.id)}
@@ -1322,6 +1511,12 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
                     editorKey={resolveWorkspaceEditorKey(item.workspace, workspaceEditorOptions)}
                     editorOptions={workspaceEditorOptions}
                     onCopyPath={() => void handleCopyWorkspacePath(item.workspace)}
+                    onSaveNote={(description) =>
+                      updateWorkspaceDescriptionMutation.mutateAsync({
+                        workspaceId: item.workspace.id,
+                        description,
+                      }).then(() => undefined)
+                    }
                     onOpenCodexHistory={() => void handleOpenCodexHistory(item.workspace)}
                     onChangeEditor={(editorKey) =>
                       void handleWorkspaceEditorChange(item.workspace, editorKey)
@@ -1358,6 +1553,10 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
                     editorSaving={
                       updateWorkspaceEditorMutation.isPending &&
                       updateWorkspaceEditorMutation.variables?.workspace.id === item.workspace.id
+                    }
+                    noteSaving={
+                      updateWorkspaceDescriptionMutation.isPending &&
+                      updateWorkspaceDescriptionMutation.variables?.workspaceId === item.workspace.id
                     }
                     removePending={removeWorkspaceMutation.isPending}
                     reorderEnabled={false}
@@ -1436,6 +1635,68 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
       ) : null}
       </motion.div>
 
+      <Modal
+        centered
+        cancelText="取消"
+        confirmLoading={registerWorkspaceMutation.isPending}
+        okButtonProps={{ disabled: Boolean(workspaceCreationDescriptionError) }}
+        okText="创建工作区"
+        onCancel={handleCancelCreateWorkspace}
+        onOk={() => void handleConfirmCreateWorkspace()}
+        open={Boolean(workspaceCreationPath)}
+        title="添加工作区"
+      >
+        <div className="space-y-3">
+          <div>
+            <Typography.Text className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-[#98a2b3]">
+              工作区目录
+            </Typography.Text>
+            <Typography.Text
+              className="mt-1 block truncate text-[12px] text-[#475467]"
+              title={workspaceCreationPath ?? ""}
+            >
+              {workspaceCreationPath}
+            </Typography.Text>
+          </div>
+          <div>
+            <Typography.Text className="block text-[12px] font-semibold text-[#1f2937]">
+              项目备注（可选）
+            </Typography.Text>
+            <Typography.Text className="mt-0.5 block text-[11px] leading-4 text-[#667085]">
+              用一句话记住这个目录的用途，之后也可以从左侧卡片继续编辑。
+            </Typography.Text>
+          </div>
+          <Input.TextArea
+            autoFocus
+            aria-label="项目备注"
+            autoSize={{ minRows: 3, maxRows: 5 }}
+            onChange={(event) => setWorkspaceCreationDescription(event.target.value)}
+            placeholder="例如：活动报名系统，负责后端 API 和管理端"
+            value={workspaceCreationDescription}
+          />
+          <div
+            className={cn(
+              "text-right text-[11px]",
+              workspaceCreationDescriptionError ? "text-[#cf5a4a]" : "text-[#98a2b3]",
+            )}
+          >
+            {workspaceCreationDescriptionCount}/{MAX_WORKSPACE_DESCRIPTION_CHARS}
+          </div>
+          {workspaceCreationDescriptionError ? (
+            <Typography.Text type="danger" className="block text-[11px] leading-4">
+              {workspaceCreationDescriptionError}
+            </Typography.Text>
+          ) : null}
+        </div>
+      </Modal>
+
+      <WorkspaceTransferDialog
+        onClose={() => setWorkspaceImportSourcePath(null)}
+        onImported={handleWorkspaceImportCompleted}
+        open={Boolean(workspaceImportSourcePath)}
+        sourcePath={workspaceImportSourcePath}
+      />
+
       {content.footerTitle || content.footerDescription ? (
         <div className="mt-[5px] border-t border-[#e6edf5] px-4 py-3">
           {content.footerTitle ? (
@@ -1455,6 +1716,7 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
 }
 
 type WorkspaceSidebarItem = SidebarItem & {
+  note: string;
   workspace: WorkspaceRecord;
   recentRestoreTarget?: RecentRestoreTarget;
 };
@@ -1472,6 +1734,7 @@ type WorkspaceSidebarCardProps = {
   editorKey: WorkspaceEditorKey;
   editorOptions: WorkspaceEditorOption[];
   onCopyPath: () => void;
+  onSaveNote: (description: string) => Promise<void>;
   onChangeEditor: (editorKey: WorkspaceEditorKey) => void;
   onDragEnd?: () => void;
   onDragStart?: () => void;
@@ -1489,6 +1752,7 @@ type WorkspaceSidebarCardProps = {
   openTerminalDisabled: boolean;
   openTerminalLoading: boolean;
   editorSaving: boolean;
+  noteSaving: boolean;
   removePending: boolean;
   reorderEnabled: boolean;
   reorderTooltip?: string;
@@ -1505,6 +1769,7 @@ const WorkspaceSidebarCard = memo(function WorkspaceSidebarCard({
   editorKey,
   editorOptions,
   onCopyPath,
+  onSaveNote,
   onChangeEditor,
   onDragEnd,
   onDragStart,
@@ -1522,6 +1787,7 @@ const WorkspaceSidebarCard = memo(function WorkspaceSidebarCard({
   openTerminalDisabled,
   openTerminalLoading,
   editorSaving,
+  noteSaving,
   removePending,
   reorderEnabled,
   reorderTooltip = "拖动调整工作区顺序",
@@ -1532,8 +1798,14 @@ const WorkspaceSidebarCard = memo(function WorkspaceSidebarCard({
   workspaceItem,
 }: WorkspaceSidebarCardProps) {
   const dragControls = useDragControls();
+  const [noteEditorOpen, setNoteEditorOpen] = useState(false);
   const contextMenu = {
     items: [
+      {
+        key: "edit-note",
+        icon: <EditOutlined />,
+        label: workspaceItem.workspace.description?.trim() ? "编辑备注" : "添加备注",
+      },
       {
         key: pinned ? "unpin" : "pin",
         label: pinned ? "取消置顶" : "置顶",
@@ -1541,6 +1813,10 @@ const WorkspaceSidebarCard = memo(function WorkspaceSidebarCard({
     ],
     onClick: ({ key, domEvent }) => {
       domEvent.stopPropagation();
+      if (key === "edit-note") {
+        setNoteEditorOpen(true);
+        return;
+      }
       onTogglePinned(key === "pin");
     },
   } satisfies MenuProps;
@@ -1624,7 +1900,37 @@ const WorkspaceSidebarCard = memo(function WorkspaceSidebarCard({
           >
             最后运行：{formatLastRunAt(workspaceItem.recentRestoreTarget)}
           </Typography.Text>
+          {workspaceItem.note ? (
+            <div
+              className="mt-1 flex min-w-0 items-center gap-1 text-[11px] leading-4 text-[#667085]"
+              title={workspaceItem.note}
+            >
+              <FileTextOutlined className="shrink-0 text-[10px] text-[#1283ab]" />
+              <span className="min-w-0 truncate">{workspaceItem.note}</span>
+            </div>
+          ) : null}
           <div className="mt-1 flex items-center gap-1">
+            <Tooltip placement="bottom" title={workspaceItem.note ? "编辑项目备注" : "添加项目备注"}>
+              <WorkspaceNotePopover
+                loading={noteSaving}
+                onOpenChange={setNoteEditorOpen}
+                onSave={onSaveNote}
+                open={noteEditorOpen}
+                trigger={
+                  <Button
+                    aria-label={workspaceItem.note ? "编辑项目备注" : "添加项目备注"}
+                    className={cn(
+                      "!h-6 !w-6 !min-w-6 !p-0",
+                      workspaceItem.note ? "!text-[#1283ab]" : "",
+                    )}
+                    icon={workspaceItem.note ? <FileTextOutlined /> : <EditOutlined />}
+                    size="small"
+                    type="text"
+                  />
+                }
+                value={workspaceItem.workspace.description}
+              />
+            </Tooltip>
             <Tooltip placement="bottom" title="查看 Codex 会话历史">
               <span onClick={(event) => event.stopPropagation()}>
                 <Button
@@ -1830,6 +2136,7 @@ const WorkspaceSidebarCard = memo(function WorkspaceSidebarCard({
   previous.openTerminalDisabled === next.openTerminalDisabled &&
   previous.openTerminalLoading === next.openTerminalLoading &&
   previous.editorSaving === next.editorSaving &&
+  previous.noteSaving === next.noteSaving &&
   previous.removePending === next.removePending &&
   previous.reorderEnabled === next.reorderEnabled &&
   previous.reorderTooltip === next.reorderTooltip &&
@@ -1840,6 +2147,7 @@ const WorkspaceSidebarCard = memo(function WorkspaceSidebarCard({
   previous.workspaceItem.key === next.workspaceItem.key &&
   previous.workspaceItem.label === next.workspaceItem.label &&
   previous.workspaceItem.description === next.workspaceItem.description &&
+  previous.workspaceItem.note === next.workspaceItem.note &&
   previous.workspaceItem.badge === next.workspaceItem.badge &&
   previous.workspaceItem.workspace.id === next.workspaceItem.workspace.id &&
   previous.workspaceItem.recentRestoreTarget?.lastRestoreAt ===
@@ -1848,6 +2156,29 @@ const WorkspaceSidebarCard = memo(function WorkspaceSidebarCard({
 
 function resolveWorkspacePath(workspace: WorkspaceRecord) {
   return resolveWorkspacePrimaryProject(workspace)?.path?.trim() || "";
+}
+
+function buildWorkspaceSidebarItem(
+  workspace: WorkspaceRecord,
+  recentRestoreTarget?: RecentRestoreTarget,
+): WorkspaceSidebarItem {
+  return {
+    key: workspace.id,
+    label: workspace.name,
+    description:
+      resolveWorkspacePath(workspace) || `${workspace.projects.length} 个项目`,
+    note: workspace.description?.trim() || "",
+    badge: workspace.isDefault ? "default" : undefined,
+    workspace,
+    recentRestoreTarget,
+  };
+}
+
+function replaceWorkspaceRecord(
+  current: WorkspaceRecord[] | undefined,
+  workspace: WorkspaceRecord,
+) {
+  return current?.map((item) => (item.id === workspace.id ? workspace : item)) ?? current;
 }
 
 function resolveWorkspacePrimaryProject(workspace: WorkspaceRecord) {
@@ -2246,4 +2577,9 @@ function isSameWorkspaceOrder(
   return previousOrder.every(
     (workspaceId, index) => nextItems[index]?.workspace.id === workspaceId,
   );
+}
+
+function buildWorkspaceExportFileName(now = new Date()) {
+  const date = now.toISOString().slice(0, 10);
+  return `bexo-workspaces-${date}.bexo-workspaces.json`;
 }

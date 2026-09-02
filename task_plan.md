@@ -2063,6 +2063,14 @@ ativeToolbarActive 时才隐藏 WebView 主行，避免多次截图后工具整�
 - STEP 7：修复暗色 Prompt hover 误用亮色背景；完整复用 WORKBENCH 的 themeMode 条件，暗色为 `#2a2d2e / #3c3c3c`，亮色为 `#f8fafc / #d9e2ec`。
 - STEP 7 验证：20/20 前端测试、web production build、编译 CSS/Prompt chunk、Rust release check 与 release desktop binary build 通过；当前运行的用户 debug 进程导致 debug exe 无法覆盖，未擅自终止。
 
+## 2026-07-12 Alibaba OSS 文件管理
+
+- 已按 `scripts/work/2026-07-12-oss-file-manager/` 完成蓝图、实现和交付记录。
+- 范围锁定为多 RAM AccessKey、手动 Bucket 绑定、对象文件管理和大文件断点续传；不包含 Bucket 配置、STS/AssumeRole 或签名 URL。
+- 后端已接入 Windows Credential Manager、OSS V4 签名、ListObjectsV2、对象 CRUD/Copy、Multipart/Range 传输、SQLite 任务 checkpoint 和 Tauri 事件。
+- 前端已接入 OSS 一级导航、账号侧栏、目标绑定、对象分页/前缀浏览、传输队列和错误/加载/空状态。
+- 自动验证已通过：前端 30/30、web build、Rust fmt、cargo check、Rust 测试目标编译和 diff check；Rust 测试运行仍受本机 `STATUS_ENTRYPOINT_NOT_FOUND` 限制。
+
 ## 2026-07-10 Prompt 全局热键快速粘贴
 
 - 目标：增加 5 个可配置的 Prompt 全局快速粘贴槽位，默认 `Ctrl+Alt+Shift+1` 至 `Ctrl+Alt+Shift+5`，在后台/托盘状态下把绑定正文发送到当前光标处。
@@ -2083,3 +2091,107 @@ ativeToolbarActive 时才隐藏 WebView 主行，避免多次截图后工具整�
 - 状态：修复、production WebView 亮暗视觉验收、编辑态交互验收与最终 Review 均已完成，无未关闭高/中严重度遗留。
 - 根因与修复：Tauri production 为静态 style 注入 CSP nonce 后，无 nonce 的 Ant CSS-in-JS、Icons 与 Sonner runtime style 虽存在于 DOM 但 `sheet === null`；现由静态 nonce 锚点、加载前 style nonce bridge 和 Ant `ConfigProvider.csp` 完整传递，不放宽 CSP。
 - 验证：前端 27/27、production web build、Rust fmt/release/all-targets no-run、Tauri production debug no-bundle、亮暗 WORKBENCH/Prompts 截图和 Prompt 校验 Toast 交互通过。
+
+## 2026-07-12 Workbench 工作区项目备注
+
+- 目标：让目录名相同或项目较多时，用户可以通过项目备注识别工作区；备注支持新建、编辑、清空和搜索。
+- 数据/API：复用 SQLite `workspaces.description`；新增 `update_workspace_description` 目标字段更新命令；`register_workspace_folder` 在同一 savepoint 中接收可选备注。
+- UI：新建目录后先进入备注确认弹窗；卡片显示单行预览，提供图标/右键入口，编辑弹层支持显式保存、取消、未保存确认、失败重试和 200 Unicode 字符计数；搜索覆盖名称、路径和备注。
+- 可靠性：Rust 做最终规范化与控制字符校验；前端同步就地校验；备注更新不复用完整 workspace upsert，避免旧卡片快照覆盖排序或其他字段。
+- 详细计划：`scripts/work/2026-07-12-workspace-notes/`。
+- 状态：实现完成；自动验证完成；Tauri 原生桌面动态交互待用户本机手工回归。
+- 验证：`npm run web:test`、`npm run web:build`、Rust fmt/release check/all-targets no-run、`git diff --check` 通过；Rust 测试二进制启动受本机 `0xc0000139 (STATUS_ENTRYPOINT_NOT_FOUND)` 阻断。
+
+## 2026-07-12 OSS 签名兼容性修复
+
+- 参考 `D:\Desktop\a\StarExpoHub\go-star-expo-hub-register\go-register-CapCutWorld2026\backend` 的官方 Go OSS SDK 实现，确认其默认客户端走 V1；同时读取 SDK 内置 V4 实现作为 canonical 规则对照。
+- 确定根因：Bexo V4 signer 对 query 中的 `/` 使用了保留 slash 的 URI 编码，实际请求/官方 SDK 使用 `%2F`，ListObjects 的 `delimiter=/` 因此造成签名不匹配。
+- 修复：query/path 分离编码；拒绝 `oss-` 前缀 Region；解析并显示 OSS 返回的 Endpoint/HostId/Bucket；保存 Bucket 后失效对象列表缓存。
+- 专项记录：`scripts/work/2026-07-12-oss-signature-fix/`。
+- 验证：Rust fmt、cargo check、`cargo test --lib --no-run`、前端 30/30 和 web build 通过；Rust 测试宿主运行阶段在本机 Windows 加载卡住，未将其标记为断言通过。
+
+## 2026-07-12 OSS 暗色主题一致性改造
+
+- 已按 `scripts/work/2026-07-12-oss-dark-theme/` 初始化专项蓝图。
+- 目标：修复 OSS 提示卡、账号/目标 hover、对象行 hover、分割线和错误状态在暗色主题下的亮色残留与对比度问题。
+- 边界：只改前端主题与 OSS 组件样式，不改 Rust、SQLite、OSS 签名、上传下载和传输状态逻辑。
+- 当前阶段：已完成代码与截图证据定位，准备进入主题样式实现。
+
+## 2026-07-12 OSS 新建文件夹
+
+- 已按 `scripts/work/2026-07-12-oss-create-folder/` 初始化专项蓝图。
+- 目标：在当前对象前缀下创建以 `/` 结尾的 0 字节 Object，提供可见的“新建文件夹”入口。
+- 边界：不创建 Bucket，不提供文件夹删除/重命名，不改变已有传输协议和数据库模型。
+- 已完成：`create_oss_folder` domain/service/command、Tauri handler/permission/schema、前端 command wrapper、校验模型、弹窗、当前目录刷新、错误状态和文档同步。
+- 自动验证：前端 34/34、web build、Rust fmt check、cargo check、Rust library 测试目标编译和 diff check 通过。
+- 待人工验收：使用实际 RAM 权限在根目录/嵌套目录创建、重复创建、无权限和亮暗主题键盘交互；本轮未调用真实 OSS。
+
+## 2026-07-12 OSS 批量拖放与传输体验
+
+- 已按 `scripts/work/2026-07-12-oss-transfer-ux/` 初始化专项蓝图。
+- 目标：支持多文件拖放/多选上传，显示完整目标和实时进度，提供中途取消，并在远端完成后刷新当前目录。
+- 边界：第一版不递归上传文件夹，不改变 Bucket 管理、OSS 签名和 checkpoint 协议。
+- 已完成全量核对：现有队列已有 progress/state listener 和取消按钮；主要缺口是单任务上传入口、目标上下文、完成刷新，以及小文件单 PUT/分片读取不可及时取消。
+- 已完成：对象浏览器接入原生拖放 enter/over/drop/leave，选择器改为多选；路径拆分为独立任务并以 4 路有界并发入队，重复目标和单项失败均可见。
+- 已完成：队列任务改用 `OssTransferTaskView` 显示账号、绑定、Bucket、Region、Object Key、本地路径、字节进度、速度、ETA 和错误码；状态 listener 卸载时清理。
+- 已完成：上传完成事件按 target 失效对象目录缓存并保留当前浏览上下文；单 PUT 与 Multipart Complete 的远端未知结果进入 `needs_confirmation`，由 HeadObject 确认。
+- 自动验证：前端 `37/37`、`npm.cmd run web:build`、Rust fmt check、`cargo check`、`cargo test --lib --no-run` 通过；`cargo test --lib` 仍受本机既有 `STATUS_ENTRYPOINT_NOT_FOUND` 宿主装载问题阻断。
+- 状态：代码实现与编译级验证完成，真实 Tauri 窗口和真实 OSS 的多文件/取消/断点恢复仍需用户手工验收。
+
+## 2026-07-12 OSS 对象右键快捷菜单
+
+- 已按 `scripts/work/2026-07-12-oss-object-context-menu/` 建立专项蓝图。
+- 目标：为文件对象行增加右键下载、复制、复制临时下载 URL、删除菜单；删除保留确认，私有 Bucket URL 使用 Rust 生成的预签名 URL。
+- 边界：不对文件夹做递归操作，不保存 URL，不新增 Bucket 配置，不调用真实 OSS 自动测试。
+- 当前状态：Rust V4 GET presign、Tauri command/permission、前端 contextMenu、复制对象弹窗、剪贴板反馈和测试已实现；文档与最终差异复核收尾中。
+
+## 2026-07-12 Codex History Session 列表分页
+
+- 已创建专项蓝图：`scripts/work/2026-07-12-codex-history-pagination/`。
+- 目标：Session / History 首屏只加载 10 条，滚动到底部自动追加 10 条，避免当前全量扫描 505 条 session 导致首屏等待。
+- 边界：只改 session 元数据列表分页；现有消息内容 cursor 分页、消息展示和虚拟行布局保留。
+- 已完成：Rust 列表 command 接收 `cursor/limit/workspaceId/query`，以文件候选快照和有界 cursor 缓存实现连续分页；服务端只解析当前页需要的 JSONL。
+- 已完成：前端切换 `useInfiniteQuery`，首屏 10 条，接近底部 120px 自动追加 10 条；搜索、工作区筛选和刷新都会丢弃旧 pages；分页错误保留已加载项并提供重试。
+- 已完成：新增 Rust 分页纯函数测试与前端回归测试；`web:test` 40/40、`web:build`、Rust fmt/check/test no-run、`git diff --check` 通过。
+- 手工待验收：真实 Tauri 窗口中的 505 条冷启动、连续滚动、稀有搜索命中、工作区筛选、刷新、分页失败重试和消息详情分页。
+
+## 2026-07-12 Settings Hotkeys 底部滚动修复
+
+- 已创建专项蓝图：`scripts/work/2026-07-12-settings-scroll-fix/`。
+- 目标：修复 Hotkeys 页面 Prompt 槽位底部被语音输入预留卡片视觉遮挡、无法完整滚动查看的问题。
+- 根因：Settings 使用外层滚动，但内部 Hotkeys flex 列表允许 Prompt 复合卡片收缩；Prompt 卡片的 `overflow-hidden` 把底部槽位裁掉。语音卡片本身不是 fixed/sticky。
+- 方案：保留单一外层滚动，改为自然内容高度并阻止 Prompt/语音卡片 shrink；不改业务行为和主题。
+- 已完成：Settings 根节点改为可增长高度，General/Hotkeys 列表按自然高度布局，Prompt 与语音卡片设为 `shrink-0`，新增静态布局回归测试。
+- 自动验证：`npm.cmd run web:test` 41/41、`npm.cmd run web:build`、`git diff --check` 通过。
+- 手工待验收：真实 Tauri 窗口滚动到最底确认槽位 1-5、语音预留卡片、General 页面和亮暗主题完整可见。
+# 2026-09-02 WebView2 禁用 GPU
+
+- [x] 定位配置窗口与动态 WebView 创建点。
+- [x] 核对 Tauri/Wry 当前版本的 `additionalBrowserArgs` 覆盖语义。
+- [x] 为全部 WebView2 注入 GPU 禁用参数并保留 Wry 默认参数。
+- [x] 增加回归测试、同步文档并完成构建验证。
+
+专项计划：`scripts/work/2026-09-02-webview2-disable-gpu/task_plan.md`
+
+# 2026-09-02 Workbench 工作区项目列表导入导出
+
+- [x] 建立版本化 JSON 合同、数据边界、错误码和专项 Blueprint。
+- [x] 实现 Rust 有界读取、SHA-256 预检、路径冲突分析、原子导出和 SQLite 单事务合并。
+- [x] 实现同路径默认跳过、显式更新、缺失目录重新定位、UUID 重映射及 Profile/编辑器引用降级。
+- [x] 接通 Tauri command/permission、Workbench 操作菜单、虚拟化预览和结果反馈。
+- [x] 同步 README、产品需求、技术架构、UI 系统、路线图与交付清单。
+- [x] 完成自动门禁；真实桌面交互按专项 `deliverable.md` 留待人工验收。
+
+专项计划：`scripts/work/2026-09-02-workspace-list-import-export/task_plan.md`
+
+# 2026-09-02 常用 Prompts 导入导出
+
+- [x] 建立 `bexo-studio.prompts` v1 JSON 合同、64 MiB/1000 条边界和冲突语义。
+- [x] 实现 Rust 10 秒有界 I/O、SHA-256 防换包、原子导出、应用时重新预检和 SQLite 单事务合并。
+- [x] 实现稳定 UUID create/update/skip、相同标题不覆盖、同标题+正文去重，以及 create/update 请求重放幂等成功。
+- [x] 接通 Tauri command manifest、invoke handler、主窗口最小权限和生成 ACL schema。
+- [x] 实现 Prompts 更多菜单、原生文件对话框、敏感信息提示、草稿保护、逐项动作、1000 项虚拟预检和错误重试。
+- [x] 同步 README、产品需求、技术架构、UI 系统、路线图与专项交付记录。
+- [x] 完成自动门禁；真实 Tauri 导入导出与亮暗主题按专项 `deliverable.md` 留待人工验收。
+
+专项计划：`scripts/work/2026-09-02-prompt-import-export/task_plan.md`

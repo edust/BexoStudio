@@ -13,14 +13,16 @@ use crate::{
         ensure_absolute_directory, AdapterAvailability, DeleteResult, LaunchTaskRecord,
         OpenWorkspaceInEditorResult, OpenWorkspaceTerminalResult, ProjectRecord,
         ReorderLaunchTasksInput, ReorderWorkspacesInput, RunWorkspaceTerminalCommandResult,
-        RunWorkspaceTerminalCommandsResult, UpsertLaunchTaskInput, UpsertProjectInput,
-        UpsertWorkspaceInput, WorkspaceRecord,
+        RunWorkspaceTerminalCommandsResult, UpdateWorkspaceDescriptionInput, UpsertLaunchTaskInput,
+        UpsertProjectInput, UpsertWorkspaceInput, WorkspaceRecord,
     },
     error::{AppError, AppResult},
     persistence::{
         delete_launch_task, delete_workspace, list_launch_tasks, list_workspaces,
-        register_workspace_folder, remove_workspace_registration, reorder_launch_tasks,
-        reorder_workspaces, upsert_launch_task, upsert_project, upsert_workspace, Database,
+        register_workspace_folder, register_workspace_folder_with_description,
+        remove_workspace_registration, reorder_launch_tasks, reorder_workspaces,
+        update_workspace_description, upsert_launch_task, upsert_project, upsert_workspace,
+        Database,
     },
 };
 
@@ -53,6 +55,17 @@ impl WorkspaceService {
             .await
     }
 
+    pub async fn update_workspace_description(
+        &self,
+        input: UpdateWorkspaceDescriptionInput,
+    ) -> AppResult<WorkspaceRecord> {
+        self.database
+            .write("update_workspace_description", move |connection| {
+                update_workspace_description(connection, input)
+            })
+            .await
+    }
+
     pub async fn reorder_workspaces(
         &self,
         input: ReorderWorkspacesInput,
@@ -76,6 +89,18 @@ impl WorkspaceService {
         self.database
             .write("register_workspace_folder", move |connection| {
                 register_workspace_folder(connection, path)
+            })
+            .await
+    }
+
+    pub async fn register_workspace_folder_with_description(
+        &self,
+        path: String,
+        description: Option<String>,
+    ) -> AppResult<WorkspaceRecord> {
+        self.database
+            .write("register_workspace_folder", move |connection| {
+                register_workspace_folder_with_description(connection, path, description)
             })
             .await
     }
@@ -897,8 +922,8 @@ mod tests {
 
     use crate::domain::{
         AppPreferences, DiagnosticsPreferences, IdePreferences, TerminalPreferences,
-        TrayPreferences, UpsertLaunchTaskInput, UpsertProjectInput, UpsertWorkspaceInput,
-        WorkspacePreferences,
+        TrayPreferences, UpdateWorkspaceDescriptionInput, UpsertLaunchTaskInput,
+        UpsertProjectInput, UpsertWorkspaceInput, WorkspacePreferences,
     };
 
     use super::{build_terminal_command_line, strip_windows_verbatim_prefix, WorkspaceService};
@@ -945,6 +970,19 @@ mod tests {
             .expect("update workspace");
 
         assert_eq!(updated_workspace.name, "Workspace Alpha Updated");
+
+        let note_updated_workspace = service
+            .update_workspace_description(UpdateWorkspaceDescriptionInput {
+                workspace_id: workspace.id.clone(),
+                description: "用于验证备注单字段更新".into(),
+            })
+            .await
+            .expect("update workspace description");
+
+        assert_eq!(
+            note_updated_workspace.description.as_deref(),
+            Some("用于验证备注单字段更新")
+        );
 
         let project_directory =
             env::temp_dir().join(format!("bexo-project-{}", uuid::Uuid::new_v4()));
@@ -998,6 +1036,10 @@ mod tests {
 
         let workspaces = service.list_workspaces().await.expect("list workspaces");
         assert_eq!(workspaces.len(), 1);
+        assert_eq!(
+            workspaces[0].description.as_deref(),
+            Some("用于验证备注单字段更新")
+        );
         assert_eq!(workspaces[0].projects.len(), 1);
         assert_eq!(workspaces[0].projects[0].id, project.id);
         assert_eq!(workspaces[0].projects[0].launch_tasks.len(), 1);
@@ -1014,10 +1056,17 @@ mod tests {
         fs::create_dir_all(&project_directory).expect("create workspace directory");
 
         let workspace = service
-            .register_workspace_folder(project_directory.display().to_string())
+            .register_workspace_folder_with_description(
+                project_directory.display().to_string(),
+                Some("注册时写入的项目备注".into()),
+            )
             .await
             .expect("register workspace folder");
 
+        assert_eq!(
+            workspace.description.as_deref(),
+            Some("注册时写入的项目备注")
+        );
         assert_eq!(workspace.projects.len(), 1);
         assert_eq!(
             workspace.projects[0].path,

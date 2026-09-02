@@ -13,6 +13,7 @@ const SnapshotsPage = lazy(() => import("@/pages/snapshots-page"));
 const ProfilesPage = lazy(() => import("@/pages/profiles-page"));
 const LogsPage = lazy(() => import("@/pages/logs-page"));
 const SettingsPage = lazy(() => import("@/pages/settings-page"));
+const OssPage = lazy(() => import("@/features/oss/oss-page"));
 
 function RouterFallback() {
   return (
@@ -41,6 +42,7 @@ const router = createBrowserRouter([
     element: <AppShell />,
     children: [
       { index: true, element: withFallback(<HomePage />) },
+      { path: "oss", element: withFallback(<OssPage />) },
       { path: "history", element: withFallback(<HistoryPage />) },
       { path: "codex-auth", element: withFallback(<CodexAuthPage />) },
       { path: "prompts", element: withFallback(<PromptsPage />) },

@@ -8,6 +8,15 @@ pub struct ListCodexHistorySessionsInput {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ListCodexHistorySessionsPageInput {
+    pub cursor: Option<String>,
+    pub limit: Option<usize>,
+    pub workspace_id: Option<String>,
+    pub query: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CodexHistoryMessagesInput {
     pub workspace_id: Option<String>,
     pub source_path: String,
@@ -33,9 +42,11 @@ pub struct CodexHistorySessionsResponse {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CodexHistoryGlobalSessionsResponse {
+pub struct CodexHistoryGlobalSessionsPage {
     pub codex_roots: Vec<String>,
     pub sessions: Vec<CodexHistorySession>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

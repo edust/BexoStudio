@@ -39,6 +39,55 @@ CREATE TABLE IF NOT EXISTS codex_auth_profiles (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS oss_accounts (
+  id TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL UNIQUE,
+  access_key_id_hint TEXT NOT NULL,
+  credential_ref TEXT NOT NULL UNIQUE,
+  last_probe_status TEXT NOT NULL DEFAULT 'unknown',
+  last_probe_error TEXT,
+  last_probe_at TEXT,
+  is_disabled INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS oss_targets (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  bucket TEXT NOT NULL,
+  region TEXT NOT NULL,
+  endpoint TEXT NOT NULL,
+  prefix TEXT NOT NULL DEFAULT '',
+  is_default INTEGER NOT NULL DEFAULT 0,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(account_id, bucket, endpoint, prefix),
+  FOREIGN KEY(account_id) REFERENCES oss_accounts(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS oss_transfer_tasks (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  object_key TEXT NOT NULL,
+  local_path TEXT NOT NULL,
+  status TEXT NOT NULL,
+  bytes_completed INTEGER NOT NULL DEFAULT 0,
+  total_bytes INTEGER NOT NULL DEFAULT 0,
+  upload_id TEXT,
+  checkpoint_json TEXT,
+  last_error_code TEXT,
+  last_error_message TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(account_id) REFERENCES oss_accounts(id) ON DELETE CASCADE,
+  FOREIGN KEY(target_id) REFERENCES oss_targets(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS prompts (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
@@ -138,6 +187,12 @@ CREATE INDEX IF NOT EXISTS idx_restore_run_tasks_restore_run_id
 
 CREATE INDEX IF NOT EXISTS idx_codex_auth_profiles_active_updated
   ON codex_auth_profiles(is_active DESC, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_oss_targets_account_sort
+  ON oss_targets(account_id, is_default DESC, sort_order ASC, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_oss_transfer_tasks_status_updated
+  ON oss_transfer_tasks(status, updated_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_prompts_sort_order
   ON prompts(sort_order ASC, created_at ASC, id ASC);

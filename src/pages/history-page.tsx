@@ -1,5 +1,5 @@
 import { ReloadOutlined, SearchOutlined } from "@ant-design/icons";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Alert, Button, Checkbox, Empty, Input, Select, Spin, Tag, Tooltip, Typography } from "antd";
 import {
   useCallback,
@@ -9,8 +9,8 @@ import {
   useState,
   type CSSProperties,
   type ReactNode,
+  type UIEvent,
 } from "react";
-import { toast } from "sonner";
 
 import { CodexHistoryMessageBlock } from "@/features/codex-history/codex-history-message-block";
 import { filterCodexHistoryMessages } from "@/features/codex-history/codex-history-message-rules";
@@ -23,11 +23,14 @@ import {
   listAllCodexHistorySessions,
   listWorkspaces,
 } from "@/lib/command-client";
-import type { CodexHistoryMessage, CodexHistorySession, WorkspaceRecord } from "@/types/backend";
+import type { CodexHistoryMessage, CodexHistorySession } from "@/types/backend";
 
 const MESSAGE_PAGE_SIZE = 40;
+const SESSION_PAGE_SIZE = 10;
 const SESSION_ROW_HEIGHT = 92;
 const SESSION_OVERSCAN = 8;
+const SESSION_LOAD_THRESHOLD = 120;
+const HISTORY_SEARCH_DEBOUNCE_MS = 250;
 
 type ScrollRestoreState = {
   previousHeight: number;
@@ -37,7 +40,9 @@ type ScrollRestoreState = {
 export default function HistoryPage() {
   const desktopRuntimeAvailable = hasDesktopRuntime();
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [workspaceFilter, setWorkspaceFilter] = useState("all");
+  const [historyRefreshNonce, setHistoryRefreshNonce] = useState(0);
   const [selectedSourcePath, setSelectedSourcePath] = useState<string | null>(null);
   const [messages, setMessages] = useState<CodexHistoryMessage[]>([]);
   const [olderCursor, setOlderCursor] = useState<string | null>(null);
@@ -58,9 +63,23 @@ export default function HistoryPage() {
   const codexHistoryViewPreferences =
     useCodexHistoryViewPreferences(desktopRuntimeAvailable);
 
-  const sessionsQuery = useQuery({
-    queryKey: ["codex-history-global-sessions"],
-    queryFn: listAllCodexHistorySessions,
+  const sessionsQuery = useInfiniteQuery({
+    queryKey: [
+      "codex-history-global-sessions",
+      workspaceFilter,
+      debouncedQuery,
+      historyRefreshNonce,
+    ],
+    queryFn: ({ pageParam }) =>
+      listAllCodexHistorySessions({
+        cursor: pageParam,
+        limit: SESSION_PAGE_SIZE,
+        query: debouncedQuery || null,
+        workspaceId: workspaceFilter === "all" ? null : workspaceFilter,
+      }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) =>
+      lastPage.hasMore ? lastPage.nextCursor ?? undefined : undefined,
     enabled: desktopRuntimeAvailable,
     staleTime: 15_000,
   });
@@ -72,45 +91,17 @@ export default function HistoryPage() {
   });
 
   const workspaces = workspacesQuery.data ?? [];
-  const selectedWorkspace = useMemo(
-    () => workspaces.find((workspace) => workspace.id === workspaceFilter) ?? null,
-    [workspaceFilter, workspaces],
+  const sessions = useMemo(
+    () => sessionsQuery.data?.pages.flatMap((page) => page.sessions) ?? [],
+    [sessionsQuery.data],
   );
-  const selectedWorkspacePath = selectedWorkspace ? resolveWorkspacePath(selectedWorkspace) : "";
-
-  const filteredSessions = useMemo(() => {
-    const sessions = sessionsQuery.data?.sessions ?? [];
-    const normalizedQuery = query.trim().toLowerCase();
-
-    return sessions.filter((session) => {
-      if (selectedWorkspacePath && !pathBelongsToRoot(session.projectDir, selectedWorkspacePath)) {
-        return false;
-      }
-
-      if (!normalizedQuery) {
-        return true;
-      }
-
-      const searchable = [
-        session.title,
-        session.summary,
-        session.projectDir,
-        session.sessionId,
-        session.sourcePath,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return searchable.includes(normalizedQuery);
-    });
-  }, [query, selectedWorkspacePath, sessionsQuery.data?.sessions]);
 
   const selectedSession = useMemo(() => {
     if (!selectedSourcePath) {
       return null;
     }
-    return filteredSessions.find((session) => session.sourcePath === selectedSourcePath) ?? null;
-  }, [filteredSessions, selectedSourcePath]);
+    return sessions.find((session) => session.sourcePath === selectedSourcePath) ?? null;
+  }, [selectedSourcePath, sessions]);
 
   const sessionVisibleRange = useMemo(() => {
     const viewportHeight = sessionViewportHeight || 520;
@@ -119,15 +110,15 @@ export default function HistoryPage() {
       Math.floor(sessionScrollTop / SESSION_ROW_HEIGHT) - SESSION_OVERSCAN,
     );
     const end = Math.min(
-      filteredSessions.length,
+      sessions.length,
       Math.ceil((sessionScrollTop + viewportHeight) / SESSION_ROW_HEIGHT) + SESSION_OVERSCAN,
     );
     return { start, end };
-  }, [filteredSessions.length, sessionScrollTop, sessionViewportHeight]);
+  }, [sessions.length, sessionScrollTop, sessionViewportHeight]);
 
   const visibleSessions = useMemo(
-    () => filteredSessions.slice(sessionVisibleRange.start, sessionVisibleRange.end),
-    [filteredSessions, sessionVisibleRange.end, sessionVisibleRange.start],
+    () => sessions.slice(sessionVisibleRange.start, sessionVisibleRange.end),
+    [sessionVisibleRange.end, sessionVisibleRange.start, sessions],
   );
 
   const visibleMessages = useMemo(
@@ -153,14 +144,28 @@ export default function HistoryPage() {
   }, []);
 
   useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedQuery(query.trim());
+    }, HISTORY_SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  useEffect(() => {
+    setSessionScrollTop(0);
+    if (sessionListRef.current) {
+      sessionListRef.current.scrollTop = 0;
+    }
+  }, [debouncedQuery, historyRefreshNonce, workspaceFilter]);
+
+  useEffect(() => {
     const stillVisible =
       selectedSourcePath &&
-      filteredSessions.some((session) => session.sourcePath === selectedSourcePath);
+      sessions.some((session) => session.sourcePath === selectedSourcePath);
     if (stillVisible) {
       return;
     }
-    setSelectedSourcePath(filteredSessions[0]?.sourcePath ?? null);
-  }, [filteredSessions, selectedSourcePath]);
+    setSelectedSourcePath(sessions[0]?.sourcePath ?? null);
+  }, [selectedSourcePath, sessions]);
 
   useEffect(() => {
     if (!selectedSession || !desktopRuntimeAvailable) {
@@ -298,16 +303,36 @@ export default function HistoryPage() {
     setMessageReloadNonce((current) => current + 1);
   }, [hasMoreMessages, loadOlderMessages, messages.length, olderCursor]);
 
-  const handleRefresh = useCallback(async () => {
-    try {
-      await sessionsQuery.refetch();
-    } catch (error) {
-      toast.error(getErrorSummary(error).message);
+  const loadMoreSessions = useCallback(() => {
+    if (!sessionsQuery.hasNextPage || sessionsQuery.isFetchingNextPage) {
+      return;
     }
-  }, [sessionsQuery]);
+    void sessionsQuery.fetchNextPage();
+  }, [sessionsQuery.fetchNextPage, sessionsQuery.hasNextPage, sessionsQuery.isFetchingNextPage]);
 
-  const totalSessions = sessionsQuery.data?.sessions.length ?? 0;
-  const codexRootCount = sessionsQuery.data?.codexRoots.length ?? 0;
+  const handleSessionListScroll = useCallback(
+    (event: UIEvent<HTMLDivElement>) => {
+      const element = event.currentTarget;
+      setSessionScrollTop(element.scrollTop);
+      const distanceToBottom =
+        element.scrollHeight - element.scrollTop - element.clientHeight;
+      if (distanceToBottom <= SESSION_LOAD_THRESHOLD) {
+        loadMoreSessions();
+      }
+    },
+    [loadMoreSessions],
+  );
+
+  const handleRefresh = useCallback(() => {
+    setHistoryRefreshNonce((current) => current + 1);
+    setSessionScrollTop(0);
+    if (sessionListRef.current) {
+      sessionListRef.current.scrollTop = 0;
+    }
+  }, []);
+
+  const loadedSessionCount = sessions.length;
+  const codexRootCount = sessionsQuery.data?.pages[0]?.codexRoots.length ?? 0;
 
   if (!desktopRuntimeAvailable) {
     return (
@@ -338,7 +363,9 @@ export default function HistoryPage() {
               显示技术项
             </Checkbox>
             <Tag bordered={false} className="m-0 rounded-[6px] bg-[#eef6fb] text-[#12718f]">
-              {filteredSessions.length} / {totalSessions} sessions
+              {sessionsQuery.hasNextPage
+                ? `已加载 ${loadedSessionCount} 条`
+                : `共 ${loadedSessionCount} 条 sessions`}
             </Tag>
             <Tag bordered={false} className="m-0 rounded-[6px] bg-[#f2f4f7] text-[#475467]">
               {codexRootCount} roots
@@ -347,8 +374,8 @@ export default function HistoryPage() {
               <Button
                 className="!h-8 !w-8 !min-w-8 !p-0"
                 icon={<ReloadOutlined />}
-                loading={sessionsQuery.isFetching}
-                onClick={() => void handleRefresh()}
+                loading={sessionsQuery.isFetching && !sessionsQuery.isFetchingNextPage}
+                onClick={handleRefresh}
               />
             </Tooltip>
           </div>
@@ -397,23 +424,23 @@ export default function HistoryPage() {
             <CenteredState>
               <Spin />
             </CenteredState>
-          ) : sessionsQuery.isError ? (
+          ) : sessionsQuery.isError && !sessions.length ? (
             <div className="p-4">
               <Alert message={getErrorSummary(sessionsQuery.error).message} showIcon type="error" />
             </div>
-          ) : !filteredSessions.length ? (
+          ) : !sessions.length && !sessionsQuery.hasNextPage ? (
             <CenteredState>
               <Empty description="没有匹配的 Codex session" image={Empty.PRESENTED_IMAGE_SIMPLE} />
             </CenteredState>
           ) : (
             <div
               className="h-full overflow-y-auto px-2 py-2"
-              onScroll={(event) => setSessionScrollTop(event.currentTarget.scrollTop)}
+              onScroll={handleSessionListScroll}
               ref={sessionListRef}
             >
               <div
                 className="relative"
-                style={{ height: filteredSessions.length * SESSION_ROW_HEIGHT }}
+                style={{ height: sessions.length * SESSION_ROW_HEIGHT }}
               >
                 {visibleSessions.map((session, index) => {
                   const absoluteIndex = sessionVisibleRange.start + index;
@@ -430,6 +457,31 @@ export default function HistoryPage() {
                     />
                   );
                 })}
+              </div>
+              <div className="flex min-h-[44px] items-center justify-center py-2">
+                {sessionsQuery.isError ? (
+                  <Alert
+                    action={
+                      <Button onClick={loadMoreSessions} size="small">
+                        重试
+                      </Button>
+                    }
+                    className="!mb-0"
+                    message={getErrorSummary(sessionsQuery.error).message}
+                    showIcon
+                    type="error"
+                  />
+                ) : sessionsQuery.isFetchingNextPage ? (
+                  <Spin size="small" />
+                ) : sessionsQuery.hasNextPage ? (
+                  <Button onClick={loadMoreSessions} size="small" type="link">
+                    继续加载 10 条
+                  </Button>
+                ) : (
+                  <Typography.Text className="text-[11px] text-[#98a2b3]">
+                    已加载全部 {loadedSessionCount} 条 session
+                  </Typography.Text>
+                )}
               </div>
             </div>
           )}
@@ -606,32 +658,6 @@ function SessionListItem({
       </div>
     </button>
   );
-}
-
-function resolveWorkspacePath(workspace: WorkspaceRecord) {
-  return workspace.projects[0]?.path?.trim() ?? "";
-}
-
-function pathBelongsToRoot(path: string | null | undefined, root: string) {
-  const normalizedPath = normalizePath(path ?? "");
-  const normalizedRoot = normalizePath(root);
-  if (!normalizedPath || !normalizedRoot) {
-    return false;
-  }
-  return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}\\`);
-}
-
-function normalizePath(path: string) {
-  let value = path.trim().replaceAll("/", "\\");
-  if (value.startsWith("\\\\?\\UNC\\")) {
-    value = `\\\\${value.slice("\\\\?\\UNC\\".length)}`;
-  } else if (value.startsWith("\\\\?\\")) {
-    value = value.slice("\\\\?\\".length);
-  }
-  while (value.length > 3 && value.endsWith("\\")) {
-    value = value.slice(0, -1);
-  }
-  return value.toLowerCase();
 }
 
 function getSessionTitle(session: CodexHistorySession) {

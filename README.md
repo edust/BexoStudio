@@ -118,11 +118,18 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
     - `新建工作区`
     - `全选工作区`
     - `运行工作区`
+    - `导入项目列表`
+    - `导出项目列表`
   - 通过原生目录选择器注册工作区文件夹
   - 支持工作区多选勾选
   - 工作区描述优先展示目录路径
   - 列表显示最近运行时间
   - 列表支持安全移除，并明确“不删除磁盘上的文件夹”
+  - 工作区列表支持版本化 `.bexo-workspaces.json` 迁移：
+    - 导出全部工作区、项目、启动任务和置顶状态，不包含凭据、日志、快照或临时选择状态
+    - 导入先预检本机目录、重复路径和现有工作区，再由用户选择新建、跳过或显式更新
+    - 缺失目录可逐项重新定位；目标机缺少 Codex Profile 或自定义编辑器时会解除对应绑定并明确警告
+    - 缺失目录必须重新定位；应用前校验文件 SHA-256，写库使用单个 SQLite 事务
   - 工作区项支持：
     - 只读查看该工作区路径下的 Codex 历史会话
     - 复制绝对路径
@@ -131,6 +138,8 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
       - 默认值初始为 `VS Code`
       - 可切换为 `JetBrains IDE`
       - 默认编辑器选择会持久化保存
+    - 为工作区添加、编辑和清空项目备注
+    - 卡片备注单行预览，工作区搜索同时匹配名称、路径和备注
 - Home Content Workspace Detail：
   - 首页右侧 `Content View` 已移除示例块
   - 点击左侧工作区后，右侧显示资源浏览器、只读文件夹路径与终端命令组
@@ -167,6 +176,7 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
   - 左侧主导航提供全局 Session/History 入口
   - 页面只读展示本机 Codex sessions
   - 支持按已注册工作区路径筛选
+  - 首屏加载 10 条，滚动到底部自动追加 10 条；搜索和筛选由后端分页处理
   - 点击 session 后读取最近对话，向上滚动加载更早消息
 - Codex Auth：
   - 左侧主导航提供 Codex 授权管理入口
@@ -179,6 +189,9 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
   - 左侧主导航提供常用 Prompts 一级入口
   - SQLite 本地保存标题、完整正文与用户排序
   - 支持新增、编辑、删除、搜索、拖拽/键盘排序
+  - 支持将全部已保存 Prompt 导出为版本化 JSON，并通过预检、冲突选择和单事务合并导入
+  - 导入按稳定 UUID 判断更新；相同标题不会被猜测覆盖，重复导入保持幂等，新记录按文件顺序追加
+  - 导出不包含未保存草稿、快捷粘贴热键、应用偏好或凭据；完整正文属于敏感信息，保存前会明确提示
   - 列表和编辑区均可一键复制，真实写入剪贴板后显示应用内通知
   - 未保存修改在切换条目或离开页面前会明确确认
   - 支持 5 个可配置的全局快速粘贴槽位，默认 `Ctrl+Alt+Shift+1` 到 `Ctrl+Alt+Shift+5`
@@ -198,6 +211,7 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
   - 工作区/终端任务排序使用 Rust 单事务批量命令，不再因前端循环写入产生部分提交
   - Tauri capability 按窗口最小授权，生产/开发 CSP 分离；截图预览协议仅允许 Overlay 窗口
   - Ant Design、Icons 与 Sonner runtime style 继承 Tauri production nonce，避免安装版在 CSP 下退化为裸控件
+  - Windows 下所有静态与动态 WebView2 统一禁用 GPU、GPU 合成和软件栅格器，并保留 Wry 默认兼容参数，规避本机硬件加速路径的稳定性风险
   - Overlay/History 已拆为懒加载 chunk，关键热键、runtime state 与 listener lifecycle 有自动测试
 - Dev Inspector Baseline：
   - 已接入 `code-inspector-plugin`
@@ -337,3 +351,19 @@ npm run release:build
 - [findings.md](findings.md)
 - [progress.md](progress.md)
 - [work blueprint](scripts/work/2026-03-09-bexostudio-blueprint/task_plan.md)
+
+## OSS 文件管理
+
+当前已接入 Windows-first 的阿里云 OSS 文件管理模块：
+
+- 支持多个手动录入的 RAM AccessKey 账号；Secret 只保存于 Windows Credential Manager。
+- 支持手动绑定多个 Bucket、Region、Endpoint 和对象前缀；第一版不创建、删除或修改 Bucket 配置。
+- 支持对象分页浏览、前缀导航、新建文件夹、上传、下载、删除和同 Bucket 重命名；文件夹以 `/` 结尾的 0 字节对象表示。
+- 上传入口支持选择器多选和 Windows 资源管理器多文件拖放；每个文件独立入队，批次采用有界并发，单项失败不会阻塞其他文件。
+- 传输队列显示账号、Bucket、Region、Object Key、本地路径、数值进度、速度、预计剩余时间和错误码；上传完成后自动刷新当前对象目录。
+- 大文件使用 Multipart Upload / Range 下载，保存 checkpoint，支持取消、恢复、重启后继续和清理失败提示；单 PUT 取消在远端结果未知时进入“待确认”，避免误报已取消。
+- 文件对象支持右键快捷菜单：下载文件、同 Bucket 复制文件、复制 15 分钟有效的私有下载 URL、删除；删除仍需二次确认，复制目标 Key 会阻止覆盖已有对象。
+- 预签名下载 URL 只在本次操作中生成并复制，不写入 SQLite、日志、传输事件或应用状态；URL 生成由 Rust V4 signer 完成，Secret 不离开 Credential Manager。
+- 前端不直连 OSS、不持有 Secret；Rust 统一负责 V4 签名、超时、有限重试、路径校验和传输状态事件。
+
+详细实现记录见 [OSS 文件管理交付清单](scripts/work/2026-07-12-oss-file-manager/deliverable.md)、[新建文件夹交付清单](scripts/work/2026-07-12-oss-create-folder/deliverable.md)、[传输体验交付清单](scripts/work/2026-07-12-oss-transfer-ux/deliverable.md) 和 [对象右键菜单交付清单](scripts/work/2026-07-12-oss-object-context-menu/deliverable.md)。

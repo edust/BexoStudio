@@ -2134,33 +2134,38 @@ fn prepare_overlay_window<R: Runtime>(
         return Ok(window);
     }
 
-    let window = WebviewWindowBuilder::new(
+    let window_builder = WebviewWindowBuilder::new(
         app,
         SCREENSHOT_OVERLAY_WINDOW_LABEL,
         WebviewUrl::App(SCREENSHOT_OVERLAY_URL.into()),
-    )
-    .title("")
-    .inner_size(
-        f64::from(session.display_width),
-        f64::from(session.display_height),
-    )
-    .position(f64::from(session.display_x), f64::from(session.display_y))
-    .decorations(false)
-    .resizable(false)
-    .transparent(true)
-    .background_color(OVERLAY_TRANSPARENT_BG)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .visible(false)
-    .focused(false)
-    .maximizable(false)
-    .minimizable(false)
-    .shadow(false)
-    .build()
-    .map_err(|error| {
-        AppError::new("SCREENSHOT_OVERLAY_CREATE_FAILED", "创建截图窗口失败")
-            .with_detail("reason", error.to_string())
-    })?;
+    );
+    #[cfg(target_os = "windows")]
+    let window_builder =
+        window_builder.additional_browser_args(super::WINDOWS_WEBVIEW2_BROWSER_ARGS);
+
+    let window = window_builder
+        .title("")
+        .inner_size(
+            f64::from(session.display_width),
+            f64::from(session.display_height),
+        )
+        .position(f64::from(session.display_x), f64::from(session.display_y))
+        .decorations(false)
+        .resizable(false)
+        .transparent(true)
+        .background_color(OVERLAY_TRANSPARENT_BG)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .visible(false)
+        .focused(false)
+        .maximizable(false)
+        .minimizable(false)
+        .shadow(false)
+        .build()
+        .map_err(|error| {
+            AppError::new("SCREENSHOT_OVERLAY_CREATE_FAILED", "创建截图窗口失败")
+                .with_detail("reason", error.to_string())
+        })?;
 
     lock_overlay_native_window_style(&window)?;
     set_overlay_window_geometry(&window, session)?;

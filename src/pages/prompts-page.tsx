@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { App } from "antd";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -13,19 +14,22 @@ import {
   type PromptDraftErrors,
 } from "@/features/prompts/prompt-model";
 import { PromptSidebar } from "@/features/prompts/prompt-sidebar";
+import { PromptTransferDialog } from "@/features/prompts/prompt-transfer-dialog";
+import { buildPromptExportFilename } from "@/features/prompts/prompt-transfer-model";
 import { buildPromptQuickPasteBindingsByPromptId } from "@/features/prompts/prompt-quick-paste";
 import { usePromptNavigationGuard } from "@/features/prompts/use-prompt-navigation-guard";
 import { copyTextToClipboard, getClipboardErrorMessage } from "@/lib/clipboard";
 import { getErrorSummary, hasDesktopRuntime } from "@/lib/command-client";
 import {
   deletePrompt,
+  exportPromptList,
   listPrompts,
   promptsQueryKey,
   reorderPrompts,
   upsertPrompt,
 } from "@/queries/prompts";
 import { appPreferencesQueryKey, getAppPreferences } from "@/queries/preferences";
-import type { PromptRecord } from "@/types/backend";
+import type { PromptImportApplyResult, PromptRecord } from "@/types/backend";
 
 export default function PromptsPage() {
   const { modal } = App.useApp();
@@ -36,6 +40,7 @@ export default function PromptsPage() {
   const [draft, setDraft] = useState<PromptDraft | null>(null);
   const [draftErrors, setDraftErrors] = useState<PromptDraftErrors>({});
   const [operationError, setOperationError] = useState<string | null>(null);
+  const [importSourcePath, setImportSourcePath] = useState<string | null>(null);
 
   const promptsQuery = useQuery({
     queryKey: promptsQueryKey,
@@ -157,6 +162,8 @@ export default function PromptsPage() {
     },
   });
 
+  const exportMutation = useMutation({ mutationFn: exportPromptList });
+
   const busy = saveMutation.isPending || deleteMutation.isPending || reorderMutation.isPending;
 
   useEffect(() => {
@@ -182,9 +189,9 @@ export default function PromptsPage() {
     setOperationError(null);
   }
 
-  function requestTransition(action: () => void) {
+  function requestTransition(action: () => void | Promise<void>) {
     if (!dirty) {
-      action();
+      void action();
       return;
     }
     modal.confirm({
@@ -269,43 +276,153 @@ export default function PromptsPage() {
     }
   }
 
+  function discardDraftForImport() {
+    if (sourcePrompt) {
+      openPrompt(sourcePrompt);
+      return;
+    }
+    setSelectedId(null);
+    setSourcePrompt(null);
+    setDraft(null);
+    setDraftErrors({});
+    setOperationError(null);
+  }
+
+  function handleImport() {
+    if (!desktopRuntimeAvailable) {
+      toast.error("请在 Bexo Studio 桌面应用中导入 Prompts");
+      return;
+    }
+    void (async () => {
+      try {
+        const selected = await open({
+          directory: false,
+          multiple: false,
+          title: "选择 Bexo Studio Prompts 文件",
+          filters: [{ name: "Bexo Studio Prompts", extensions: ["json"] }],
+        });
+        if (typeof selected === "string") {
+          requestTransition(() => {
+            discardDraftForImport();
+            setImportSourcePath(selected);
+          });
+        }
+      } catch (error) {
+        const resolved = getErrorSummary(error);
+        toast.error("无法选择 Prompts 文件", {
+          description: `${resolved.message}（${resolved.code}）`,
+        });
+      }
+    })();
+  }
+
+  function handleExport() {
+    if (!desktopRuntimeAvailable) {
+      toast.error("请在 Bexo Studio 桌面应用中导出 Prompts");
+      return;
+    }
+    modal.confirm({
+      title: "导出全部已保存 Prompts？",
+      content: (
+        <div className="space-y-2 text-[12px] leading-5">
+          <p>导出文件包含每条 Prompt 的完整正文，可能含有敏感信息。请妥善保存和传输。</p>
+          <p>快捷粘贴热键、应用偏好和凭据不会导出。</p>
+          {dirty ? (
+            <p className="text-warning">当前未保存的草稿或修改不会进入导出文件。</p>
+          ) : null}
+        </div>
+      ),
+      okText: "选择保存位置",
+      cancelText: "取消",
+      onOk: async () => {
+        try {
+          const destinationPath = await save({
+            defaultPath: buildPromptExportFilename(),
+            title: "导出全部 Prompts",
+            filters: [{ name: "Bexo Studio Prompts", extensions: ["json"] }],
+          });
+          if (typeof destinationPath !== "string") {
+            return;
+          }
+          const result = await exportMutation.mutateAsync({ destinationPath });
+          toast.success("Prompts 已导出", {
+            description: `已写入 ${result.promptCount} 条记录（${result.fileSizeBytes.toLocaleString()} 字节）`,
+          });
+        } catch (error) {
+          const resolved = getErrorSummary(error);
+          toast.error("导出 Prompts 失败", {
+            description: `${resolved.message}（${resolved.code}）`,
+          });
+          throw error;
+        }
+      },
+    });
+  }
+
+  function handleImported(result: PromptImportApplyResult) {
+    queryClient.setQueryData<PromptRecord[]>(promptsQueryKey, result.prompts);
+    const activePrompt =
+      result.prompts.find((prompt) => prompt.id === selectedId) ?? result.prompts[0] ?? null;
+    if (activePrompt) {
+      openPrompt(activePrompt);
+    } else {
+      setSelectedId(null);
+      setSourcePrompt(null);
+      setDraft(null);
+      setDraftErrors({});
+      setOperationError(null);
+    }
+  }
+
   const queryErrorMessage = promptsQuery.error
     ? getErrorSummary(promptsQuery.error).message
     : null;
-  const pageBusy = busy || promptsQuery.isLoading;
+  const transferBusy = exportMutation.isPending || Boolean(importSourcePath);
+  const pageBusy = busy || promptsQuery.isLoading || transferBusy;
   return (
-    <div className="grid h-full min-h-0 grid-cols-[320px_minmax(0,1fr)] overflow-hidden bg-panel">
-      <PromptSidebar
-        busy={pageBusy}
-        desktopRuntimeAvailable={desktopRuntimeAvailable}
-        errorMessage={queryErrorMessage}
-        loading={promptsQuery.isLoading}
-        onCopy={handleCopy}
-        onCreate={handleCreate}
-        onRefresh={async () => {
-          await promptsQuery.refetch();
-        }}
-        onReorder={async (nextPrompts) => {
-          await reorderMutation.mutateAsync(nextPrompts);
-        }}
-        onSelect={handleSelect}
-        prompts={prompts}
-        quickPasteBindingsByPromptId={quickPasteBindingsByPromptId}
-        refreshing={promptsQuery.isFetching}
-        selectedId={selectedId}
+    <>
+      <div className="grid h-full min-h-0 grid-cols-[320px_minmax(0,1fr)] overflow-hidden bg-panel">
+        <PromptSidebar
+          busy={pageBusy}
+          desktopRuntimeAvailable={desktopRuntimeAvailable}
+          errorMessage={queryErrorMessage}
+          loading={promptsQuery.isLoading}
+          onCopy={handleCopy}
+          onCreate={handleCreate}
+          onExport={handleExport}
+          onImport={handleImport}
+          onRefresh={async () => {
+            await promptsQuery.refetch();
+          }}
+          onReorder={async (nextPrompts) => {
+            await reorderMutation.mutateAsync(nextPrompts);
+          }}
+          onSelect={handleSelect}
+          prompts={prompts}
+          quickPasteBindingsByPromptId={quickPasteBindingsByPromptId}
+          refreshing={promptsQuery.isFetching}
+          selectedId={selectedId}
+          transferBusy={transferBusy}
+        />
+        <PromptEditor
+          busy={busy}
+          dirty={dirty}
+          draft={draft}
+          errors={draftErrors}
+          onChange={handleDraftChange}
+          onCopy={() => (draft ? handleCopy(draft) : Promise.resolve())}
+          onDelete={handleDelete}
+          onSave={handleSave}
+          operationError={operationError}
+          saving={saveMutation.isPending}
+        />
+      </div>
+      <PromptTransferDialog
+        onClose={() => setImportSourcePath(null)}
+        onImported={handleImported}
+        open={Boolean(importSourcePath)}
+        sourcePath={importSourcePath}
       />
-      <PromptEditor
-        busy={busy}
-        dirty={dirty}
-        draft={draft}
-        errors={draftErrors}
-        onChange={handleDraftChange}
-        onCopy={() => (draft ? handleCopy(draft) : Promise.resolve())}
-        onDelete={handleDelete}
-        onSave={handleSave}
-        operationError={operationError}
-        saving={saveMutation.isPending}
-      />
-    </div>
+    </>
   );
 }

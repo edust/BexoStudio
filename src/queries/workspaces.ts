@@ -8,6 +8,7 @@ import {
   upsertLaunchTask,
   upsertProject,
   upsertWorkspace,
+  updateWorkspaceDescription,
 } from "@/lib/command-client";
 
 export const workspacesQueryKey = ["workspaces"] as const;
@@ -23,4 +24,5 @@ export {
   upsertLaunchTask,
   upsertProject,
   upsertWorkspace,
+  updateWorkspaceDescription,
 };

@@ -2151,10 +2151,10 @@
           "markdownDescription": "Allows detached history windows read-only history and view preference access.\n#### This permission set includes:\n\n- `allow-get-app-preferences`\n- `allow-list-codex-history-sessions`\n- `allow-get-codex-history-messages`"
         },
         {
-          "description": "Allows the trusted main window to invoke all Bexo Studio application commands.\n#### This permission set includes:\n\n- `allow-get-bootstrap-state`\n- `allow-get-native-interaction-state`\n- `allow-update-native-interaction-exclusion-rects`\n- `allow-update-native-interaction-runtime`\n- `allow-get-app-preferences`\n- `allow-update-app-preferences`\n- `allow-get-hotkey-health`\n- `allow-retry-hotkey-registration`\n- `allow-get-codex-home-directory`\n- `allow-detect-editors-from-path`\n- `allow-open-codex-history-window`\n- `allow-list-codex-history-sessions`\n- `allow-list-all-codex-history-sessions`\n- `allow-get-codex-history-messages`\n- `allow-list-codex-auth-profiles`\n- `allow-get-codex-auth-profile-detail`\n- `allow-import-current-codex-auth-profile`\n- `allow-upsert-codex-auth-profile`\n- `allow-delete-codex-auth-profile`\n- `allow-switch-codex-auth-profile`\n- `allow-query-codex-auth-quota`\n- `allow-refresh-all-codex-auth-quotas`\n- `allow-list-prompts`\n- `allow-upsert-prompt`\n- `allow-delete-prompt`\n- `allow-reorder-prompts`\n- `allow-list-workspaces`\n- `allow-upsert-workspace`\n- `allow-reorder-workspaces`\n- `allow-delete-workspace`\n- `allow-register-workspace-folder`\n- `allow-remove-workspace-registration`\n- `allow-open-workspace-terminal`\n- `allow-open-workspace-terminal-at-path`\n- `allow-open-workspace-in-editor`\n- `allow-run-workspace-terminal-command`\n- `allow-run-workspace-terminal-commands`\n- `allow-upsert-project`\n- `allow-list-workspace-resource-children`\n- `allow-allow-workspace-resource-scope`\n- `allow-get-workspace-resource-git-statuses`\n- `allow-list-launch-tasks`\n- `allow-upsert-launch-task`\n- `allow-reorder-launch-tasks`\n- `allow-delete-launch-task`\n- `allow-list-codex-profiles`\n- `allow-upsert-codex-profile`\n- `allow-list-snapshots`\n- `allow-create-snapshot`\n- `allow-update-snapshot`\n- `allow-start-screenshot-session`\n- `allow-get-screenshot-session`\n- `allow-get-screenshot-preview-rgba`\n- `allow-get-screenshot-selection-render`\n- `allow-copy-screenshot-selection`\n- `allow-save-screenshot-selection`\n- `allow-cancel-screenshot-session`\n- `allow-preview-restore`\n- `allow-start-restore-dry-run`\n- `allow-get-restore-capabilities`\n- `allow-start-restore-run`\n- `allow-cancel-restore-run`\n- `allow-cancel-restore-action`\n- `allow-list-recent-restore-targets`\n- `allow-restore-recent-target`\n- `allow-list-restore-runs`\n- `allow-get-restore-run-detail`\n- `allow-open-log-directory`",
+          "description": "Allows the trusted main window to invoke all Bexo Studio application commands.\n#### This permission set includes:\n\n- `allow-get-bootstrap-state`\n- `allow-get-native-interaction-state`\n- `allow-update-native-interaction-exclusion-rects`\n- `allow-update-native-interaction-runtime`\n- `allow-get-app-preferences`\n- `allow-update-app-preferences`\n- `allow-get-hotkey-health`\n- `allow-retry-hotkey-registration`\n- `allow-get-codex-home-directory`\n- `allow-detect-editors-from-path`\n- `allow-open-codex-history-window`\n- `allow-list-codex-history-sessions`\n- `allow-list-all-codex-history-sessions`\n- `allow-get-codex-history-messages`\n- `allow-list-codex-auth-profiles`\n- `allow-get-codex-auth-profile-detail`\n- `allow-import-current-codex-auth-profile`\n- `allow-upsert-codex-auth-profile`\n- `allow-delete-codex-auth-profile`\n- `allow-switch-codex-auth-profile`\n- `allow-query-codex-auth-quota`\n- `allow-refresh-all-codex-auth-quotas`\n- `allow-list-prompts`\n- `allow-upsert-prompt`\n- `allow-delete-prompt`\n- `allow-reorder-prompts`\n- `allow-export-prompt-list`\n- `allow-preview-prompt-list-import`\n- `allow-apply-prompt-list-import`\n- `allow-list-workspaces`\n- `allow-upsert-workspace`\n- `allow-update-workspace-description`\n- `allow-reorder-workspaces`\n- `allow-delete-workspace`\n- `allow-register-workspace-folder`\n- `allow-remove-workspace-registration`\n- `allow-open-workspace-terminal`\n- `allow-open-workspace-terminal-at-path`\n- `allow-open-workspace-in-editor`\n- `allow-run-workspace-terminal-command`\n- `allow-run-workspace-terminal-commands`\n- `allow-upsert-project`\n- `allow-export-workspace-list`\n- `allow-preview-workspace-list-import`\n- `allow-apply-workspace-list-import`\n- `allow-list-workspace-resource-children`\n- `allow-allow-workspace-resource-scope`\n- `allow-get-workspace-resource-git-statuses`\n- `allow-list-launch-tasks`\n- `allow-upsert-launch-task`\n- `allow-reorder-launch-tasks`\n- `allow-delete-launch-task`\n- `allow-list-codex-profiles`\n- `allow-upsert-codex-profile`\n- `allow-list-oss-accounts`\n- `allow-upsert-oss-account`\n- `allow-delete-oss-account`\n- `allow-list-oss-targets`\n- `allow-upsert-oss-target`\n- `allow-delete-oss-target`\n- `allow-list-oss-objects`\n- `allow-head-oss-object`\n- `allow-get-oss-object-download-url`\n- `allow-create-oss-folder`\n- `allow-test-oss-target`\n- `allow-delete-oss-objects`\n- `allow-copy-oss-object`\n- `allow-list-oss-transfer-tasks`\n- `allow-start-oss-upload`\n- `allow-start-oss-download`\n- `allow-resume-oss-transfer`\n- `allow-cancel-oss-transfer`\n- `allow-confirm-oss-transfer`\n- `allow-list-snapshots`\n- `allow-create-snapshot`\n- `allow-update-snapshot`\n- `allow-start-screenshot-session`\n- `allow-get-screenshot-session`\n- `allow-get-screenshot-preview-rgba`\n- `allow-get-screenshot-selection-render`\n- `allow-copy-screenshot-selection`\n- `allow-save-screenshot-selection`\n- `allow-cancel-screenshot-session`\n- `allow-preview-restore`\n- `allow-start-restore-dry-run`\n- `allow-get-restore-capabilities`\n- `allow-start-restore-run`\n- `allow-cancel-restore-run`\n- `allow-cancel-restore-action`\n- `allow-list-recent-restore-targets`\n- `allow-restore-recent-target`\n- `allow-list-restore-runs`\n- `allow-get-restore-run-detail`\n- `allow-open-log-directory`",
           "type": "string",
           "const": "main-window-commands",
-          "markdownDescription": "Allows the trusted main window to invoke all Bexo Studio application commands.\n#### This permission set includes:\n\n- `allow-get-bootstrap-state`\n- `allow-get-native-interaction-state`\n- `allow-update-native-interaction-exclusion-rects`\n- `allow-update-native-interaction-runtime`\n- `allow-get-app-preferences`\n- `allow-update-app-preferences`\n- `allow-get-hotkey-health`\n- `allow-retry-hotkey-registration`\n- `allow-get-codex-home-directory`\n- `allow-detect-editors-from-path`\n- `allow-open-codex-history-window`\n- `allow-list-codex-history-sessions`\n- `allow-list-all-codex-history-sessions`\n- `allow-get-codex-history-messages`\n- `allow-list-codex-auth-profiles`\n- `allow-get-codex-auth-profile-detail`\n- `allow-import-current-codex-auth-profile`\n- `allow-upsert-codex-auth-profile`\n- `allow-delete-codex-auth-profile`\n- `allow-switch-codex-auth-profile`\n- `allow-query-codex-auth-quota`\n- `allow-refresh-all-codex-auth-quotas`\n- `allow-list-prompts`\n- `allow-upsert-prompt`\n- `allow-delete-prompt`\n- `allow-reorder-prompts`\n- `allow-list-workspaces`\n- `allow-upsert-workspace`\n- `allow-reorder-workspaces`\n- `allow-delete-workspace`\n- `allow-register-workspace-folder`\n- `allow-remove-workspace-registration`\n- `allow-open-workspace-terminal`\n- `allow-open-workspace-terminal-at-path`\n- `allow-open-workspace-in-editor`\n- `allow-run-workspace-terminal-command`\n- `allow-run-workspace-terminal-commands`\n- `allow-upsert-project`\n- `allow-list-workspace-resource-children`\n- `allow-allow-workspace-resource-scope`\n- `allow-get-workspace-resource-git-statuses`\n- `allow-list-launch-tasks`\n- `allow-upsert-launch-task`\n- `allow-reorder-launch-tasks`\n- `allow-delete-launch-task`\n- `allow-list-codex-profiles`\n- `allow-upsert-codex-profile`\n- `allow-list-snapshots`\n- `allow-create-snapshot`\n- `allow-update-snapshot`\n- `allow-start-screenshot-session`\n- `allow-get-screenshot-session`\n- `allow-get-screenshot-preview-rgba`\n- `allow-get-screenshot-selection-render`\n- `allow-copy-screenshot-selection`\n- `allow-save-screenshot-selection`\n- `allow-cancel-screenshot-session`\n- `allow-preview-restore`\n- `allow-start-restore-dry-run`\n- `allow-get-restore-capabilities`\n- `allow-start-restore-run`\n- `allow-cancel-restore-run`\n- `allow-cancel-restore-action`\n- `allow-list-recent-restore-targets`\n- `allow-restore-recent-target`\n- `allow-list-restore-runs`\n- `allow-get-restore-run-detail`\n- `allow-open-log-directory`"
+          "markdownDescription": "Allows the trusted main window to invoke all Bexo Studio application commands.\n#### This permission set includes:\n\n- `allow-get-bootstrap-state`\n- `allow-get-native-interaction-state`\n- `allow-update-native-interaction-exclusion-rects`\n- `allow-update-native-interaction-runtime`\n- `allow-get-app-preferences`\n- `allow-update-app-preferences`\n- `allow-get-hotkey-health`\n- `allow-retry-hotkey-registration`\n- `allow-get-codex-home-directory`\n- `allow-detect-editors-from-path`\n- `allow-open-codex-history-window`\n- `allow-list-codex-history-sessions`\n- `allow-list-all-codex-history-sessions`\n- `allow-get-codex-history-messages`\n- `allow-list-codex-auth-profiles`\n- `allow-get-codex-auth-profile-detail`\n- `allow-import-current-codex-auth-profile`\n- `allow-upsert-codex-auth-profile`\n- `allow-delete-codex-auth-profile`\n- `allow-switch-codex-auth-profile`\n- `allow-query-codex-auth-quota`\n- `allow-refresh-all-codex-auth-quotas`\n- `allow-list-prompts`\n- `allow-upsert-prompt`\n- `allow-delete-prompt`\n- `allow-reorder-prompts`\n- `allow-export-prompt-list`\n- `allow-preview-prompt-list-import`\n- `allow-apply-prompt-list-import`\n- `allow-list-workspaces`\n- `allow-upsert-workspace`\n- `allow-update-workspace-description`\n- `allow-reorder-workspaces`\n- `allow-delete-workspace`\n- `allow-register-workspace-folder`\n- `allow-remove-workspace-registration`\n- `allow-open-workspace-terminal`\n- `allow-open-workspace-terminal-at-path`\n- `allow-open-workspace-in-editor`\n- `allow-run-workspace-terminal-command`\n- `allow-run-workspace-terminal-commands`\n- `allow-upsert-project`\n- `allow-export-workspace-list`\n- `allow-preview-workspace-list-import`\n- `allow-apply-workspace-list-import`\n- `allow-list-workspace-resource-children`\n- `allow-allow-workspace-resource-scope`\n- `allow-get-workspace-resource-git-statuses`\n- `allow-list-launch-tasks`\n- `allow-upsert-launch-task`\n- `allow-reorder-launch-tasks`\n- `allow-delete-launch-task`\n- `allow-list-codex-profiles`\n- `allow-upsert-codex-profile`\n- `allow-list-oss-accounts`\n- `allow-upsert-oss-account`\n- `allow-delete-oss-account`\n- `allow-list-oss-targets`\n- `allow-upsert-oss-target`\n- `allow-delete-oss-target`\n- `allow-list-oss-objects`\n- `allow-head-oss-object`\n- `allow-get-oss-object-download-url`\n- `allow-create-oss-folder`\n- `allow-test-oss-target`\n- `allow-delete-oss-objects`\n- `allow-copy-oss-object`\n- `allow-list-oss-transfer-tasks`\n- `allow-start-oss-upload`\n- `allow-start-oss-download`\n- `allow-resume-oss-transfer`\n- `allow-cancel-oss-transfer`\n- `allow-confirm-oss-transfer`\n- `allow-list-snapshots`\n- `allow-create-snapshot`\n- `allow-update-snapshot`\n- `allow-start-screenshot-session`\n- `allow-get-screenshot-session`\n- `allow-get-screenshot-preview-rgba`\n- `allow-get-screenshot-selection-render`\n- `allow-copy-screenshot-selection`\n- `allow-save-screenshot-selection`\n- `allow-cancel-screenshot-session`\n- `allow-preview-restore`\n- `allow-start-restore-dry-run`\n- `allow-get-restore-capabilities`\n- `allow-start-restore-run`\n- `allow-cancel-restore-run`\n- `allow-cancel-restore-action`\n- `allow-list-recent-restore-targets`\n- `allow-restore-recent-target`\n- `allow-list-restore-runs`\n- `allow-get-restore-run-detail`\n- `allow-open-log-directory`"
         },
         {
           "description": "Allows the screenshot overlay to access only its active session and native interaction runtime.\n#### This permission set includes:\n\n- `allow-update-native-interaction-runtime`\n- `allow-get-screenshot-session`\n- `allow-get-screenshot-selection-render`\n- `allow-copy-screenshot-selection`\n- `allow-save-screenshot-selection`\n- `allow-cancel-screenshot-session`",
@@ -2167,6 +2167,24 @@
           "type": "string",
           "const": "allow-allow-workspace-resource-scope",
           "markdownDescription": "Enables the allow_workspace_resource_scope command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the apply_prompt_list_import command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-apply-prompt-list-import",
+          "markdownDescription": "Enables the apply_prompt_list_import command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the apply_workspace_list_import command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-apply-workspace-list-import",
+          "markdownDescription": "Enables the apply_workspace_list_import command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cancel_oss_transfer command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cancel-oss-transfer",
+          "markdownDescription": "Enables the cancel_oss_transfer command without any pre-configured scope."
         },
         {
           "description": "Enables the cancel_restore_action command without any pre-configured scope.",
@@ -2187,10 +2205,28 @@
           "markdownDescription": "Enables the cancel_screenshot_session command without any pre-configured scope."
         },
         {
+          "description": "Enables the confirm_oss_transfer command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-confirm-oss-transfer",
+          "markdownDescription": "Enables the confirm_oss_transfer command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the copy_oss_object command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-copy-oss-object",
+          "markdownDescription": "Enables the copy_oss_object command without any pre-configured scope."
+        },
+        {
           "description": "Enables the copy_screenshot_selection command without any pre-configured scope.",
           "type": "string",
           "const": "allow-copy-screenshot-selection",
           "markdownDescription": "Enables the copy_screenshot_selection command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the create_oss_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-create-oss-folder",
+          "markdownDescription": "Enables the create_oss_folder command without any pre-configured scope."
         },
         {
           "description": "Enables the create_snapshot command without any pre-configured scope.",
@@ -2211,6 +2247,24 @@
           "markdownDescription": "Enables the delete_launch_task command without any pre-configured scope."
         },
         {
+          "description": "Enables the delete_oss_account command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-oss-account",
+          "markdownDescription": "Enables the delete_oss_account command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_oss_objects command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-oss-objects",
+          "markdownDescription": "Enables the delete_oss_objects command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_oss_target command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-oss-target",
+          "markdownDescription": "Enables the delete_oss_target command without any pre-configured scope."
+        },
+        {
           "description": "Enables the delete_prompt command without any pre-configured scope.",
           "type": "string",
           "const": "allow-delete-prompt",
@@ -2227,6 +2281,18 @@
           "type": "string",
           "const": "allow-detect-editors-from-path",
           "markdownDescription": "Enables the detect_editors_from_path command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the export_prompt_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-export-prompt-list",
+          "markdownDescription": "Enables the export_prompt_list command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the export_workspace_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-export-workspace-list",
+          "markdownDescription": "Enables the export_workspace_list command without any pre-configured scope."
         },
         {
           "description": "Enables the get_app_preferences command without any pre-configured scope.",
@@ -2271,6 +2337,12 @@
           "markdownDescription": "Enables the get_native_interaction_state command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_oss_object_download_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-oss-object-download-url",
+          "markdownDescription": "Enables the get_oss_object_download_url command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_restore_capabilities command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-restore-capabilities",
@@ -2307,6 +2379,12 @@
           "markdownDescription": "Enables the get_workspace_resource_git_statuses command without any pre-configured scope."
         },
         {
+          "description": "Enables the head_oss_object command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-head-oss-object",
+          "markdownDescription": "Enables the head_oss_object command without any pre-configured scope."
+        },
+        {
           "description": "Enables the import_current_codex_auth_profile command without any pre-configured scope.",
           "type": "string",
           "const": "allow-import-current-codex-auth-profile",
@@ -2341,6 +2419,30 @@
           "type": "string",
           "const": "allow-list-launch-tasks",
           "markdownDescription": "Enables the list_launch_tasks command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_oss_accounts command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-oss-accounts",
+          "markdownDescription": "Enables the list_oss_accounts command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_oss_objects command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-oss-objects",
+          "markdownDescription": "Enables the list_oss_objects command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_oss_targets command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-oss-targets",
+          "markdownDescription": "Enables the list_oss_targets command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_oss_transfer_tasks command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-oss-transfer-tasks",
+          "markdownDescription": "Enables the list_oss_transfer_tasks command without any pre-configured scope."
         },
         {
           "description": "Enables the list_prompts command without any pre-configured scope.",
@@ -2409,10 +2511,22 @@
           "markdownDescription": "Enables the open_workspace_terminal_at_path command without any pre-configured scope."
         },
         {
+          "description": "Enables the preview_prompt_list_import command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preview-prompt-list-import",
+          "markdownDescription": "Enables the preview_prompt_list_import command without any pre-configured scope."
+        },
+        {
           "description": "Enables the preview_restore command without any pre-configured scope.",
           "type": "string",
           "const": "allow-preview-restore",
           "markdownDescription": "Enables the preview_restore command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the preview_workspace_list_import command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-preview-workspace-list-import",
+          "markdownDescription": "Enables the preview_workspace_list_import command without any pre-configured scope."
         },
         {
           "description": "Enables the query_codex_auth_quota command without any pre-configured scope.",
@@ -2463,6 +2577,12 @@
           "markdownDescription": "Enables the restore_recent_target command without any pre-configured scope."
         },
         {
+          "description": "Enables the resume_oss_transfer command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-resume-oss-transfer",
+          "markdownDescription": "Enables the resume_oss_transfer command without any pre-configured scope."
+        },
+        {
           "description": "Enables the retry_hotkey_registration command without any pre-configured scope.",
           "type": "string",
           "const": "allow-retry-hotkey-registration",
@@ -2485,6 +2605,18 @@
           "type": "string",
           "const": "allow-save-screenshot-selection",
           "markdownDescription": "Enables the save_screenshot_selection command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the start_oss_download command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-oss-download",
+          "markdownDescription": "Enables the start_oss_download command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the start_oss_upload command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-oss-upload",
+          "markdownDescription": "Enables the start_oss_upload command without any pre-configured scope."
         },
         {
           "description": "Enables the start_restore_dry_run command without any pre-configured scope.",
@@ -2511,6 +2643,12 @@
           "markdownDescription": "Enables the switch_codex_auth_profile command without any pre-configured scope."
         },
         {
+          "description": "Enables the test_oss_target command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-test-oss-target",
+          "markdownDescription": "Enables the test_oss_target command without any pre-configured scope."
+        },
+        {
           "description": "Enables the update_app_preferences command without any pre-configured scope.",
           "type": "string",
           "const": "allow-update-app-preferences",
@@ -2535,6 +2673,12 @@
           "markdownDescription": "Enables the update_snapshot command without any pre-configured scope."
         },
         {
+          "description": "Enables the update_workspace_description command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-update-workspace-description",
+          "markdownDescription": "Enables the update_workspace_description command without any pre-configured scope."
+        },
+        {
           "description": "Enables the upsert_codex_auth_profile command without any pre-configured scope.",
           "type": "string",
           "const": "allow-upsert-codex-auth-profile",
@@ -2551,6 +2695,18 @@
           "type": "string",
           "const": "allow-upsert-launch-task",
           "markdownDescription": "Enables the upsert_launch_task command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the upsert_oss_account command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-upsert-oss-account",
+          "markdownDescription": "Enables the upsert_oss_account command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the upsert_oss_target command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-upsert-oss-target",
+          "markdownDescription": "Enables the upsert_oss_target command without any pre-configured scope."
         },
         {
           "description": "Enables the upsert_project command without any pre-configured scope.",
@@ -2577,6 +2733,24 @@
           "markdownDescription": "Denies the allow_workspace_resource_scope command without any pre-configured scope."
         },
         {
+          "description": "Denies the apply_prompt_list_import command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-apply-prompt-list-import",
+          "markdownDescription": "Denies the apply_prompt_list_import command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the apply_workspace_list_import command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-apply-workspace-list-import",
+          "markdownDescription": "Denies the apply_workspace_list_import command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancel_oss_transfer command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cancel-oss-transfer",
+          "markdownDescription": "Denies the cancel_oss_transfer command without any pre-configured scope."
+        },
+        {
           "description": "Denies the cancel_restore_action command without any pre-configured scope.",
           "type": "string",
           "const": "deny-cancel-restore-action",
@@ -2595,10 +2769,28 @@
           "markdownDescription": "Denies the cancel_screenshot_session command without any pre-configured scope."
         },
         {
+          "description": "Denies the confirm_oss_transfer command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-confirm-oss-transfer",
+          "markdownDescription": "Denies the confirm_oss_transfer command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the copy_oss_object command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-copy-oss-object",
+          "markdownDescription": "Denies the copy_oss_object command without any pre-configured scope."
+        },
+        {
           "description": "Denies the copy_screenshot_selection command without any pre-configured scope.",
           "type": "string",
           "const": "deny-copy-screenshot-selection",
           "markdownDescription": "Denies the copy_screenshot_selection command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the create_oss_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-create-oss-folder",
+          "markdownDescription": "Denies the create_oss_folder command without any pre-configured scope."
         },
         {
           "description": "Denies the create_snapshot command without any pre-configured scope.",
@@ -2619,6 +2811,24 @@
           "markdownDescription": "Denies the delete_launch_task command without any pre-configured scope."
         },
         {
+          "description": "Denies the delete_oss_account command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-oss-account",
+          "markdownDescription": "Denies the delete_oss_account command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_oss_objects command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-oss-objects",
+          "markdownDescription": "Denies the delete_oss_objects command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_oss_target command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-oss-target",
+          "markdownDescription": "Denies the delete_oss_target command without any pre-configured scope."
+        },
+        {
           "description": "Denies the delete_prompt command without any pre-configured scope.",
           "type": "string",
           "const": "deny-delete-prompt",
@@ -2635,6 +2845,18 @@
           "type": "string",
           "const": "deny-detect-editors-from-path",
           "markdownDescription": "Denies the detect_editors_from_path command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the export_prompt_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-export-prompt-list",
+          "markdownDescription": "Denies the export_prompt_list command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the export_workspace_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-export-workspace-list",
+          "markdownDescription": "Denies the export_workspace_list command without any pre-configured scope."
         },
         {
           "description": "Denies the get_app_preferences command without any pre-configured scope.",
@@ -2679,6 +2901,12 @@
           "markdownDescription": "Denies the get_native_interaction_state command without any pre-configured scope."
         },
         {
+          "description": "Denies the get_oss_object_download_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-oss-object-download-url",
+          "markdownDescription": "Denies the get_oss_object_download_url command without any pre-configured scope."
+        },
+        {
           "description": "Denies the get_restore_capabilities command without any pre-configured scope.",
           "type": "string",
           "const": "deny-get-restore-capabilities",
@@ -2715,6 +2943,12 @@
           "markdownDescription": "Denies the get_workspace_resource_git_statuses command without any pre-configured scope."
         },
         {
+          "description": "Denies the head_oss_object command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-head-oss-object",
+          "markdownDescription": "Denies the head_oss_object command without any pre-configured scope."
+        },
+        {
           "description": "Denies the import_current_codex_auth_profile command without any pre-configured scope.",
           "type": "string",
           "const": "deny-import-current-codex-auth-profile",
@@ -2749,6 +2983,30 @@
           "type": "string",
           "const": "deny-list-launch-tasks",
           "markdownDescription": "Denies the list_launch_tasks command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_oss_accounts command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-oss-accounts",
+          "markdownDescription": "Denies the list_oss_accounts command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_oss_objects command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-oss-objects",
+          "markdownDescription": "Denies the list_oss_objects command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_oss_targets command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-oss-targets",
+          "markdownDescription": "Denies the list_oss_targets command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_oss_transfer_tasks command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-oss-transfer-tasks",
+          "markdownDescription": "Denies the list_oss_transfer_tasks command without any pre-configured scope."
         },
         {
           "description": "Denies the list_prompts command without any pre-configured scope.",
@@ -2817,10 +3075,22 @@
           "markdownDescription": "Denies the open_workspace_terminal_at_path command without any pre-configured scope."
         },
         {
+          "description": "Denies the preview_prompt_list_import command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preview-prompt-list-import",
+          "markdownDescription": "Denies the preview_prompt_list_import command without any pre-configured scope."
+        },
+        {
           "description": "Denies the preview_restore command without any pre-configured scope.",
           "type": "string",
           "const": "deny-preview-restore",
           "markdownDescription": "Denies the preview_restore command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the preview_workspace_list_import command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-preview-workspace-list-import",
+          "markdownDescription": "Denies the preview_workspace_list_import command without any pre-configured scope."
         },
         {
           "description": "Denies the query_codex_auth_quota command without any pre-configured scope.",
@@ -2871,6 +3141,12 @@
           "markdownDescription": "Denies the restore_recent_target command without any pre-configured scope."
         },
         {
+          "description": "Denies the resume_oss_transfer command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-resume-oss-transfer",
+          "markdownDescription": "Denies the resume_oss_transfer command without any pre-configured scope."
+        },
+        {
           "description": "Denies the retry_hotkey_registration command without any pre-configured scope.",
           "type": "string",
           "const": "deny-retry-hotkey-registration",
@@ -2893,6 +3169,18 @@
           "type": "string",
           "const": "deny-save-screenshot-selection",
           "markdownDescription": "Denies the save_screenshot_selection command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the start_oss_download command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-oss-download",
+          "markdownDescription": "Denies the start_oss_download command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the start_oss_upload command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-oss-upload",
+          "markdownDescription": "Denies the start_oss_upload command without any pre-configured scope."
         },
         {
           "description": "Denies the start_restore_dry_run command without any pre-configured scope.",
@@ -2919,6 +3207,12 @@
           "markdownDescription": "Denies the switch_codex_auth_profile command without any pre-configured scope."
         },
         {
+          "description": "Denies the test_oss_target command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-test-oss-target",
+          "markdownDescription": "Denies the test_oss_target command without any pre-configured scope."
+        },
+        {
           "description": "Denies the update_app_preferences command without any pre-configured scope.",
           "type": "string",
           "const": "deny-update-app-preferences",
@@ -2943,6 +3237,12 @@
           "markdownDescription": "Denies the update_snapshot command without any pre-configured scope."
         },
         {
+          "description": "Denies the update_workspace_description command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-update-workspace-description",
+          "markdownDescription": "Denies the update_workspace_description command without any pre-configured scope."
+        },
+        {
           "description": "Denies the upsert_codex_auth_profile command without any pre-configured scope.",
           "type": "string",
           "const": "deny-upsert-codex-auth-profile",
@@ -2959,6 +3259,18 @@
           "type": "string",
           "const": "deny-upsert-launch-task",
           "markdownDescription": "Denies the upsert_launch_task command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the upsert_oss_account command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-upsert-oss-account",
+          "markdownDescription": "Denies the upsert_oss_account command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the upsert_oss_target command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-upsert-oss-target",
+          "markdownDescription": "Denies the upsert_oss_target command without any pre-configured scope."
         },
         {
           "description": "Denies the upsert_project command without any pre-configured scope.",

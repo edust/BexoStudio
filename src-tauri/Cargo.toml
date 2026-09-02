@@ -1,6 +1,6 @@
 [package]
 name = "bexo-studio"
-version = "0.1.15"
+version = "0.1.17"
 description = "Bexo Studio desktop shell"
 authors = ["Codex"]
 edition = "2021"
@@ -16,12 +16,16 @@ tauri-build = { version = "2", features = [] }
 arboard = "3.6.1"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
+hmac = "0.13"
 log = "0.4"
+percent-encoding = "2.3.2"
+quick-xml = "0.41"
 reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls", "system-proxy", "socks"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 screenshots = "0.8.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.11"
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-dialog = "2"
@@ -35,7 +39,7 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-store = "2"
 tauri-plugin-window-state = "2"
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
 toml = "0.9.12"
 uuid = { version = "1", features = ["v4", "serde"] }
 

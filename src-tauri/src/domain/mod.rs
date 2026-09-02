@@ -5,9 +5,11 @@ mod codex_profile;
 mod hotkey;
 mod launch_task;
 mod native_interaction;
+mod oss;
 mod preferences;
 mod project;
 mod prompt;
+mod prompt_transfer;
 mod resource_browser;
 mod restore_event;
 mod restore_run;
@@ -16,6 +18,7 @@ mod screenshot;
 mod snapshot;
 mod validation;
 mod workspace;
+mod workspace_transfer;
 
 use serde::Serialize;
 
@@ -31,9 +34,9 @@ pub use codex_auth::{
     CodexAuthSwitchResult, UpsertCodexAuthProfileInput,
 };
 pub use codex_history::{
-    CodexHistoryGlobalSessionsResponse, CodexHistoryMessage, CodexHistoryMessagesInput,
+    CodexHistoryGlobalSessionsPage, CodexHistoryMessage, CodexHistoryMessagesInput,
     CodexHistoryMessagesPage, CodexHistorySession, CodexHistorySessionsResponse,
-    ListCodexHistorySessionsInput, OpenCodexHistoryWindowResult,
+    ListCodexHistorySessionsInput, ListCodexHistorySessionsPageInput, OpenCodexHistoryWindowResult,
 };
 pub use codex_profile::{CodexProfileRecord, UpsertCodexProfileInput};
 pub use hotkey::{
@@ -53,6 +56,27 @@ pub use native_interaction::{
     NATIVE_INTERACTION_STATE_UPDATED_EVENT_NAME,
 };
 #[allow(unused_imports)]
+pub use oss::{
+    credential_ref_for_account, mask_access_key_id, normalize_access_key_id,
+    normalize_access_key_id_hint, normalize_access_key_secret, normalize_bucket,
+    normalize_credential_ref, normalize_display_name, normalize_download_url_expires,
+    normalize_endpoint, normalize_object_key, normalize_oss_account_input,
+    normalize_oss_folder_name, normalize_oss_metadata_input, normalize_oss_target_input,
+    normalize_page_size, normalize_prefix, normalize_region, validate_account_id,
+    validate_operation_id, validate_target_id, CopyOssObjectInput, CopyOssObjectResult,
+    CreateOssFolderInput, CreateOssFolderResult, DeleteOssObjectsInput, DeleteOssObjectsResult,
+    GetOssObjectDownloadUrlInput, GetOssObjectDownloadUrlResult, HeadOssObjectInput,
+    ListOssObjectsInput, OssAccountRecord, OssAccountSummary, OssCredential, OssObjectEntry,
+    OssObjectMetadata, OssObjectPage, OssOperationInput, OssProbeResult, OssTargetRecord,
+    OssTransferStart, OssTransferTaskRecord, OssTransferTaskView, StartOssDownloadInput,
+    StartOssUploadInput, TestOssTargetInput, UpsertOssAccountInput, UpsertOssAccountMetadataInput,
+    UpsertOssTargetInput, OSS_AUTH_MODE_ACCESS_KEY, OSS_DEFAULT_DOWNLOAD_URL_EXPIRES_SECONDS,
+    OSS_DEFAULT_PAGE_SIZE, OSS_MAX_DOWNLOAD_URL_EXPIRES_SECONDS, OSS_MAX_FOLDER_NAME_CHARS,
+    OSS_MAX_OBJECT_KEY_BYTES, OSS_MAX_PAGE_SIZE, OSS_MAX_PREFIX_BYTES, OSS_MAX_TRANSFER_RETRIES,
+    OSS_MIN_DOWNLOAD_URL_EXPIRES_SECONDS, OSS_TRANSFER_PROGRESS_EVENT_NAME,
+    OSS_TRANSFER_STATE_EVENT_NAME,
+};
+#[allow(unused_imports)]
 pub use preferences::{
     AppPreferences, AppPreferencesPatch, CodexAuthPreferences, CodexAuthProxyPreferences,
     CodexHistoryViewPreferences, CodexHomeDirectoryInfo, CustomEditorPreference,
@@ -69,6 +93,17 @@ pub use project::{ProjectRecord, UpsertProjectInput};
 pub use prompt::{
     validate_prompt_content, validate_prompt_id, validate_prompt_title, PromptRecord,
     ReorderPromptsInput, UpsertPromptInput, MAX_PROMPTS,
+};
+#[allow(unused_imports)]
+pub use prompt_transfer::{
+    build_prompt_import_preview, classify_prompt_import_entries, prompt_import_action_allowed,
+    validate_prompt_import_selections, validate_prompt_transfer_document,
+    ApplyPromptListImportInput, ExportPromptListInput, ExportPromptListResult,
+    PreviewPromptListImportInput, PromptImportAction, PromptImportApplyResult,
+    PromptImportClassification, PromptImportItemPreview, PromptImportItemStatus,
+    PromptImportPreview, PromptImportPreviewSummary, PromptImportSelection, PromptTransferDocument,
+    PromptTransferPrompt, PROMPT_TRANSFER_FORMAT, PROMPT_TRANSFER_MAX_FILE_BYTES,
+    PROMPT_TRANSFER_SCHEMA_VERSION,
 };
 pub use resource_browser::{
     WorkspaceResourceEntry, WorkspaceResourceGitStatusEntry, WorkspaceResourceGitStatusResponse,
@@ -99,7 +134,20 @@ pub use validation::{
     ensure_absolute_directory, parse_color_or_none, parse_json_string_list, parse_restore_mode,
     require_non_empty, validate_optional_uuid, validate_ordered_uuid_list, MAX_REORDER_ITEMS,
 };
-pub use workspace::{DeleteResult, ReorderWorkspacesInput, UpsertWorkspaceInput, WorkspaceRecord};
+pub use workspace::{
+    normalize_workspace_description, validate_workspace_id, DeleteResult, ReorderWorkspacesInput,
+    UpdateWorkspaceDescriptionInput, UpsertWorkspaceInput, WorkspaceRecord,
+};
+pub use workspace_transfer::{
+    validate_workspace_transfer_document, ApplyWorkspaceListImportInput, ExportWorkspaceListInput,
+    ExportWorkspaceListResult, PreviewWorkspaceListImportInput, WorkspaceImportAction,
+    WorkspaceImportApplyResult, WorkspaceImportItemPreview, WorkspaceImportItemStatus,
+    WorkspaceImportPreview, WorkspaceImportPreviewSummary, WorkspaceImportProjectPreview,
+    WorkspaceImportProjectStatus, WorkspaceImportRelocation, WorkspaceImportSelection,
+    WorkspaceTransferDocument, WorkspaceTransferLaunchTask, WorkspaceTransferProject,
+    WorkspaceTransferWorkspace, WORKSPACE_TRANSFER_FORMAT, WORKSPACE_TRANSFER_MAX_FILE_BYTES,
+    WORKSPACE_TRANSFER_SCHEMA_VERSION,
+};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

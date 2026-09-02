@@ -1,14 +1,14 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap},
     env,
     fs::{self, File},
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex,
     },
-    time::Duration,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use chrono::{DateTime, TimeZone, Utc};
@@ -17,10 +17,10 @@ use tauri::{AppHandle, Manager, Runtime, WebviewUrl, WebviewWindowBuilder};
 
 use crate::{
     domain::{
-        ensure_absolute_directory, validate_optional_uuid, CodexHistoryGlobalSessionsResponse,
+        ensure_absolute_directory, validate_optional_uuid, CodexHistoryGlobalSessionsPage,
         CodexHistoryMessage, CodexHistoryMessagesInput, CodexHistoryMessagesPage,
         CodexHistorySession, CodexHistorySessionsResponse, ListCodexHistorySessionsInput,
-        OpenCodexHistoryWindowResult,
+        ListCodexHistorySessionsPageInput, OpenCodexHistoryWindowResult,
     },
     error::{AppError, AppResult},
     persistence::{get_workspace_primary_project_path, list_codex_profiles, Database},
@@ -41,10 +41,15 @@ const MESSAGE_MAX_SCAN_BYTES: u64 = 64 * 1024 * 1024;
 const MESSAGE_MAX_CARRY_BYTES: usize = 2 * 1024 * 1024;
 const SCAN_TIMEOUT: Duration = Duration::from_secs(15);
 const MESSAGE_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_SESSION_PAGE_SIZE: usize = 10;
+const MAX_SESSION_PAGE_SIZE: usize = 50;
+const SESSION_PAGE_SNAPSHOT_CACHE_LIMIT: usize = 8;
+const SESSION_PAGE_SNAPSHOT_TTL: Duration = Duration::from_secs(15 * 60);
 
 #[derive(Debug, Clone)]
 pub struct CodexHistoryService {
     database: Database,
+    session_page_snapshots: Arc<Mutex<HashMap<String, Arc<SessionPageSnapshot>>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +66,24 @@ struct ParsedSession {
 }
 
 #[derive(Debug, Clone)]
+struct SessionPageCandidate {
+    path: PathBuf,
+    file_size_bytes: u64,
+    modified_nanos: u128,
+}
+
+#[derive(Debug, Clone)]
+struct SessionPageSnapshot {
+    id: String,
+    root_labels: Vec<String>,
+    workspace_id: Option<String>,
+    workspace_compare_path: Option<String>,
+    query: String,
+    candidates: Vec<SessionPageCandidate>,
+    created_at: Instant,
+}
+
+#[derive(Debug, Clone)]
 struct TimestampValue {
     ms: i64,
     display: String,
@@ -68,7 +91,10 @@ struct TimestampValue {
 
 impl CodexHistoryService {
     pub fn new(database: Database) -> Self {
-        Self { database }
+        Self {
+            database,
+            session_page_snapshots: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     pub async fn open_history_window<R: Runtime>(
@@ -111,7 +137,13 @@ impl CodexHistoryService {
             context.workspace_id
         );
 
-        WebviewWindowBuilder::new(app, &window_label, WebviewUrl::App(url.into()))
+        let window_builder =
+            WebviewWindowBuilder::new(app, &window_label, WebviewUrl::App(url.into()));
+        #[cfg(target_os = "windows")]
+        let window_builder =
+            window_builder.additional_browser_args(super::WINDOWS_WEBVIEW2_BROWSER_ARGS);
+
+        window_builder
             .title(title)
             .inner_size(1180.0, 780.0)
             .min_inner_size(920.0, 620.0)
@@ -162,26 +194,90 @@ impl CodexHistoryService {
         })
     }
 
-    pub async fn list_all_sessions<R: Runtime>(
+    pub async fn list_all_sessions_page<R: Runtime>(
         &self,
         app: &AppHandle<R>,
-    ) -> AppResult<CodexHistoryGlobalSessionsResponse> {
-        let roots = self.resolve_existing_codex_session_roots(app).await?;
-        let root_labels = roots
-            .iter()
-            .map(|root| display_path(root.as_path()))
-            .collect::<Vec<_>>();
+        input: ListCodexHistorySessionsPageInput,
+    ) -> AppResult<CodexHistoryGlobalSessionsPage> {
+        let limit = normalize_session_page_limit(input.limit)?;
+        let query = normalize_session_query(input.query);
+        let workspace_id = normalize_optional_workspace_id(input.workspace_id);
+        let cursor = input
+            .cursor
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
 
-        let sessions = run_blocking_with_timeout(
-            "scan_all_codex_history_sessions",
+        let (snapshot, start_index) = if let Some(cursor) = cursor.as_deref() {
+            let (snapshot_id, start_index) = decode_session_page_cursor(cursor)?;
+            let snapshot = self.load_session_page_snapshot(&snapshot_id)?;
+            if snapshot.query != query || snapshot.workspace_id != workspace_id {
+                return Err(AppError::validation(
+                    "cursor does not belong to the current history query",
+                )
+                .with_detail("cursor", cursor.to_string()));
+            }
+            if start_index > snapshot.candidates.len() {
+                return Err(
+                    AppError::validation("cursor points outside the history snapshot")
+                        .with_detail("cursor", cursor.to_string()),
+                );
+            }
+            (snapshot, start_index)
+        } else {
+            let workspace_context = match workspace_id.clone() {
+                Some(workspace_id) => Some(self.resolve_workspace_context(workspace_id).await?),
+                None => None,
+            };
+            let roots = self.resolve_existing_codex_session_roots(app).await?;
+            let root_labels = roots
+                .iter()
+                .map(|root| display_path(root.as_path()))
+                .collect::<Vec<_>>();
+            let roots_for_scan = roots.clone();
+            let candidates = run_blocking_with_timeout(
+                "discover_codex_history_session_candidates",
+                SCAN_TIMEOUT,
+                move |cancelled| collect_session_candidates(&roots_for_scan, &cancelled),
+            )
+            .await?;
+            let snapshot = Arc::new(SessionPageSnapshot {
+                id: uuid::Uuid::new_v4().to_string(),
+                root_labels,
+                workspace_id,
+                workspace_compare_path: workspace_context
+                    .as_ref()
+                    .map(|context| context.workspace_compare_path.clone()),
+                query,
+                candidates,
+                created_at: Instant::now(),
+            });
+            self.store_session_page_snapshot(Arc::clone(&snapshot))?;
+            (snapshot, 0)
+        };
+
+        let snapshot_for_scan = Arc::clone(&snapshot);
+        let query_for_scan = snapshot.query.clone();
+        let (sessions, next_index, has_more) = run_blocking_with_timeout(
+            "scan_codex_history_session_page",
             SCAN_TIMEOUT,
-            move |cancelled| scan_all_sessions(&roots, &cancelled),
+            move |cancelled| {
+                scan_session_page(
+                    &snapshot_for_scan,
+                    start_index,
+                    limit,
+                    &query_for_scan,
+                    &cancelled,
+                )
+            },
         )
         .await?;
+        let next_cursor = has_more.then(|| encode_session_page_cursor(&snapshot.id, next_index));
 
-        Ok(CodexHistoryGlobalSessionsResponse {
-            codex_roots: root_labels,
+        Ok(CodexHistoryGlobalSessionsPage {
+            codex_roots: snapshot.root_labels.clone(),
             sessions,
+            next_cursor,
+            has_more,
         })
     }
 
@@ -311,6 +407,42 @@ impl CodexHistoryService {
 
         Ok(roots)
     }
+
+    fn load_session_page_snapshot(&self, snapshot_id: &str) -> AppResult<Arc<SessionPageSnapshot>> {
+        let mut snapshots = self.session_page_snapshots.lock().map_err(|_| {
+            AppError::new(
+                "CODEX_HISTORY_SNAPSHOT_FAILED",
+                "failed to access codex history cursor cache",
+            )
+        })?;
+        prune_expired_session_page_snapshots(&mut snapshots);
+        snapshots.get(snapshot_id).cloned().ok_or_else(|| {
+            AppError::validation("history cursor has expired or is invalid")
+                .with_detail("cursor", snapshot_id.to_string())
+        })
+    }
+
+    fn store_session_page_snapshot(&self, snapshot: Arc<SessionPageSnapshot>) -> AppResult<()> {
+        let mut snapshots = self.session_page_snapshots.lock().map_err(|_| {
+            AppError::new(
+                "CODEX_HISTORY_SNAPSHOT_FAILED",
+                "failed to access codex history cursor cache",
+            )
+        })?;
+        prune_expired_session_page_snapshots(&mut snapshots);
+        while snapshots.len() >= SESSION_PAGE_SNAPSHOT_CACHE_LIMIT {
+            let oldest_id = snapshots
+                .iter()
+                .min_by_key(|(_, value)| value.created_at)
+                .map(|(id, _)| id.clone());
+            let Some(oldest_id) = oldest_id else {
+                break;
+            };
+            snapshots.remove(&oldest_id);
+        }
+        snapshots.insert(snapshot.id.clone(), snapshot);
+        Ok(())
+    }
 }
 
 async fn run_blocking_with_timeout<T, F>(
@@ -383,34 +515,235 @@ fn scan_sessions_for_workspace(
     Ok(sessions.into_iter().map(|parsed| parsed.session).collect())
 }
 
-fn scan_all_sessions(
-    roots: &[PathBuf],
+fn scan_session_page(
+    snapshot: &SessionPageSnapshot,
+    start_index: usize,
+    limit: usize,
+    query: &str,
     cancelled: &AtomicBool,
-) -> AppResult<Vec<CodexHistorySession>> {
-    let mut files = Vec::new();
-    for root in roots {
-        check_cancelled(cancelled)?;
-        collect_jsonl_files(root, &mut files, cancelled)?;
-    }
+) -> AppResult<(Vec<CodexHistorySession>, usize, bool)> {
+    let mut sessions = Vec::with_capacity(limit);
+    let mut next_index = start_index;
 
-    let mut sessions = Vec::new();
-    for path in files {
+    while next_index < snapshot.candidates.len() && sessions.len() < limit {
         check_cancelled(cancelled)?;
-        match parse_session(&path) {
-            Ok(parsed) => sessions.push(parsed),
+        let candidate = &snapshot.candidates[next_index];
+        next_index += 1;
+
+        if !candidate_fingerprint_matches(candidate) {
+            log::debug!(
+                target: "bexo::service::codex_history",
+                "codex session candidate changed after discovery path={}",
+                candidate.path.display()
+            );
+        }
+
+        match parse_session(&candidate.path) {
+            Ok(parsed) => {
+                if let Some(workspace_compare_path) = snapshot.workspace_compare_path.as_deref() {
+                    let Some(project_dir) = parsed.session.project_dir.as_deref() else {
+                        continue;
+                    };
+                    if !path_is_under_workspace(project_dir, workspace_compare_path) {
+                        continue;
+                    }
+                }
+                if session_matches_query(&parsed.session, query) {
+                    sessions.push(parsed.session);
+                }
+            }
             Err(error) => {
                 log::warn!(
                     target: "bexo::service::codex_history",
-                    "skip codex session parse path={} error={}",
-                    path.display(),
+                    "skip codex session page parse path={} error={}",
+                    candidate.path.display(),
                     error
                 );
             }
         }
     }
 
-    sessions.sort_by(|left, right| right.sort_ms.cmp(&left.sort_ms));
-    Ok(sessions.into_iter().map(|parsed| parsed.session).collect())
+    Ok((sessions, next_index, next_index < snapshot.candidates.len()))
+}
+
+fn collect_session_candidates(
+    roots: &[PathBuf],
+    cancelled: &AtomicBool,
+) -> AppResult<Vec<SessionPageCandidate>> {
+    let mut candidates = Vec::new();
+    for root in roots {
+        check_cancelled(cancelled)?;
+        collect_session_candidates_in_directory(root, &mut candidates, cancelled)?;
+    }
+
+    candidates.sort_by(|left, right| {
+        right
+            .modified_nanos
+            .cmp(&left.modified_nanos)
+            .then_with(|| {
+                normalize_compare_path(&left.path.display().to_string())
+                    .cmp(&normalize_compare_path(&right.path.display().to_string()))
+            })
+    });
+    Ok(candidates)
+}
+
+fn collect_session_candidates_in_directory(
+    directory: &Path,
+    candidates: &mut Vec<SessionPageCandidate>,
+    cancelled: &AtomicBool,
+) -> AppResult<()> {
+    check_cancelled(cancelled)?;
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) => {
+            log::warn!(
+                target: "bexo::service::codex_history",
+                "failed to read codex sessions directory path={} reason={}",
+                directory.display(),
+                error
+            );
+            return Ok(());
+        }
+    };
+
+    for entry in entries {
+        check_cancelled(cancelled)?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                log::warn!(
+                    target: "bexo::service::codex_history",
+                    "failed to inspect codex sessions directory path={} reason={}",
+                    directory.display(),
+                    error
+                );
+                continue;
+            }
+        };
+        let path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(error) => {
+                log::debug!(
+                    target: "bexo::service::codex_history",
+                    "skip inaccessible codex history entry path={} reason={}",
+                    path.display(),
+                    error
+                );
+                continue;
+            }
+        };
+
+        if file_type.is_dir() {
+            collect_session_candidates_in_directory(&path, candidates, cancelled)?;
+            continue;
+        }
+        if !file_type.is_file()
+            || path.extension().and_then(|value| value.to_str()) != Some("jsonl")
+        {
+            continue;
+        }
+
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                log::debug!(
+                    target: "bexo::service::codex_history",
+                    "skip codex history file without metadata path={} reason={}",
+                    path.display(),
+                    error
+                );
+                continue;
+            }
+        };
+        candidates.push(SessionPageCandidate {
+            path,
+            file_size_bytes: metadata.len(),
+            modified_nanos: modified_time_nanos(&metadata.modified().ok()),
+        });
+    }
+
+    Ok(())
+}
+
+fn candidate_fingerprint_matches(candidate: &SessionPageCandidate) -> bool {
+    let Ok(metadata) = fs::metadata(&candidate.path) else {
+        return false;
+    };
+    metadata.len() == candidate.file_size_bytes
+        && modified_time_nanos(&metadata.modified().ok()) == candidate.modified_nanos
+}
+
+fn modified_time_nanos(modified: &Option<SystemTime>) -> u128 {
+    modified
+        .as_ref()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default()
+}
+
+fn session_matches_query(session: &CodexHistorySession, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    [
+        session.title.as_deref(),
+        session.summary.as_deref(),
+        session.project_dir.as_deref(),
+        Some(session.session_id.as_str()),
+        Some(session.source_path.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value.to_lowercase().contains(query))
+}
+
+fn normalize_session_page_limit(limit: Option<usize>) -> AppResult<usize> {
+    match limit {
+        None => Ok(DEFAULT_SESSION_PAGE_SIZE),
+        Some(value) if (1..=MAX_SESSION_PAGE_SIZE).contains(&value) => Ok(value),
+        Some(value) => Err(AppError::validation(format!(
+            "limit must be between 1 and {MAX_SESSION_PAGE_SIZE}"
+        ))
+        .with_detail("limit", value.to_string())),
+    }
+}
+
+fn normalize_session_query(query: Option<String>) -> String {
+    query.unwrap_or_default().trim().to_lowercase()
+}
+
+fn normalize_optional_workspace_id(workspace_id: Option<String>) -> Option<String> {
+    workspace_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn encode_session_page_cursor(snapshot_id: &str, index: usize) -> String {
+    format!("{snapshot_id}:{index}")
+}
+
+fn decode_session_page_cursor(cursor: &str) -> AppResult<(String, usize)> {
+    let Some((snapshot_id, raw_index)) = cursor.rsplit_once(':') else {
+        return Err(AppError::validation("history cursor is invalid")
+            .with_detail("cursor", cursor.to_string()));
+    };
+    if uuid::Uuid::parse_str(snapshot_id).is_err() {
+        return Err(AppError::validation("history cursor is invalid")
+            .with_detail("cursor", cursor.to_string()));
+    }
+    let index = raw_index.parse::<usize>().map_err(|_| {
+        AppError::validation("history cursor index is invalid")
+            .with_detail("cursor", cursor.to_string())
+    })?;
+    Ok((snapshot_id.to_string(), index))
+}
+
+fn prune_expired_session_page_snapshots(snapshots: &mut HashMap<String, Arc<SessionPageSnapshot>>) {
+    let now = Instant::now();
+    snapshots
+        .retain(|_, snapshot| now.duration_since(snapshot.created_at) <= SESSION_PAGE_SNAPSHOT_TTL);
 }
 
 fn collect_jsonl_files(
@@ -1049,4 +1382,68 @@ fn history_window_label(workspace_id: &str) -> String {
             })
             .collect::<String>()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_session() -> CodexHistorySession {
+        CodexHistorySession {
+            provider_id: CODEX_PROVIDER_ID.to_string(),
+            session_id: "session-123".to_string(),
+            title: Some("Release checklist".to_string()),
+            summary: Some("Review the production release notes".to_string()),
+            project_dir: Some(r"D:\Desktop\release-tool".to_string()),
+            created_at: None,
+            last_active_at: None,
+            source_path: r"D:\Users\codex\.codex\sessions\session-123.jsonl".to_string(),
+            file_size_bytes: 128,
+        }
+    }
+
+    #[test]
+    fn session_page_limit_defaults_and_rejects_out_of_range_values() {
+        assert_eq!(
+            normalize_session_page_limit(None).unwrap(),
+            DEFAULT_SESSION_PAGE_SIZE
+        );
+        assert_eq!(normalize_session_page_limit(Some(1)).unwrap(), 1);
+        assert_eq!(
+            normalize_session_page_limit(Some(MAX_SESSION_PAGE_SIZE)).unwrap(),
+            MAX_SESSION_PAGE_SIZE
+        );
+        assert_eq!(
+            normalize_session_page_limit(Some(0)).unwrap_err().code,
+            "VALIDATION_ERROR"
+        );
+        assert_eq!(
+            normalize_session_page_limit(Some(MAX_SESSION_PAGE_SIZE + 1))
+                .unwrap_err()
+                .code,
+            "VALIDATION_ERROR"
+        );
+    }
+
+    #[test]
+    fn session_page_cursor_round_trip_is_opaque_and_validated() {
+        let snapshot_id = uuid::Uuid::new_v4().to_string();
+        let cursor = encode_session_page_cursor(&snapshot_id, 20);
+        assert_eq!(
+            decode_session_page_cursor(&cursor).unwrap(),
+            (snapshot_id, 20)
+        );
+        assert!(decode_session_page_cursor("not-a-cursor").is_err());
+        assert!(decode_session_page_cursor(&format!("{}:bad", uuid::Uuid::new_v4())).is_err());
+    }
+
+    #[test]
+    fn session_page_query_matches_metadata_without_client_side_filtering() {
+        let session = sample_session();
+        assert!(session_matches_query(&session, "release"));
+        assert!(session_matches_query(&session, "SESSION-123"));
+        assert!(session_matches_query(&session, "release-tool"));
+        assert!(!session_matches_query(&session, "does-not-exist"));
+        assert!(session_matches_query(&session, ""));
+    }
 }

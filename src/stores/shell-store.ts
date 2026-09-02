@@ -28,10 +28,12 @@ function persistThemeMode(mode: ThemeMode) {
 type ShellState = {
   sidebarQuery: string;
   selectedHomeWorkspaceId: string | null;
+  selectedOssAccountId: string | null;
   themeMode: ThemeMode;
   setSidebarQuery: (value: string) => void;
   resetSidebarQuery: () => void;
   setSelectedHomeWorkspaceId: (value: string | null) => void;
+  setSelectedOssAccountId: (value: string | null) => void;
   setThemeMode: (value: ThemeMode) => void;
   toggleThemeMode: () => void;
 };
@@ -39,10 +41,12 @@ type ShellState = {
 export const useShellStore = create<ShellState>((set, get) => ({
   sidebarQuery: "",
   selectedHomeWorkspaceId: null,
+  selectedOssAccountId: null,
   themeMode: resolveInitialThemeMode(),
   setSidebarQuery: (value) => set({ sidebarQuery: value }),
   resetSidebarQuery: () => set({ sidebarQuery: "" }),
   setSelectedHomeWorkspaceId: (value) => set({ selectedHomeWorkspaceId: value }),
+  setSelectedOssAccountId: (value) => set({ selectedOssAccountId: value }),
   setThemeMode: (value) => {
     const normalizedMode: ThemeMode = value === "dark" ? "dark" : "light";
     persistThemeMode(normalizedMode);

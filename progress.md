@@ -2354,3 +2354,138 @@ pm run web:build。
 - 最终自动门禁通过：`npm run web:test` 27/27、`npm run web:build`、`cargo fmt --check`、`cargo check --release`、`cargo test --all-targets --no-run`、`git diff --check`。
 - 未新增依赖、lockfile 变更、环境变量、持久化配置、API 或数据库合同。
 - 最终进程清理完成：本轮 audit debug app 与 WebView2 子进程树全部退出，1420/9223 无监听；未触碰其他项目进程。
+
+## 2026-07-12 Workbench 工作区项目备注
+
+- 已完成蓝图：`scripts/work/2026-07-12-workspace-notes/`。
+- 已完成后端：备注规范化、长度/控制字符校验、注册时同事务写入、目标字段更新 service/command、Tauri handler/manifest/permission 链路。
+- 已完成前端：新建备注弹窗、卡片单行预览、编辑/清空/未保存确认/失败状态、右键入口、名称/路径/备注搜索、Unicode 计数和就地校验。
+- 已同步 README、产品需求、技术架构、UI 系统和实现路线图。
+- 已通过：`cargo fmt --manifest-path "src-tauri/Cargo.toml" --all -- --check`、`cargo check --manifest-path "src-tauri/Cargo.toml" --release`、`cargo test --manifest-path "src-tauri/Cargo.toml" --all-targets --no-run`、`npm run web:test`、`npm run web:build`、`git diff --check`。
+- Rust 定向测试已编译测试二进制，但执行阶段受本机 `0xc0000139 (STATUS_ENTRYPOINT_NOT_FOUND)` 阻断，未进入测试断言。
+- Vite 临时预览已用于检查网页壳层；Tauri 原生 computer-use pipe 不可用，未完成真实卡片点击验收。最终交付前需清理本轮 Vite 进程并复查端口。
+
+## 2026-07-12 Alibaba OSS 文件管理
+
+- 已完成 `scripts/work/2026-07-12-oss-file-manager/` 蓝图、实现、验证和交付文件。
+- 已完成 Rust：OSS domain、SQLite schema/repository、Credential Manager、V4 signer/XML parser、Alibaba adapter、对象 service、Multipart/Range transfer service、Tauri commands/handler/permission。
+- 已完成前端：OSS 一级导航、账号侧栏与表单、手动 Bucket/Prefix 目标绑定、对象分页浏览、上传/下载/删除/重命名、传输队列和状态事件。
+- 已修复下载流断开不重试、Range 长度不校验、编辑账号误清空 Secret、Multipart overwrite 保护和传输恢复边界。
+- 已通过：`npm run web:test` 30/30、`npm run web:build`、`cargo fmt --check`、`cargo check`、`cargo test --lib --no-run`、`git diff --check`。
+- Rust `cargo test --lib` 在本机 Windows 测试进程装载阶段返回 `0xc0000139 (STATUS_ENTRYPOINT_NOT_FOUND)`，没有进入断言；真实 RAM/Bucket/网络中断场景仍需用户手工验收。
+- 本轮没有启动长期后端/前端服务进程；端口复查发现既有 Vite PID `48684` 监听 `1420`，未由本轮启动，未终止用户进程。
+- 收尾补缺：阻止未决传输期间修改目标身份或移动账号；内部 `uploadId/checkpoint` 不再序列化到 Tauri 事件；增加 Complete 未知结果的“检查远端”恢复入口；补齐本地文件 I/O timeout 与 Range/Part 取消。
+- 收尾后再次通过：Rust release check、all-targets no-run、fmt check、前端 30/30、web build 和 diff check。
+
+## 2026-07-12 OSS 签名兼容性修复
+
+- 已读取 Go 参考项目的 OSS 配置、官方 SDK 客户端、上传服务和 SDK V4 源码，并完成 Bexo signer/adapter/UI 对照。
+- 已修改 `src-tauri/src/adapters/oss/v4_signer.rs`、`src-tauri/src/domain/oss.rs`、`src-tauri/src/adapters/oss/xml.rs`、`src/features/oss/oss-page.tsx`。
+- `cargo fmt --all -- --check`、`cargo check`、`cargo test --lib --no-run`、`npm.cmd run web:test`（30/30）、`npm.cmd run web:build`、`git diff --check` 通过。
+- Rust 单个测试过滤器在本机 Tauri 测试宿主加载阶段超时，已终止并清理 cargo/test/WebView 子进程，复查无本轮测试进程和目标端口残留。
+
+## 2026-07-12 OSS 暗色主题一致性改造
+
+- 已初始化专项蓝图：`scripts/work/2026-07-12-oss-dark-theme/`。
+- 已完成截图与代码对照，确认暗色遗漏集中在 OSS 自定义 surface、hover variant、分割线和危险色。
+- 当前状态：计划已建立，尚未修改应用代码。
+
+- 已新增 OSS 语义主题变量与组件类，覆盖 surface、muted/info/selected、border、文本、状态点和 focus ring。
+- 已将账号弹窗、账号侧栏、Bucket 绑定、对象浏览器、传输队列中的硬编码主题色迁移到语义类；目录/对象行补齐 hover、active、focus-visible。
+- 已同步 `docs/ui-system.md`，写明 OSS 主题 token 和暗色交互约束。
+- `npm.cmd run web:test` 31/31 通过；`npm.cmd run web:build` 通过；`git diff --check` 通过。
+- 静态检查确认 `src/features/oss` 不再包含硬编码颜色类；生成 production CSS 包含所有 OSS semantic token 和暗色规则。
+- 当前剩余：真实 Tauri 桌面窗口亮/暗主题截图与键盘焦点需用户手工回归；本轮未启动长期服务进程。
+
+- 已启动并清理隔离网页预览：`npm.cmd run web:dev -- --port 1422`，工作目录为项目根目录，父 PID `7180`，记录的子 PID 为 `56000,51108`；端口 `1422` 已确认无监听。网页模式没有 Tauri runtime 和 OSS mock 数据，因此未把它当作真实 OSS 数据态截图验收。
+
+## 2026-07-12 OSS 新建文件夹
+
+- 已初始化专项蓝图：`scripts/work/2026-07-12-oss-create-folder/`。
+- 已确认当前代码缺少创建目录的 UI、IPC command 和 service；现有 adapter 可复用空 body PUT。
+- 已完成后端：新增 folder 输入/输出模型、单层名称与前缀范围校验、`OssService::create_folder`、Tauri command、build manifest、handler、permission 和生成 ACL schemas。
+- 已完成前端：新增名称校验/Key 预览纯函数、弹窗、工具栏次级按钮、loading/error/Toast，以及成功后的当前目录缓存刷新。
+- 已同步 README、产品需求、技术架构、UI 系统和实现路线图；未新增数据库模型、环境变量或明文凭据路径。
+- 自动验证：`npm.cmd run web:test` 34/34、`npm.cmd run web:build`、Rust fmt check、`cargo check`、`cargo test --lib --no-run`、`git diff --check` 通过。
+- 当前待人工验收：真实 RAM/Bucket 的根目录与嵌套目录创建、重复目录冲突、权限/Endpoint/网络错误和亮暗主题键盘交互；本轮没有启动长期进程或调用真实 OSS。
+
+## 2026-07-12 OSS 批量拖放与传输体验
+
+- 已初始化专项蓝图：`scripts/work/2026-07-12-oss-transfer-ux/`。
+- 已记录目标与边界：多文件拖放/多选、有界入队、实时目标与进度、取消/恢复/失败终态、完成刷新；第一版不递归文件夹。
+- 当前状态：尚未修改应用代码，准备全量核对前端拖放、队列事件和 Rust 取消链路。
+- 第一轮核对完成：确认现有上传 DTO 是单任务、OSS 页面没有文件拖放订阅，队列任务 DTO 不含速度/剩余时间；应用代码尚未修改。
+- 第二轮核对完成：确认队列已经有进度/状态 listener 与取消按钮，Rust 已有 AtomicBool 取消和 Multipart Abort；下一步核对上传阶段、状态持久化和完成事件刷新边界。
+- 第三轮核对完成：确认小文件单 Put 一次性读入且不可取消、Multipart 读文件阶段取消检查不足；这解释了进度条跳变和“突然完成/无法中止”的主要体验问题。
+- 官方 Tauri v2 文档核对完成：采用 `getCurrentWebview().onDragDropEvent()` 接收多路径 `drop`，不使用未在项目中落地的 `tauri-plugin-drag` 作为文件导入层。
+- 实现完成：选择器多选、原生多文件拖放 overlay、4 路有界批量入队、重复目标/部分失败反馈和文件夹拒绝提示已接通。
+- 实现完成：队列任务视图补充账号/绑定/Bucket/Region、字节进度、速度、ETA、错误码；状态 listener 完成时失效对应 target 的对象缓存并提示目录刷新。
+- 实现完成：小文件读文件/单 PUT、Multipart 分片读写和 Complete 接入取消选择器；远端未知结果进入 `needs_confirmation`，由 HeadObject 显式确认。
+- 自动验证完成：`npm.cmd run web:test` 37/37、`npm.cmd run web:build`、Rust fmt check、`cargo check`、`cargo test --lib --no-run` 通过；实际 `cargo test --lib` 受本机既有 `STATUS_ENTRYPOINT_NOT_FOUND` 阻断。
+- 本轮未启动长期前端/后端进程，未调用真实 OSS；真实 Tauri 拖放、批量上传、取消/恢复和完成刷新留给用户手工验收。
+
+## 2026-07-12 OSS 对象右键快捷菜单
+
+- 已创建专项蓝图：`scripts/work/2026-07-12-oss-object-context-menu/`。
+- 已完成只读核对：现有下载队列、CopyObject、删除确认和剪贴板工具可复用；仅“复制下载 URL”需要新增 Rust presign IPC。
+- 已完成官方资料核对：Ant Design `Dropdown` contextMenu；阿里云私有对象需要临时 signed/presigned URL。
+- 当前状态：计划完成，尚未修改应用代码。
+- 已完成后端：新增 `GetOssObjectDownloadUrlInput/Result`、有效期边界校验、Alibaba adapter V4 GET presign、`get_oss_object_download_url` command、主窗口 handler、permission 和生成 ACL schema。
+- 已完成前端：对象文件行使用 Ant Design `contextMenu`；下载复用可恢复队列，复制文件使用目标 Key 弹窗和不覆盖 CopyObject，复制 URL 通过现有剪贴板 helper 并仅提示有效期，删除复用既有确认弹窗。
+- 已补测试：新增对象复制 Key 模型和右键菜单/IPC/Secret 不落盘静态测试，前端测试总数 39/39。
+- 已同步 README、产品需求、技术架构、UI 系统和实施路线图，并维护专项 `deliverable.md`。
+- 自动验证：`npm.cmd run web:test` 39/39、`npm.cmd run web:build`、`cargo fmt --all -- --check`、`cargo check`、`cargo test --lib --no-run` 和 `git diff --check` 通过。
+- 环境限制：直接运行 `cargo test --lib` 返回 `0xc0000139 / STATUS_ENTRYPOINT_NOT_FOUND`，因此未把 Rust 断言测试标记为通过；本轮未启动长期服务进程、未调用真实 OSS。
+
+## 2026-07-12 Codex History Session 列表分页
+
+- 已初始化专项蓝图：`scripts/work/2026-07-12-codex-history-pagination/`；先完成 Rust 扫描链路、前端虚拟列表和消息分页的只读核对。
+- 已完成 Rust：新增 `ListCodexHistorySessionsPageInput` / `CodexHistoryGlobalSessionsPage`；`list_all_codex_history_sessions` 复用原 command 名但改为接收分页输入。
+- 已完成 Rust：候选 JSONL 递归发现、修改时间/规范化路径排序、文件指纹检查、查询与工作区后端过滤、cursor 查询绑定、有界快照缓存、超时/取消和单文件 warning。
+- 已完成前端：`useInfiniteQuery` 首屏 10 条，距离底部 120px 触发下一页；搜索防抖后进入后端请求；工作区/刷新重置 pages 和滚动；底部 loading/完成/重试状态保留已有 rows。
+- 已完成回归测试：新增 `tests/frontend/history-pagination.test.mjs` 和 Rust limit/cursor/query 测试；消息内容分页、固定行高虚拟列表和选中会话逻辑保持原链路。
+- 自动验证：`npm.cmd run web:test` 40/40、`npm.cmd run web:build`、`cargo fmt --manifest-path "src-tauri/Cargo.toml" -- --check`、`cargo check --manifest-path "src-tauri/Cargo.toml"`、`cargo test --manifest-path "src-tauri/Cargo.toml" --lib --no-run`、`git diff --check` 通过。
+- 环境限制：本轮没有启动长期服务进程，也未触碰用户已有 Vite/Tauri 进程；Rust 测试仅完成 no-run 编译门禁，完整 `cargo test --lib` 仍受本机既有 `0xc0000139 (STATUS_ENTRYPOINT_NOT_FOUND)` 测试宿主装载问题影响。
+
+## 2026-07-12 Settings Hotkeys 底部滚动修复
+
+- 已按 `scripts/work/2026-07-12-settings-scroll-fix/` 建立蓝图。
+- 只读核对完成：确认外层滚动容器、Settings flex 高度链、Prompt `overflow-hidden` 和语音卡片 DOM 顺序；未发现 fixed/sticky 实现。
+- 已完成：Settings 根节点改为 `min-h-full`，内层增加底部安全间距；General/Hotkeys 内容列表改为自然高度；Prompt 和语音预留卡片设置 `shrink-0`。
+- 已新增 `tests/frontend/settings-scroll.test.mjs`，锁定单一外层滚动、自然高度和禁止列表 shrink 的结构。
+- 自动验证：`npm.cmd run web:test` 41/41、`npm.cmd run web:build`、`git diff --check` 通过。
+- 手工待验收：真实 Tauri 窗口在用户截图尺寸滚动到最底，确认 5 个 Prompt 槽位和语音预留卡片完整可见。
+
+## 2026-07-12 Codex History Session 列表分页
+
+- 已完成只读审计：确认全量慢点在 Rust `scan_all_sessions -> parse_session`，不是单纯前端 DOM 渲染；确认消息详情已有 cursor 分页可复用。
+- 已建立专项蓝图、合同、候选快照设计、筛选/刷新边界和自动/手工验证清单。
+- 当前阶段：准备实现 Rust session 列表分页合同；尚未修改应用代码。
+# 2026-09-02 WebView2 禁用 GPU
+
+- 已创建 `scripts/work/2026-09-02-webview2-disable-gpu/` 专项蓝图。
+- 已完成全部 WebView 创建路径与当前 Tauri/Wry API 的只读核对。
+- 已完成两个配置窗口与两个动态窗口的统一参数注入，并保留 Wry 默认兼容参数。
+- 已新增四路径一致性回归测试，同步 README 与技术架构文档。
+- 自动验证通过：专项 1/1、前端 42/42、production Web build、Rust fmt/release/all-targets no-run、完整 Tauri debug MSI/NSIS 构建。
+- `cargo test --lib` 测试宿主仍在断言前因本机既有 `0xc0000139 / STATUS_ENTRYPOINT_NOT_FOUND` 退出；未误报为 Rust 单元测试通过。
+- 未启动临时服务或应用进程，`1420` 无监听；本机用户已有安装版自启动进程保持不动。
+
+## 2026-09-02 Workbench 工作区项目列表导入导出
+
+- 已创建 `scripts/work/2026-09-02-workspace-list-import-export/` 专项 Blueprint，并固化文件合同、冲突语义、事务和手工验收清单。
+- 已完成 Rust domain/repository/service/command：5 MiB 有界 I/O、10 秒超时与协作取消、SHA-256 防替换、目录重新定位、原子导出、UUID 重映射和单事务 create/skip/update。
+- 已完成偏好引用处理：Codex Profile 按名称映射，缺失自定义编辑器解除绑定并警告，置顶状态采用锁内字段级合并；偏好失败不会掩盖数据库成功。
+- 已完成前端：Workbench“操作”菜单导入/导出、敏感信息确认、最多 500 项固定行虚拟预览、动作选择、覆盖提示、重新定位、loading、错误恢复和 Toast。
+- 自动验证通过：`web:test` 45/45、`web:build`、Rust fmt/dev check/release check、Rust all-targets no-run、`git diff --check`。
+- 环境限制：`cargo test ... workspace_transfer --lib` 的测试宿主在断言前返回既有 `0xc0000139 / STATUS_ENTRYPOINT_NOT_FOUND`；本轮未启动长期服务或真实 Tauri 窗口，手工验收仍待执行。
+
+## 2026-09-02 常用 Prompts 导入导出
+
+- 已创建 `scripts/work/2026-09-02-prompt-import-export/` 专项 Blueprint，并固化 v1 文件合同、冲突矩阵、事务/幂等策略和手工验收清单。
+- 已完成 Rust domain/repository/service/command：64 MiB 与 1000 条边界、10 秒有界文件 I/O、SHA-256 防替换、原子导出、冲突预检和单事务 create/update/skip。
+- 已完成重放幂等：相同 create/update 请求已达到目标 UUID+内容时按成功跳过，不重复写；不同 ID 的相同标题+正文和文件内重复项只允许跳过。
+- 已完成前端：Prompts 标题区更多菜单、原生导入/导出对话框、完整正文敏感提示、先选文件后草稿门禁、逐项动作、1000 项虚拟列表、loading、内联错误、重新预检和 Toast。
+- 自动验证通过：`web:test` 49/49、`web:build`、Rust fmt/dev check/release check、all-targets no-run、`git diff --check`。
+- Rust 实际测试宿主启动后持续无输出，已中止并确认无残留进程；未把 no-run 编译误报为断言执行成功。
+- 本轮没有启动 Vite/Tauri 长期进程，`src-tauri/target` 无残留测试进程，1420/1421 无监听；真实桌面导入导出和亮暗主题仍需人工验收。

@@ -799,3 +799,117 @@ ativeToolbarActive（native 已确认 visible 且 session 有效）时，才隐�
 - 普通浏览器和 Tauri dev 的动态 stylesheet 正常；production WebView 中匹配 hash 的 `<style>` 文本存在，但全部 `sheet === null` 且无 nonce，证明是 CSP 激活阶段阻断而非 CSS cascade 或组件 style 覆盖。
 - Tauri production 会为静态 style 注入随机 nonce；在 CSP 含 nonce 时，runtime CSS-in-JS 必须继承同页 nonce。正确修复是传递 nonce，而不是关闭 CSP 或继续堆叠覆盖样式。
 - 修复后 HOME/Prompts 的 Ant runtime style 分别 43/43、30/30 激活，全部 head style 33/33 激活，Ant Icons 与 Sonner 也恢复；亮暗主题和 Prompt 编辑/校验 Toast 实机复核无阻断样式。
+
+## 2026-07-12 Workbench 工作区项目备注
+
+- 现有 `workspaces.description` 已具备 SQLite 持久化和前后端 DTO，不新增字段或迁移；此前卡片把它作为路径缺失时的兜底描述，本轮将路径和备注拆开显示。
+- 备注更新不能复用完整 `upsert_workspace`：卡片可能持有旧的名称、排序或置顶快照；新增 `update_workspace_description` 只更新目标字段并返回完整记录。
+- 备注保存采用稳定 workspace UUID，空字符串规范化为 `NULL`；首尾空白去除后最多 200 个 Unicode 字符，允许换行/制表符，拒绝 NUL 及其他控制字符。
+- 目录选择器仍由 Tauri dialog 负责，前端只在选目录成功后打开备注弹窗；拖入文件夹保持空备注，不改变既有直接注册行为。
+- 网页 Vite 预览可以检查搜索占位符和非桌面提示，但没有 Tauri runtime 数据，因此无法在该预览中显示真实工作区卡片。
+- 尝试使用本机 computer-use 做原生桌面检查时，宿主 native pipe 返回“系统找不到指定的文件”；未对 Windows 应用执行控制操作，原生动态验收留给用户手工回归。
+
+## 2026-07-12 Alibaba OSS 文件管理
+
+- AccessKey Secret 不能复用 Codex Auth 的 SQLite 配置路径；已将 Secret 独立放入 Windows Credential Manager，并在非 Windows 平台明确报安全存储不可用，不做明文降级。
+- OSS 账号没有稳定的 Endpoint/Region 元数据可供全局 Bucket 发现；第一版采用手动 Bucket/Region/Endpoint 绑定，能覆盖没有 `ListBuckets` 权限的 RAM policy。
+- OSS object key 不是本地路径：保留 key 的空格和大小写，只拒绝前导 `/`、控制字符和超长值；前缀用 delimiter 模拟目录。
+- Multipart complete、CopyObject 和覆盖写都不是可安全盲重试的未知结果操作；同一 PartNumber 上传才作为幂等单元做有限重试，并持久化 ETag/checkpoint。
+- 下载 Range 的响应必须与请求长度一致；流读取超时/连接失败会丢弃当前 Range 的部分内存并重新请求该 Range，不把不完整数据写入 checkpoint 文件。
+- 传输任务恢复时 queued/running 会先变为 paused；取消 Abort 失败会保留云端清理待办，避免用户误以为分片已清理。
+- 当前实现刻意不提供 Bucket 配置、STS/AssumeRole、签名 URL 分享，避免第一版把对象文件管理扩张成云资源控制台。
+- 传输任务若暴露 `uploadId` 或 checkpoint 会把 Multipart 内部状态带入前端边界；已通过 serde skip_serializing 保留 Rust/SQLite 恢复能力，同时只向前端发送进度和状态。
+- 不能允许编辑目标时把同一个 target ID 改指向另一个 Bucket/账号，否则旧任务会用错误凭据继续；当前在存在未决任务时锁定身份字段，跨账号移动始终拒绝。
+- Complete 请求超时并不等价于远端失败；新增 HeadObject 确认动作，只有对象存在且大小匹配才关闭任务，未找到时回到可恢复状态。
+
+## 2026-07-12 OSS 签名兼容性修复
+
+- Go 参考项目使用 `aliyun-oss-go-sdk v3.0.2` 的 `aliyunoss.New(endpoint, ...)`，没有传入 Region 或 `AuthVersion(AuthV4)`；其可用性证明 endpoint/凭据组合可工作，但不是 Rust V4 的同版本签名对照。
+- SDK V4 源码确认 query 使用 `url.QueryEscape`，`/` 编码为 `%2F`；Bexo 原实现解码后使用保留 `/` 的 URI 集合，导致 ListObjects 的 `delimiter`/前缀 query 与实际 URL 不一致，形成确定的 `SignatureDoesNotMatch` 根因。
+- 修复后 query 使用独立的编码集合，path 仍保留 `/`；新增无真实凭据的回归测试。
+- `Region=cn-shanghai`、`Endpoint=https://oss-cn-shanghai.aliyuncs.com` 的职责现在在校验和 signer 中分离；`oss-cn-shanghai` 不再允许作为 Region。
+- OSS endpoint 错误现在保留服务端返回的 Endpoint、HostId、Bucket，并映射为可识别的 `OSS_ENDPOINT_MISMATCH`；保存绑定后对象查询缓存会失效，避免旧错误残留。
+- 用户提供的 AccessKey Secret 未写入 Bexo 源码；该凭据已在聊天中暴露，必须在阿里云 RAM 中禁用并轮换。
+
+## 2026-07-12 OSS 暗色主题一致性改造
+
+- 账号提示卡、目标卡、传输队列和对象浏览器已统一使用 `--oss-*` 语义 token；亮色值保持原有视觉，暗色值使用低饱和深色 surface、可读文本和危险色。
+- `oss-card-hover` 与 `oss-object-row` 统一覆盖 hover、active、focus-visible；目录按钮、账号项和 Bucket 项补充可见键盘焦点与 pointer affordance。
+- 全局暗色兼容层仍保留精确的 `hover:bg-*`、`hover:border-*`、提示卡、分割线和错误色映射，作为旧组件/未来遗漏的防回退兜底；当前 OSS 组件自身已不再使用这些硬编码主题类。
+- 生成 CSS 已确认包含暗色 `--oss-surface-info: #20364a`、`--oss-text-danger: #f38b86` 和 semantic interaction selectors；没有启动真实 OSS API 或写入任何凭据。
+
+## 2026-07-12 OSS 新建文件夹
+
+- 当前对象浏览器只读取 `commonPrefixes` 并允许进入目录，没有创建目录入口、Tauri command 或前端 wrapper。
+- 现有 `OssObjectPutRequest` 已支持空 `body` 和 `overwrite=false`，创建空目录可以复用现有 OSS PUT 签名与 timeout/cancel 链路。
+- OSS 文件夹是以 `/` 结尾的 0 字节 Object；本轮将名称限定为单层 segment，父路径由当前浏览前缀提供，避免路径穿越和输入歧义。
+- 目录创建不进入 Multipart 传输队列；它是短时 metadata 写入，按钮 loading/Toast 足够，失败不应产生恢复任务。
+- 已实现 `create_oss_folder`：Rust 最终校验 target/prefix/name/key，复用 `PutObject` 空 body，并使用 `x-oss-forbid-overwrite` 防止重复点击覆盖。
+- OSS `FileAlreadyExists` 与 HTTP 412 统一映射为内部冲突；folder service 对前端返回 `OSS_FOLDER_ALREADY_EXISTS`，避免把目录冲突误显示成普通上传冲突。
+- 前端单层名称校验与后端规则保持一致；成功只失效当前 target/prefix 查询，弹窗关闭并显示 Toast，失败同时保留 inline error 和 Toast。
+- `build.rs`、invoke handler、`main-window-commands` 和生成 ACL schemas 已同步 `create_oss_folder`，没有新增数据库字段、Secret DTO 或环境变量。
+
+## 2026-07-12 OSS 批量拖放与传输体验
+
+- 用户新增反馈：多文件拖放不可用，传输队列看不到足够的目标/进度信息，上传中不能取消，完成后目录不自动刷新。
+- 当前必须区分“任务已入队”和“远端对象已完成”；前者不能触发完成 Toast 或目录刷新。
+- 需要沿现有 `oss://transfer-progress`、`oss://transfer-state-changed`、`cancel_oss_transfer` 和 `OssTransferTaskRecord` 链路核对，不能仅在 `start_oss_upload` 返回时判定完成。
+- 代码核对完成：Tauri v2 的 `drop` payload 可直接提供多个本地路径；本轮改用 `getCurrentWebview().onDragDropEvent()`，而不是把文件读成 WebView `File` 对象或误用现有窗口拖拽插件。
+- 目标信息不需要扩张 SQLite：`OssTransferTaskView` 在 Rust 运行时从 account/target 组合出显示字段，内部 `uploadId/checkpoint` 继续跳过序列化。
+- 小文件的单 PUT 不具备 Multipart Abort 能力；取消请求/响应未确定时必须是 `needs_confirmation`，否则会把实际已上传的对象误报为取消。
+- 4 MiB 默认新分片是可观测性取舍；旧 checkpoint 不迁移、不改写，保证历史任务按原分片恢复。
+- 自动测试不调用真实 OSS，使用批量入队模型的假启动器验证并发上限和部分失败；真实 Tauri 事件位置、Endpoint/权限和网络断点仍以人工验收为准。
+
+## 2026-07-12 OSS 对象右键快捷菜单
+
+- 当前 `ObjectRow` 已有左键 `...` 菜单，具备下载/重命名/删除；页面删除入口已统一使用确认弹框，右键删除应复用同一回调。
+- `copyOssObject` 已覆盖同 Bucket CopyObject；“复制文件”必须通过目标 Object Key 弹窗实现，不能把“复制 URL”混同为文件复制。
+- 当前代码没有 presigned URL command；裸 `https://bucket.endpoint/key` 对私有 Bucket 不保证可下载，必须在 Rust 读取 Credential Manager Secret 并生成 GET query 签名。
+- 预签名 URL 只返回给当前前端命令响应并用于剪贴板，不进入 SQLite、日志、传输事件或错误详情；默认 900 秒，限制 60 至 604800 秒。
+- Ant Design 官方 Dropdown 支持 `contextMenu` trigger 并跟随右键坐标；对象行使用右键菜单，文件夹行不挂文件操作菜单。
+- 实现复核：`OssV4Signer::presign_get` 生成官方要求的 V4 query 参数，并将 Host 作为已签名请求头；服务层只读取 Credential Manager，返回 DTO 不包含 Secret。
+- 复制对象默认目标 Key 使用文件名 `-copy` 后缀，前端和 Rust 都校验空值、前后斜杠、控制字符、绑定前缀范围；CopyObject 固定 `overwrite=false`。
+- 失败验证：`cargo test --lib --no-run` 通过；`cargo test --lib` 在当前 Windows 宿主装载测试进程时返回 `0xc0000139 / STATUS_ENTRYPOINT_NOT_FOUND`，未执行断言。
+- 自动验证：`npm.cmd run web:test` 39/39、`npm.cmd run web:build`、`cargo fmt --all -- --check`、`cargo check`、`cargo test --lib --no-run` 通过。
+
+## 2026-07-12 Codex History Session 列表分页
+
+- 当前全局 session 列表接口 `list_all_codex_history_sessions` 无输入参数，返回完整 `CodexHistoryGlobalSessionsResponse`；前端 `useQuery` 每次接收完整 sessions 后才做筛选。
+- Rust 全局扫描会递归收集所有 JSONL、逐个读取头尾并解析，再按 `last_active_at/created_at` 排序；现有前端固定行高虚拟列表只能减少 DOM 数量，不能减少该扫描成本。
+- 消息内容已经使用独立 `cursor + limit` API，本轮不应将 session 列表分页和消息分页混为一个状态机。
+- 为实现冷启动只解析 10 条，首版候选排序采用文件修改时间，返回卡片仍解析并展示 JSON 的 `lastActiveAt`；cursor 绑定查询条件和候选快照，避免文件变化导致重复/漏项。
+- 搜索和工作区筛选必须进入后端分页请求，不能只在已加载页做客户端过滤；总数不作为首屏阻塞信息。
+- 实现后确认：首次请求只做 JSONL 候选发现和当前页解析；连续页通过服务内有界 cursor 快照复用路径/大小/修改时间指纹，刷新无 cursor 会创建新快照。
+- 前端仍使用固定行高虚拟列表，只把完整数组替换为 `pages.flatMap`；底部保留加载中、完成、分页错误重试和无匹配空状态，消息内容的独立 cursor 状态未改动。
+
+## 2026-07-12 Settings Hotkeys 底部滚动修复
+
+- 用户截图中的“语音输入热键（预留）”不是 fixed/sticky 元素；源码中没有对应定位样式。
+- 真实问题是 Hotkeys 主列表在 `flex-1 min-h-0` 可用高度不足时压缩 `PromptQuickPasteSettings`，而该组件使用 `overflow-hidden`，导致底部槽位被裁剪。
+- 修复应让 AppShell 的外层 `Content overflow-y-auto` 继续作为唯一滚动容器，设置卡片按自然高度增长，并对复合 Prompt/语音卡片设置 `shrink-0`。
+- 实现后确认：没有新增 nested scroll、fixed footer 或业务状态改动；`PromptQuickPasteSettings` 保留 `overflow-hidden` 仅用于卡片边界，但不再作为可收缩 flex 子项。
+# 2026-09-02 WebView2 禁用 GPU
+
+- `main`、预创建 Screenshot Overlay、动态 Codex History、动态 Screenshot Overlay 都需要覆盖。
+- Tauri/Wry 自定义 `additionalBrowserArgs` 会覆盖 Wry 默认参数，因此最终参数必须保留 `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection`。
+- 不使用系统环境变量，避免影响其他 WebView2 应用。
+- 当前锁定版本为 Tauri `2.10.3`、Tauri Runtime Wry `2.10.1`、Wry `0.54.2`；完整 debug 桌面包构建已验证配置字段和动态 builder API 可用。
+- 本机已有用户安装版自启动进程，不能用新 debug 进程做无干扰运行时命令行取证；未终止用户进程，保留新版重启后的手工检查项。
+
+## 2026-09-02 Workbench 工作区项目列表导入导出
+
+- 工作区、项目和启动任务位于 SQLite，置顶 ID 位于本地偏好；导入必须先提交数据库事务，再做字段级置顶合并，并把后者失败作为 warning 返回。
+- 路径是项目的稳定匹配键：Windows 下按 canonical 路径、分隔符和大小写归一化；文件内重复路径、缺失目录和跨多个现有工作区的匹配必须阻止写入。
+- 导出文件包含绝对路径及可执行命令，属于敏感本机配置；UI 必须先提示，但文件不包含凭据、日志、快照、历史和临时选择状态。
+- 自定义编辑器引用是偏好中的本机 ID；目标机缺少该 ID 时已改为解除绑定并警告，避免产生静默不可用配置。
+- 预检 SHA-256 与应用时复读绑定，更新动作只替换匹配项目及其启动任务，现有工作区的未匹配项目保持不动。
+
+## 2026-09-02 常用 Prompts 导入导出
+
+- Prompt 标题没有唯一约束，稳定身份只能使用 UUID；因此只按标题相同不得更新，只有同 UUID 冲突才开放显式更新。
+- 快捷粘贴槽位保存 Prompt ID；更新时保持 UUID 与本地 `sort_order`，可保证现有快捷绑定不漂移。新建记录仅在本地末尾按文件顺序追加。
+- 文件只保存 `id/title/content/sortOrder` 和格式元数据，不包含快捷键、偏好、凭据或时间戳；完整正文属于敏感信息，UI 在导出前明确提示。
+- Rust 负责 64 MiB 有界读写、10 秒 timeout、SHA-256、严格 JSON/schema 校验和同目录原子替换；前端只传绝对路径、哈希和动作选择。
+- 应用阶段在一个 `Database::write` 事务内重新分类全部项目；状态变化、数量超限或任一写入失败都会整体回滚。
+- 同一 create/update 请求若因响应丢失而重放，目标 UUID 已达到完全相同内容时归一为成功跳过，避免重复写和伪失败。
+- 预检正文仅返回 180 字符预览，最多 1000 项固定行虚拟化；状态同时使用图标和文字，不能只依赖颜色。

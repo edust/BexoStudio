@@ -80,6 +80,58 @@ impl PreferencesService {
                 "设置更新状态异常，请重启 Bexo Studio 后重试",
             )
         })?;
+        self.update_preferences_locked(app, hotkey_service, patch)
+    }
+
+    pub fn merge_workspace_pinned_ids<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        hotkey_service: &HotkeyService,
+        pinned_workspace_ids_to_add: &[String],
+        pinned_workspace_ids_to_remove: &[String],
+    ) -> AppResult<AppPreferences> {
+        let _update_guard = self.update_lock.lock().map_err(|_| {
+            AppError::new(
+                "PREFERENCES_UPDATE_LOCK_FAILED",
+                "设置更新状态异常，请重启 Bexo Studio 后重试",
+            )
+        })?;
+        let preferences = self.get_preferences()?;
+        let remove_ids = pinned_workspace_ids_to_remove
+            .iter()
+            .cloned()
+            .collect::<HashSet<_>>();
+        let mut pinned_workspace_ids = preferences
+            .workspace
+            .pinned_workspace_ids
+            .into_iter()
+            .filter(|workspace_id| !remove_ids.contains(workspace_id))
+            .collect::<Vec<_>>();
+        let mut seen_ids = pinned_workspace_ids.iter().cloned().collect::<HashSet<_>>();
+        for workspace_id in pinned_workspace_ids_to_add {
+            if seen_ids.insert(workspace_id.clone()) {
+                pinned_workspace_ids.push(workspace_id.clone());
+            }
+        }
+        self.update_preferences_locked(
+            app,
+            hotkey_service,
+            AppPreferencesPatch {
+                workspace: Some(crate::domain::WorkspacePreferencesPatch {
+                    selected_workspace_ids: None,
+                    pinned_workspace_ids: Some(pinned_workspace_ids),
+                }),
+                ..AppPreferencesPatch::default()
+            },
+        )
+    }
+
+    fn update_preferences_locked<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        hotkey_service: &HotkeyService,
+        patch: AppPreferencesPatch,
+    ) -> AppResult<AppPreferences> {
         let previous_preferences = self.get_preferences()?;
         let validated =
             validate_preferences(apply_preferences_patch(previous_preferences.clone(), patch))?;

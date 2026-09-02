@@ -1244,14 +1244,14 @@ export default function SettingsPage() {
   }, [persistTerminalTemplates, terminalTemplates, updatePreferencesMutation.isPending]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-white">
+    <div className="flex min-h-full flex-col bg-white">
       <div className="border-b border-[#e6edf5] px-5 py-4">
         <Typography.Text className="block text-[11px] font-semibold uppercase tracking-[0.22em] text-[#1f2937]">
           {activeSection === "hotkeys" ? "Hotkeys" : "General"}
         </Typography.Text>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col px-4 py-4">
+      <div className="flex flex-1 flex-col px-4 pb-6 pt-4">
         {!desktopRuntimeAvailable ? (
           <Alert
             className="mb-4"
@@ -1338,7 +1338,7 @@ export default function SettingsPage() {
                 <Spin size="small" />
               </div>
             ) : (
-              <div className="flex min-h-0 flex-1 flex-col gap-0">
+              <div className="flex flex-col gap-0">
                 <div className="rounded-[0] border border-[#eef2f6] bg-white">
                   <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
                     <div className="min-w-0">
@@ -1792,11 +1792,11 @@ export default function SettingsPage() {
             ) : null}
 
             {desktopRuntimeAvailable && settingsPageLoading ? (
-              <div className="flex min-h-0 flex-1 items-center justify-center">
+              <div className="flex min-h-[240px] items-center justify-center">
                 <Spin size="small" />
               </div>
             ) : (
-              <div className="flex min-h-0 flex-1 flex-col gap-0">
+              <div className="flex flex-col gap-0">
                 <div className="rounded-[0] border border-[#eef2f6] bg-white">
                   <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
                     <div className="min-w-0">
@@ -1885,7 +1885,7 @@ export default function SettingsPage() {
                   slots={promptQuickPasteSlots}
                 />
 
-                <div className="rounded-[0] border border-[#eef2f6] bg-white px-4 py-4">
+                <div className="shrink-0 rounded-[0] border border-[#eef2f6] bg-white px-4 py-4">
                   <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
                     语音输入热键（预留）
                   </Typography.Text>

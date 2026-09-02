@@ -2,8 +2,9 @@ use tauri::State;
 
 use crate::{
     domain::{
-        CodexHistoryGlobalSessionsResponse, CodexHistoryMessagesInput, CodexHistoryMessagesPage,
-        CodexHistorySessionsResponse, ListCodexHistorySessionsInput, OpenCodexHistoryWindowResult,
+        CodexHistoryGlobalSessionsPage, CodexHistoryMessagesInput, CodexHistoryMessagesPage,
+        CodexHistorySessionsResponse, ListCodexHistorySessionsInput,
+        ListCodexHistorySessionsPageInput, OpenCodexHistoryWindowResult,
     },
     error::{AppError, CommandResponse},
     services::CodexHistoryService,
@@ -61,8 +62,12 @@ pub async fn list_codex_history_sessions(
 pub async fn list_all_codex_history_sessions(
     app_handle: tauri::AppHandle,
     codex_history_service: State<'_, CodexHistoryService>,
-) -> Result<CommandResponse<CodexHistoryGlobalSessionsResponse>, AppError> {
-    match codex_history_service.list_all_sessions(&app_handle).await {
+    input: ListCodexHistorySessionsPageInput,
+) -> Result<CommandResponse<CodexHistoryGlobalSessionsPage>, AppError> {
+    match codex_history_service
+        .list_all_sessions_page(&app_handle, input)
+        .await
+    {
         Ok(data) => Ok(CommandResponse::success(data)),
         Err(error) => {
             log::error!(

@@ -68,6 +68,97 @@ export type WorkspaceRecord = {
   projects: ProjectRecord[];
 };
 
+export type WorkspaceImportAction = "create" | "skip" | "update";
+
+export type WorkspaceImportProjectStatus = "ready" | "existing" | "missing" | "invalid";
+
+export type WorkspaceImportItemStatus = "ready" | "existing" | "blocked";
+
+export type WorkspaceImportRelocation = {
+  workspaceIndex: number;
+  projectIndex: number;
+  path: string;
+};
+
+export type WorkspaceImportSelection = {
+  workspaceIndex: number;
+  action: WorkspaceImportAction;
+};
+
+export type WorkspaceImportProjectPreview = {
+  projectIndex: number;
+  name: string;
+  sourcePath: string;
+  resolvedPath: string;
+  status: WorkspaceImportProjectStatus;
+  existingWorkspaceId?: string | null;
+  existingWorkspaceName?: string | null;
+  message?: string | null;
+};
+
+export type WorkspaceImportItemPreview = {
+  workspaceIndex: number;
+  name: string;
+  suggestedName: string;
+  status: WorkspaceImportItemStatus;
+  recommendedAction: WorkspaceImportAction;
+  canCreate: boolean;
+  canUpdate: boolean;
+  existingWorkspaceId?: string | null;
+  existingWorkspaceName?: string | null;
+  projects: WorkspaceImportProjectPreview[];
+  warnings: string[];
+};
+
+export type WorkspaceImportPreviewSummary = {
+  totalWorkspaceCount: number;
+  readyWorkspaceCount: number;
+  existingWorkspaceCount: number;
+  blockedWorkspaceCount: number;
+  missingProjectCount: number;
+  invalidProjectCount: number;
+};
+
+export type WorkspaceImportPreview = {
+  sourcePath: string;
+  fileHash: string;
+  schemaVersion: number;
+  summary: WorkspaceImportPreviewSummary;
+  items: WorkspaceImportItemPreview[];
+  warnings: string[];
+};
+
+export type ExportWorkspaceListPayload = {
+  destinationPath: string;
+};
+
+export type ExportWorkspaceListResult = {
+  destinationPath: string;
+  workspaceCount: number;
+  projectCount: number;
+  launchTaskCount: number;
+  warnings: string[];
+};
+
+export type PreviewWorkspaceListImportPayload = {
+  sourcePath: string;
+  relocations: WorkspaceImportRelocation[];
+};
+
+export type ApplyWorkspaceListImportPayload = PreviewWorkspaceListImportPayload & {
+  expectedFileHash: string;
+  selections: WorkspaceImportSelection[];
+};
+
+export type WorkspaceImportApplyResult = {
+  createdWorkspaceCount: number;
+  updatedWorkspaceCount: number;
+  skippedWorkspaceCount: number;
+  importedProjectCount: number;
+  importedLaunchTaskCount: number;
+  warnings: string[];
+};
+
 export type WorkspaceResourceEntry = {
   path: string;
   name: string;
@@ -114,6 +205,71 @@ export type PromptRecord = {
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
+};
+
+export type PromptImportAction = "create" | "skip" | "update";
+
+export type PromptImportItemStatus = "ready" | "existing" | "conflict" | "duplicate";
+
+export type PromptImportSelection = {
+  promptIndex: number;
+  action: PromptImportAction;
+};
+
+export type PromptImportItemPreview = {
+  promptIndex: number;
+  id: string;
+  title: string;
+  contentPreview: string;
+  status: PromptImportItemStatus;
+  recommendedAction: PromptImportAction;
+  canCreate: boolean;
+  canUpdate: boolean;
+  matchedPromptId?: string | null;
+  matchedPromptTitle?: string | null;
+  message: string;
+};
+
+export type PromptImportPreviewSummary = {
+  totalPromptCount: number;
+  readyPromptCount: number;
+  existingPromptCount: number;
+  conflictPromptCount: number;
+  duplicatePromptCount: number;
+};
+
+export type PromptImportPreview = {
+  sourcePath: string;
+  fileHash: string;
+  schemaVersion: number;
+  summary: PromptImportPreviewSummary;
+  items: PromptImportItemPreview[];
+};
+
+export type ExportPromptListPayload = {
+  destinationPath: string;
+};
+
+export type ExportPromptListResult = {
+  promptCount: number;
+  fileSizeBytes: number;
+  fileHash: string;
+};
+
+export type PreviewPromptListImportPayload = {
+  sourcePath: string;
+};
+
+export type ApplyPromptListImportPayload = PreviewPromptListImportPayload & {
+  expectedFileHash: string;
+  selections: PromptImportSelection[];
+};
+
+export type PromptImportApplyResult = {
+  createdPromptCount: number;
+  updatedPromptCount: number;
+  skippedPromptCount: number;
+  prompts: PromptRecord[];
 };
 
 export type CodexAuthQuotaTier = {
@@ -188,9 +344,18 @@ export type CodexHistorySessionsResponse = {
   sessions: CodexHistorySession[];
 };
 
-export type CodexHistoryGlobalSessionsResponse = {
+export type ListCodexHistorySessionsPagePayload = {
+  cursor?: string | null;
+  limit?: number;
+  workspaceId?: string | null;
+  query?: string | null;
+};
+
+export type CodexHistoryGlobalSessionsPage = {
   codexRoots: string[];
   sessions: CodexHistorySession[];
+  nextCursor?: string | null;
+  hasMore: boolean;
 };
 
 export type CodexHistoryMessage = {
@@ -837,6 +1002,194 @@ export type DeleteResult = {
   id: string;
 };
 
+export type OssAccountSummary = {
+  id: string;
+  displayName: string;
+  authMode: "access_key";
+  accessKeyIdHint: string;
+  lastProbeStatus: string;
+  lastProbeError?: string | null;
+  lastProbeAt?: string | null;
+  isDisabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type OssTargetRecord = {
+  id: string;
+  accountId: string;
+  displayName: string;
+  bucket: string;
+  region: string;
+  endpoint: string;
+  prefix: string;
+  isDefault: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type OssObjectEntry = {
+  key: string;
+  kind: "object" | "prefix" | string;
+  size?: number | null;
+  etag?: string | null;
+  lastModified?: string | null;
+  storageClass?: string | null;
+};
+
+export type OssObjectPage = {
+  objects: OssObjectEntry[];
+  commonPrefixes: string[];
+  nextContinuationToken?: string | null;
+  isTruncated: boolean;
+};
+
+export type OssProbeResult = {
+  targetId: string;
+  bucket: string;
+  reachable: boolean;
+  canListObjects: boolean;
+  message: string;
+  checkedAt: string;
+};
+
+export type OssObjectMetadata = {
+  key: string;
+  size?: number | null;
+  etag?: string | null;
+  contentType?: string | null;
+  lastModified?: string | null;
+  storageClass?: string | null;
+  versionId?: string | null;
+};
+
+export type OssTransferStart = {
+  operationId: string;
+  taskId: string;
+};
+
+export type OssTransferTaskRecord = {
+  id: string;
+  accountId: string;
+  targetId: string;
+  operation: "upload" | "download" | string;
+  objectKey: string;
+  localPath: string;
+  status: string;
+  bytesCompleted: number;
+  totalBytes: number;
+  lastErrorCode?: string | null;
+  lastErrorMessage?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type OssTransferTaskView = OssTransferTaskRecord & {
+  accountDisplayName: string;
+  targetDisplayName: string;
+  bucket: string;
+  region: string;
+};
+
+export type UpsertOssAccountPayload = {
+  id?: string;
+  displayName: string;
+  accessKeyId: string;
+  accessKeySecret?: string;
+};
+
+export type UpsertOssTargetPayload = {
+  id?: string;
+  accountId: string;
+  displayName: string;
+  bucket: string;
+  region: string;
+  endpoint: string;
+  prefix?: string;
+  isDefault?: boolean;
+  sortOrder?: number;
+};
+
+export type ListOssObjectsPayload = {
+  targetId: string;
+  prefix?: string;
+  continuationToken?: string | null;
+  pageSize?: number;
+};
+
+export type CreateOssFolderPayload = {
+  targetId: string;
+  parentPrefix: string;
+  name: string;
+};
+
+export type CreateOssFolderResult = {
+  targetId: string;
+  objectKey: string;
+};
+
+export type HeadOssObjectPayload = {
+  targetId: string;
+  objectKey: string;
+};
+
+export type GetOssObjectDownloadUrlPayload = {
+  targetId: string;
+  objectKey: string;
+  expiresInSeconds?: number;
+};
+
+export type GetOssObjectDownloadUrlResult = {
+  targetId: string;
+  objectKey: string;
+  url: string;
+  expiresAt: string;
+};
+
+export type TestOssTargetPayload = {
+  targetId: string;
+};
+
+export type StartOssUploadPayload = {
+  targetId: string;
+  localPath: string;
+  objectKey: string;
+  overwrite: boolean;
+};
+
+export type StartOssDownloadPayload = {
+  targetId: string;
+  objectKey: string;
+  localPath: string;
+  overwrite: boolean;
+};
+
+export type OssOperationPayload = {
+  operationId: string;
+};
+
+export type DeleteOssObjectsPayload = {
+  targetId: string;
+  objectKeys: string[];
+};
+
+export type CopyOssObjectPayload = {
+  targetId: string;
+  sourceKey: string;
+  targetKey: string;
+  overwrite: boolean;
+};
+
+export type DeleteOssObjectsResult = {
+  deletedKeys: string[];
+};
+
+export type CopyOssObjectResult = {
+  sourceKey: string;
+  targetKey: string;
+};
+
 export type UpsertWorkspacePayload = {
   id?: string;
   name: string;
@@ -846,6 +1199,11 @@ export type UpsertWorkspacePayload = {
   sortOrder?: number;
   isDefault?: boolean;
   isArchived?: boolean;
+};
+
+export type UpdateWorkspaceDescriptionPayload = {
+  workspaceId: string;
+  description: string;
 };
 
 export type ReorderWorkspacesPayload = {

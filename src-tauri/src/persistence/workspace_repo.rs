@@ -6,9 +6,10 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        parse_color_or_none, require_non_empty, validate_optional_uuid, validate_ordered_uuid_list,
-        DeleteResult, ProjectRecord, ReorderWorkspacesInput, UpsertWorkspaceInput, WorkspaceRecord,
-        MAX_REORDER_ITEMS,
+        normalize_workspace_description, parse_color_or_none, require_non_empty,
+        validate_optional_uuid, validate_ordered_uuid_list, validate_workspace_id, DeleteResult,
+        ProjectRecord, ReorderWorkspacesInput, UpdateWorkspaceDescriptionInput,
+        UpsertWorkspaceInput, WorkspaceRecord, MAX_REORDER_ITEMS,
     },
     error::{AppError, AppResult},
     persistence::list_all_launch_tasks,
@@ -184,10 +185,7 @@ pub fn upsert_workspace(
 ) -> AppResult<WorkspaceRecord> {
     let id = validate_optional_uuid("id", input.id)?.unwrap_or_else(|| Uuid::new_v4().to_string());
     let name = require_non_empty("name", &input.name, 80)?;
-    let description = input
-        .description
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
+    let description = normalize_workspace_description(input.description)?;
     let icon = input
         .icon
         .map(|value| value.trim().to_string())
@@ -277,6 +275,59 @@ pub fn upsert_workspace(
         })
 }
 
+pub fn update_workspace_description(
+    connection: &mut Connection,
+    input: UpdateWorkspaceDescriptionInput,
+) -> AppResult<WorkspaceRecord> {
+    let workspace_id = validate_workspace_id(input.workspace_id)?;
+    let description = normalize_workspace_description(Some(input.description))?;
+    let timestamp = Utc::now().to_rfc3339();
+    let transaction = connection.savepoint().map_err(|error| {
+        AppError::new(
+            "DB_WRITE_FAILED",
+            "failed to open workspace description transaction",
+        )
+        .with_detail("reason", error.to_string())
+    })?;
+
+    let affected_rows = transaction
+        .execute(
+            "UPDATE workspaces SET description = ?1, updated_at = ?2 WHERE id = ?3",
+            params![description, timestamp, workspace_id.as_str()],
+        )
+        .map_err(|error| {
+            AppError::new("DB_WRITE_FAILED", "failed to update workspace description")
+                .with_detail("workspaceId", workspace_id.clone())
+                .with_detail("reason", error.to_string())
+        })?;
+
+    if affected_rows != 1 {
+        return Err(
+            AppError::new("WORKSPACE_NOT_FOUND", "workspace was not found")
+                .with_detail("workspaceId", workspace_id),
+        );
+    }
+
+    transaction.commit().map_err(|error| {
+        AppError::new(
+            "DB_WRITE_FAILED",
+            "failed to commit workspace description transaction",
+        )
+        .with_detail("reason", error.to_string())
+    })?;
+
+    list_workspaces(connection)?
+        .into_iter()
+        .find(|workspace| workspace.id == workspace_id)
+        .ok_or_else(|| {
+            AppError::new(
+                "DB_READ_FAILED",
+                "failed to load workspace after description update",
+            )
+            .with_detail("workspaceId", workspace_id)
+        })
+}
+
 pub fn reorder_workspaces(
     connection: &mut Connection,
     input: ReorderWorkspacesInput,
@@ -363,7 +414,16 @@ pub fn register_workspace_folder(
     connection: &mut Connection,
     path: String,
 ) -> AppResult<WorkspaceRecord> {
+    register_workspace_folder_with_description(connection, path, None)
+}
+
+pub fn register_workspace_folder_with_description(
+    connection: &mut Connection,
+    path: String,
+    raw_description: Option<String>,
+) -> AppResult<WorkspaceRecord> {
     let directory_path = crate::domain::ensure_absolute_directory(&path, "INVALID_WORKSPACE_PATH")?;
+    let description = normalize_workspace_description(raw_description)?;
     let workspace_label = derive_workspace_label(&directory_path);
     let project_label = workspace_label.clone();
     let timestamp = Utc::now().to_rfc3339();
@@ -414,10 +474,11 @@ pub fn register_workspace_folder(
         .execute(
             "INSERT INTO workspaces
              (id, name, description, icon, color, sort_order, is_default, is_archived, created_at, updated_at)
-             VALUES (?1, ?2, NULL, NULL, NULL, ?3, ?4, 0, ?5, ?6)",
+             VALUES (?1, ?2, ?3, NULL, NULL, ?4, ?5, 0, ?6, ?7)",
             params![
                 workspace_id,
                 workspace_name,
+                description,
                 workspace_count,
                 if workspace_count == 0 { 1 } else { 0 },
                 timestamp,

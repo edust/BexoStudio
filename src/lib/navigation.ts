@@ -1,4 +1,5 @@
 import {
+  CloudServerOutlined,
   HistoryOutlined,
   HomeOutlined,
   KeyOutlined,
@@ -10,6 +11,7 @@ import type { AppRouteKey, PrimaryNavItem, SectionSidebarContent } from "@/types
 
 export const primaryNavigation: PrimaryNavItem[] = [
   { key: "home", label: "Workbench", href: "/", icon: HomeOutlined },
+  { key: "oss", label: "OSS 文件", href: "/oss", icon: CloudServerOutlined },
   { key: "history", label: "Session / History", href: "/history", icon: HistoryOutlined },
   { key: "codexAuth", label: "Codex Auth", href: "/codex-auth", icon: KeyOutlined },
   { key: "prompts", label: "Prompts", href: "/prompts", icon: PromptLetterIcon },
@@ -21,8 +23,15 @@ export const sidebarContentByRoute: Record<AppRouteKey, SectionSidebarContent> =
     eyebrow: "WORKBENCH",
     title: "",
     description: "",
-    searchPlaceholder: "搜索工作区名称...",
+    searchPlaceholder: "搜索名称、路径或备注...",
     dataSource: "workspaces",
+    items: [],
+  },
+  oss: {
+    eyebrow: "OSS FILES",
+    title: "",
+    description: "管理多个 RAM AccessKey 下的 Bucket 文件与传输任务。",
+    searchPlaceholder: "搜索 OSS 账号...",
     items: [],
   },
   history: {
@@ -88,6 +97,7 @@ export const sidebarContentByRoute: Record<AppRouteKey, SectionSidebarContent> =
 };
 
 export function routeKeyFromPathname(pathname: string): AppRouteKey {
+  if (pathname.startsWith("/oss")) return "oss";
   if (pathname.startsWith("/history")) return "history";
   if (pathname.startsWith("/codex-auth")) return "codexAuth";
   if (pathname.startsWith("/prompts")) return "prompts";

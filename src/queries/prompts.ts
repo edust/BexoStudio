@@ -1,11 +1,21 @@
 import {
+  applyPromptListImport,
   deletePrompt,
+  exportPromptList,
   listPrompts,
+  previewPromptListImport,
   reorderPrompts,
   upsertPrompt,
 } from "@/lib/command-client";
 
 export const promptsQueryKey = ["prompts"] as const;
 
-export { deletePrompt, listPrompts, reorderPrompts, upsertPrompt };
-
+export {
+  applyPromptListImport,
+  deletePrompt,
+  exportPromptList,
+  listPrompts,
+  previewPromptListImport,
+  reorderPrompts,
+  upsertPrompt,
+};

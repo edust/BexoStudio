@@ -87,6 +87,8 @@ pub fn run() {
             let screenshot_service = crate::services::ScreenshotService::new();
             let hotkey_service = crate::services::HotkeyService::new();
             let prompt_service = crate::services::PromptService::new(database.clone());
+            let prompt_transfer_service =
+                crate::services::PromptTransferService::new(database.clone());
             let prompt_quick_paste_service = crate::services::PromptQuickPasteService::new();
             if let Err(error) = screenshot_service.prewarm_overlay_window(&app.handle()) {
                 log::warn!(
@@ -107,6 +109,7 @@ pub fn run() {
             app.manage(screenshot_service);
             app.manage(preferences_service.clone());
             app.manage(prompt_service);
+            app.manage(prompt_transfer_service);
             app.manage(prompt_quick_paste_service);
             if let Err(error) = hotkey_service.initialize(&app.handle(), &initial_preferences) {
                 log::error!(
@@ -118,6 +121,7 @@ pub fn run() {
 
             app.manage(hotkey_service);
             app.manage(crate::services::WorkspaceService::new(database.clone()));
+            app.manage(crate::services::WorkspaceTransferService::new(database.clone()));
             app.manage(crate::services::ResourceBrowserService::new(
                 database.clone(),
             ));
@@ -127,6 +131,18 @@ pub fn run() {
                 preferences_service.clone(),
             ));
             app.manage(crate::services::ProfileService::new(database.clone()));
+            app.manage(crate::services::OssService::new(database.clone())?);
+            let oss_transfer_service = crate::services::OssTransferService::new(database.clone())?;
+            let recovered_oss_tasks =
+                tauri::async_runtime::block_on(oss_transfer_service.recover_interrupted_tasks())?;
+            if !recovered_oss_tasks.is_empty() {
+                log::warn!(
+                    target: "bexo::app",
+                    "recovered {} interrupted OSS transfer task(s)",
+                    recovered_oss_tasks.len()
+                );
+            }
+            app.manage(oss_transfer_service);
             app.manage(crate::services::PlannerService::new(
                 database.clone(),
                 restore_log_store.clone(),
@@ -231,8 +247,12 @@ pub fn run() {
             commands::prompt::upsert_prompt,
             commands::prompt::delete_prompt,
             commands::prompt::reorder_prompts,
+            commands::prompt_transfer::export_prompt_list,
+            commands::prompt_transfer::preview_prompt_list_import,
+            commands::prompt_transfer::apply_prompt_list_import,
             commands::workspace::list_workspaces,
             commands::workspace::upsert_workspace,
+            commands::workspace::update_workspace_description,
             commands::workspace::reorder_workspaces,
             commands::workspace::delete_workspace,
             commands::workspace::register_workspace_folder,
@@ -243,6 +263,9 @@ pub fn run() {
             commands::workspace::run_workspace_terminal_command,
             commands::workspace::run_workspace_terminal_commands,
             commands::workspace::upsert_project,
+            commands::workspace_transfer::export_workspace_list,
+            commands::workspace_transfer::preview_workspace_list_import,
+            commands::workspace_transfer::apply_workspace_list_import,
             commands::resource_browser::list_workspace_resource_children,
             commands::resource_browser::allow_workspace_resource_scope,
             commands::resource_browser::get_workspace_resource_git_statuses,
@@ -252,6 +275,25 @@ pub fn run() {
             commands::launch_task::delete_launch_task,
             commands::codex_profile::list_codex_profiles,
             commands::codex_profile::upsert_codex_profile,
+            commands::oss::list_oss_accounts,
+            commands::oss::upsert_oss_account,
+            commands::oss::delete_oss_account,
+            commands::oss::list_oss_targets,
+            commands::oss::upsert_oss_target,
+            commands::oss::delete_oss_target,
+            commands::oss::list_oss_objects,
+            commands::oss::head_oss_object,
+            commands::oss::get_oss_object_download_url,
+            commands::oss::create_oss_folder,
+            commands::oss::test_oss_target,
+            commands::oss::delete_oss_objects,
+            commands::oss::copy_oss_object,
+            commands::oss_transfer::list_oss_transfer_tasks,
+            commands::oss_transfer::start_oss_upload,
+            commands::oss_transfer::start_oss_download,
+            commands::oss_transfer::resume_oss_transfer,
+            commands::oss_transfer::cancel_oss_transfer,
+            commands::oss_transfer::confirm_oss_transfer,
             commands::snapshot::list_snapshots,
             commands::snapshot::create_snapshot,
             commands::snapshot::update_snapshot,

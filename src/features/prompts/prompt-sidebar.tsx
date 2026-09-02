@@ -1,5 +1,12 @@
-import { PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
-import { Alert, Button, Empty, Input, Spin, Tooltip, Typography } from "antd";
+import {
+  DownloadOutlined,
+  MoreOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  SearchOutlined,
+  UploadOutlined,
+} from "@ant-design/icons";
+import { Alert, Button, Dropdown, Empty, Input, Spin, Tooltip, Typography } from "antd";
 import { motion, Reorder } from "motion/react";
 import {
   useCallback,
@@ -35,6 +42,8 @@ type PromptSidebarProps = {
   loading: boolean;
   onCopy: (prompt: PromptRecord) => void | Promise<void>;
   onCreate: () => void;
+  onExport: () => void;
+  onImport: () => void;
   onRefresh: () => void | Promise<void>;
   onReorder: (prompts: PromptRecord[]) => void | Promise<void>;
   onSelect: (prompt: PromptRecord) => void;
@@ -42,6 +51,7 @@ type PromptSidebarProps = {
   quickPasteBindingsByPromptId: ReadonlyMap<string, PromptQuickPasteBinding[]>;
   refreshing: boolean;
   selectedId: string | null;
+  transferBusy: boolean;
 };
 
 export function PromptSidebar({
@@ -51,6 +61,8 @@ export function PromptSidebar({
   loading,
   onCopy,
   onCreate,
+  onExport,
+  onImport,
   onRefresh,
   onReorder,
   onSelect,
@@ -58,6 +70,7 @@ export function PromptSidebar({
   quickPasteBindingsByPromptId,
   refreshing,
   selectedId,
+  transferBusy,
 }: PromptSidebarProps) {
   const [query, setQuery] = useState("");
   const [scrollTop, setScrollTop] = useState(0);
@@ -220,16 +233,54 @@ export function PromptSidebar({
             {prompts.length.toLocaleString()} 条本地记录
           </Typography.Text>
         </div>
-        <Tooltip title="新增 Prompt">
-          <Button
-            aria-label="新增 Prompt"
-            disabled={busy}
-            icon={<PlusOutlined />}
-            onClick={onCreate}
-            shape="circle"
-            type="primary"
-          />
-        </Tooltip>
+        <div className="flex shrink-0 items-center gap-1">
+          <Tooltip title="新增 Prompt">
+            <Button
+              aria-label="新增 Prompt"
+              disabled={busy}
+              icon={<PlusOutlined />}
+              onClick={onCreate}
+              shape="circle"
+              type="primary"
+            />
+          </Tooltip>
+          <Dropdown
+            disabled={busy || !desktopRuntimeAvailable}
+            menu={{
+              items: [
+                {
+                  key: "import",
+                  icon: <UploadOutlined />,
+                  label: "导入 Prompts",
+                },
+                {
+                  key: "export",
+                  icon: <DownloadOutlined />,
+                  label: "导出全部 Prompts",
+                },
+              ],
+              onClick: ({ key }) => {
+                if (key === "import") {
+                  onImport();
+                } else if (key === "export") {
+                  onExport();
+                }
+              },
+            }}
+            placement="bottomRight"
+            trigger={["click"]}
+          >
+            <Tooltip title="Prompt 导入与导出">
+              <Button
+                aria-label="打开 Prompt 导入导出菜单"
+                icon={<MoreOutlined />}
+                loading={transferBusy}
+                shape="circle"
+                type="text"
+              />
+            </Tooltip>
+          </Dropdown>
+        </div>
       </header>
 
       <div className="shrink-0 border-b border-[color:var(--border)] p-3">
