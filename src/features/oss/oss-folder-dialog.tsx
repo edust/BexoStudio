@@ -89,7 +89,7 @@ export function OssFolderDialog({
           </Form.Item>
         </Form>
         <div className="oss-surface-muted oss-border rounded-[8px] border px-3 py-2">
-          <Typography.Text className="oss-text-tertiary block text-[10px] uppercase tracking-[0.12em]">
+          <Typography.Text className="oss-text-tertiary block text-[12px]">
             目标 Object Key
           </Typography.Text>
           <Typography.Text className="oss-text-secondary mt-1 block break-all font-mono text-[11px]">

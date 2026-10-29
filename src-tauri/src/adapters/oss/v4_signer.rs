@@ -451,7 +451,7 @@ mod tests {
     }
 
     #[test]
-    fn presigned_get_url_contains_required_query_without_secret() {
+    fn presigned_get_url_uses_one_day_default_without_secret() {
         let signer = OssV4Signer::new(
             "LTAI****************".into(),
             "yourAccessKeySecret".into(),
@@ -467,12 +467,15 @@ mod tests {
                 &url,
                 "examplebucket",
                 "folder/测试.txt",
-                900,
+                crate::domain::normalize_download_url_expires(None).unwrap(),
                 Utc.with_ymd_and_hms(2025, 4, 11, 6, 41, 24).unwrap(),
             )
             .unwrap();
         let query: std::collections::HashMap<_, _> = signed.query_pairs().into_owned().collect();
-        assert_eq!(query.get("x-oss-expires").map(String::as_str), Some("900"));
+        assert_eq!(
+            query.get("x-oss-expires").map(String::as_str),
+            Some("86400")
+        );
         assert_eq!(
             query.get("x-oss-additional-headers").map(String::as_str),
             Some("host")

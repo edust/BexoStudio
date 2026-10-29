@@ -1,5 +1,5 @@
 import { CopyOutlined, DeleteOutlined, SaveOutlined } from "@ant-design/icons";
-import { Alert, Button, Empty, Input, Popconfirm, Tag, Typography } from "antd";
+import { Alert, Button, Empty, Input, Popconfirm, Tooltip } from "antd";
 
 import {
   countPromptCharacters,
@@ -36,91 +36,76 @@ export function PromptEditor({
 }: PromptEditorProps) {
   if (!draft) {
     return (
-      <main className="flex h-full min-h-0 items-center justify-center bg-panel px-6">
-        <Empty
-          description="从左侧选择一个 Prompt，或创建新的 Prompt"
-          image={Empty.PRESENTED_IMAGE_SIMPLE}
-        />
+      <main className="flex h-full min-h-0 items-center justify-center bg-surface px-6">
+        <Empty description="从左侧选择一个 Prompt，或点击 + 新建" image={Empty.PRESENTED_IMAGE_SIMPLE} />
       </main>
     );
   }
 
   const titleCount = countPromptCharacters(draft.title.trim());
   const contentCount = countPromptCharacters(draft.content);
+  const status = draft.isNew ? "新草稿" : dirty ? "未保存" : "已保存";
 
   return (
-    <main className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-panel">
-      <header className="flex min-h-[70px] shrink-0 items-center justify-between gap-4 border-b border-[color:var(--border)] px-5">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <Typography.Text className="truncate text-[14px] font-semibold text-foreground">
-              {draft.isNew ? "新增 Prompt" : draft.title || "未命名 Prompt"}
-            </Typography.Text>
-            {draft.isNew ? (
-              <Tag color="blue">新草稿</Tag>
-            ) : dirty ? (
-              <Tag color="gold">未保存</Tag>
-            ) : (
-              <Tag>已保存</Tag>
-            )}
-          </div>
-          <Typography.Text className="block text-[11px] text-muted-foreground">
-            正文将按原样写入剪贴板，包括首尾空白和换行。
-          </Typography.Text>
+    <main className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface">
+      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-line px-3">
+        <div className="flex min-w-0 flex-1 items-baseline gap-2">
+          <h2 className="m-0 truncate text-[13px] font-semibold text-fg">
+            {draft.isNew ? "新增 Prompt" : draft.title || "未命名 Prompt"}
+          </h2>
+          <span className={dirty || draft.isNew ? "shrink-0 text-[12px] text-warning" : "shrink-0 text-[12px] text-fg-3"}>
+            {status}
+          </span>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Button
-            disabled={busy || !draft.content.trim()}
-            icon={<CopyOutlined />}
-            onClick={() => void onCopy()}
-          >
-            一键复制
-          </Button>
-          <Button
-            disabled={busy || (!draft.isNew && !dirty)}
-            icon={<SaveOutlined />}
-            loading={saving}
-            onClick={() => void onSave()}
-            type="primary"
-          >
-            保存
-          </Button>
+        <div className="flex shrink-0 items-center gap-1">
+          <Tooltip title="按原样复制正文（含首尾空白与换行）">
+            <Button
+              disabled={busy || !draft.content.trim()}
+              icon={<CopyOutlined />}
+              onClick={() => void onCopy()}
+              size="small"
+            >
+              复制
+            </Button>
+          </Tooltip>
+          <Tooltip title="Ctrl+S">
+            <Button
+              disabled={busy || (!draft.isNew && !dirty)}
+              icon={<SaveOutlined />}
+              loading={saving}
+              onClick={() => void onSave()}
+              size="small"
+              type="primary"
+            >
+              保存
+            </Button>
+          </Tooltip>
           {!draft.isNew ? (
             <Popconfirm
               cancelText="取消"
-              description="删除后无法从 Bexo Studio 恢复，但不会影响已经复制到其他位置的文本。"
+              description="删除后无法恢复，已复制到其他位置的文本不受影响。"
               okButtonProps={{ danger: true }}
               okText="删除"
               onConfirm={() => void onDelete()}
               title={`删除“${draft.title}”？`}
             >
-              <Button danger disabled={busy} icon={<DeleteOutlined />}>
-                删除
-              </Button>
+              <Tooltip title="删除">
+                <Button aria-label="删除 Prompt" danger disabled={busy} icon={<DeleteOutlined />} size="small" type="text" />
+              </Tooltip>
             </Popconfirm>
           ) : null}
         </div>
       </header>
 
       {operationError ? (
-        <Alert
-          className="mx-5 mt-4 shrink-0"
-          description={operationError}
-          message="Prompt 操作失败"
-          showIcon
-          type="error"
-        />
+        <Alert banner description={operationError} message="Prompt 操作失败" showIcon type="error" />
       ) : null}
 
-      <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden px-5 py-4">
+      <section className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-3">
         <div className="shrink-0">
-          <div className="mb-1.5 flex items-center justify-between">
-            <label className="text-[12px] font-semibold text-foreground" htmlFor="prompt-title">
-              标题
-            </label>
-            <span className="text-[11px] text-muted-foreground">
-              {titleCount.toLocaleString()} / {MAX_PROMPT_TITLE_CHARS}
-            </span>
+          <div className="mb-1 flex items-center justify-between text-[12px]">
+            <label className="text-fg-2" htmlFor="prompt-title">标题</label>
+            <span className="text-fg-3">{titleCount.toLocaleString()} / {MAX_PROMPT_TITLE_CHARS}</span>
           </div>
           <Input
             allowClear
@@ -133,19 +118,13 @@ export function PromptEditor({
             status={errors.title ? "error" : ""}
             value={draft.title}
           />
-          {errors.title ? (
-            <Typography.Text className="mt-1 block text-[11px] text-danger">
-              {errors.title}
-            </Typography.Text>
-          ) : null}
+          {errors.title ? <div className="mt-1 text-[12px] text-danger">{errors.title}</div> : null}
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="mb-1.5 flex items-center justify-between">
-            <label className="text-[12px] font-semibold text-foreground" htmlFor="prompt-content">
-              Prompt 内容
-            </label>
-            <span className="text-[11px] text-muted-foreground">
+          <div className="mb-1 flex items-center justify-between text-[12px]">
+            <label className="text-fg-2" htmlFor="prompt-content">内容</label>
+            <span className="text-fg-3">
               {contentCount.toLocaleString()} / {MAX_PROMPT_CONTENT_CHARS.toLocaleString()}
             </span>
           </div>
@@ -161,20 +140,7 @@ export function PromptEditor({
             status={errors.content ? "error" : ""}
             value={draft.content}
           />
-          <div className="mt-1 flex min-h-[18px] items-center justify-between gap-3">
-            {errors.content ? (
-              <Typography.Text className="text-[11px] text-danger">
-                {errors.content}
-              </Typography.Text>
-            ) : (
-              <Typography.Text className="text-[11px] text-muted-foreground">
-                支持多行纯文本；使用 Ctrl+S 快速保存。
-              </Typography.Text>
-            )}
-            <Typography.Text className="shrink-0 text-[11px] text-muted-foreground">
-              {draft.isNew ? "保存后加入左侧列表" : `ID ${draft.id.slice(0, 8)}`}
-            </Typography.Text>
-          </div>
+          {errors.content ? <div className="mt-1 text-[12px] text-danger">{errors.content}</div> : null}
         </div>
       </section>
     </main>

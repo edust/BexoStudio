@@ -1,20 +1,21 @@
 import { ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { Alert, Button, Checkbox, Empty, Input, Select, Spin, Tag, Tooltip, Typography } from "antd";
+import { Alert, Button, Checkbox, Empty, Input, Select, Spin, Tooltip } from "antd";
 import {
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type ReactNode,
   type UIEvent,
 } from "react";
 
 import { CodexHistoryMessageBlock } from "@/features/codex-history/codex-history-message-block";
+import { CODEX_HISTORY_SESSION_ROW_HEIGHT, CodexHistorySessionItem } from "@/features/codex-history/codex-history-session-item";
 import { filterCodexHistoryMessages } from "@/features/codex-history/codex-history-message-rules";
 import { useCodexHistoryViewPreferences } from "@/features/codex-history/codex-history-view-preferences";
+import { PaneHeader } from "@/components/shell/pane-header";
 import { cn } from "@/lib/cn";
 import {
   getCodexHistoryMessages,
@@ -27,7 +28,7 @@ import type { CodexHistoryMessage, CodexHistorySession } from "@/types/backend";
 
 const MESSAGE_PAGE_SIZE = 40;
 const SESSION_PAGE_SIZE = 10;
-const SESSION_ROW_HEIGHT = 92;
+const SESSION_ROW_HEIGHT = CODEX_HISTORY_SESSION_ROW_HEIGHT;
 const SESSION_OVERSCAN = 8;
 const SESSION_LOAD_THRESHOLD = 120;
 const HISTORY_SEARCH_DEBOUNCE_MS = 250;
@@ -343,46 +344,31 @@ export default function HistoryPage() {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[#f5f7fa]">
-      <header className="border-b border-[#d9e2ec] bg-white px-5 py-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <Typography.Title className="!mb-1 !text-[18px] !leading-7" level={3}>
-              Session / History
-            </Typography.Title>
-            <Typography.Paragraph className="!mb-0 !text-[12px] !leading-5 !text-[#667085]">
-              只读查看本机 Codex 会话，支持按工作区路径筛选。
-            </Typography.Paragraph>
-          </div>
-          <div className="flex items-center gap-2">
-            <Checkbox
-              checked={showTechnicalMessages}
-              className="mr-1 text-[12px] text-[#667085]"
-              onChange={(event) => setShowTechnicalMessages(event.target.checked)}
-            >
-              显示技术项
-            </Checkbox>
-            <Tag bordered={false} className="m-0 rounded-[6px] bg-[#eef6fb] text-[#12718f]">
-              {sessionsQuery.hasNextPage
-                ? `已加载 ${loadedSessionCount} 条`
-                : `共 ${loadedSessionCount} 条 sessions`}
-            </Tag>
-            <Tag bordered={false} className="m-0 rounded-[6px] bg-[#f2f4f7] text-[#475467]">
-              {codexRootCount} roots
-            </Tag>
+    <div className="grid h-full min-h-0 grid-cols-[340px_minmax(0,1fr)] overflow-hidden bg-surface">
+      <section aria-label="会话列表" className="flex min-h-0 flex-col border-r border-line">
+        <PaneHeader
+          actions={
             <Tooltip title="刷新">
               <Button
-                className="!h-8 !w-8 !min-w-8 !p-0"
+                aria-label="刷新会话列表"
                 icon={<ReloadOutlined />}
                 loading={sessionsQuery.isFetching && !sessionsQuery.isFetchingNextPage}
                 onClick={handleRefresh}
+                size="small"
+                type="text"
               />
             </Tooltip>
-          </div>
-        </div>
-
-        <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(220px,320px)_minmax(260px,1fr)]">
+          }
+          meta={
+            <Tooltip title={`来自 ${codexRootCount} 个 Codex 目录`}>
+              <span>{sessionsQuery.hasNextPage ? `已加载 ${loadedSessionCount}` : loadedSessionCount}</span>
+            </Tooltip>
+          }
+          title="会话历史"
+        />
+        <div className="shrink-0 space-y-2 border-b border-line px-2 py-2">
           <Select
+            aria-label="按工作区筛选"
             className="w-full"
             onChange={(value) => {
               setWorkspaceFilter(value);
@@ -392,18 +378,18 @@ export default function HistoryPage() {
               }
             }}
             options={[
-              { label: "全部路径", value: "all" },
+              { label: "全部工作区", value: "all" },
               ...workspaces.map((workspace) => ({
                 label: workspace.name,
                 value: workspace.id,
               })),
             ]}
-            placeholder="按工作区筛选"
             showSearch
             value={workspaceFilter}
           />
           <Input
             allowClear
+            aria-label="搜索会话"
             onChange={(event) => {
               setQuery(event.target.value);
               setSessionScrollTop(0);
@@ -411,54 +397,48 @@ export default function HistoryPage() {
                 sessionListRef.current.scrollTop = 0;
               }
             }}
-            placeholder="搜索标题、摘要、路径或 session id"
-            prefix={<SearchOutlined className="text-[#98a2b3]" />}
+            placeholder="搜索标题、摘要、路径或 ID"
+            prefix={<SearchOutlined className="text-fg-3" />}
             value={query}
           />
         </div>
-      </header>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[360px_minmax(0,1fr)] overflow-hidden">
-        <section className="min-h-0 border-r border-[#d9e2ec] bg-white">
+        <div className="min-h-0 flex-1">
           {sessionsQuery.isLoading ? (
             <CenteredState>
-              <Spin />
+              <Spin size="small" />
             </CenteredState>
           ) : sessionsQuery.isError && !sessions.length ? (
-            <div className="p-4">
+            <div className="p-3">
               <Alert message={getErrorSummary(sessionsQuery.error).message} showIcon type="error" />
             </div>
           ) : !sessions.length && !sessionsQuery.hasNextPage ? (
             <CenteredState>
-              <Empty description="没有匹配的 Codex session" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+              <Empty description="没有匹配的会话" image={Empty.PRESENTED_IMAGE_SIMPLE} />
             </CenteredState>
           ) : (
-            <div
-              className="h-full overflow-y-auto px-2 py-2"
-              onScroll={handleSessionListScroll}
-              ref={sessionListRef}
-            >
-              <div
-                className="relative"
-                style={{ height: sessions.length * SESSION_ROW_HEIGHT }}
-              >
+            <div className="h-full overflow-y-auto p-1" onScroll={handleSessionListScroll} ref={sessionListRef}>
+              <div className="relative" style={{ height: sessions.length * SESSION_ROW_HEIGHT }}>
                 {visibleSessions.map((session, index) => {
                   const absoluteIndex = sessionVisibleRange.start + index;
                   return (
-                    <SessionListItem
+                    <CodexHistorySessionItem
                       active={selectedSourcePath === session.sourcePath}
+                      dateLabel={formatShortDate(session.lastActiveAt ?? session.createdAt)}
                       key={session.sourcePath}
                       onSelect={() => setSelectedSourcePath(session.sourcePath)}
-                      session={session}
+                      secondary={session.summary || (session.projectDir ?? session.sourcePath)}
+                      title={getSessionTitle(session)}
+                      tooltip={`${getSessionTitle(session)}\n${session.projectDir ?? session.sourcePath}`}
                       style={{
-                        height: SESSION_ROW_HEIGHT - 6,
+                        height: SESSION_ROW_HEIGHT,
                         top: absoluteIndex * SESSION_ROW_HEIGHT,
                       }}
                     />
                   );
                 })}
               </div>
-              <div className="flex min-h-[44px] items-center justify-center py-2">
+              <div className="flex min-h-[40px] items-center justify-center py-1">
                 {sessionsQuery.isError ? (
                   <Alert
                     action={
@@ -478,110 +458,93 @@ export default function HistoryPage() {
                     继续加载 10 条
                   </Button>
                 ) : (
-                  <Typography.Text className="text-[11px] text-[#98a2b3]">
-                    已加载全部 {loadedSessionCount} 条 session
-                  </Typography.Text>
+                  <span className="text-[12px] text-fg-3">共 {loadedSessionCount} 条</span>
                 )}
               </div>
             </div>
           )}
-        </section>
+        </div>
+      </section>
 
-        <section className="flex min-h-0 min-w-0 flex-col">
-          <div className="flex min-h-[72px] items-center justify-between gap-3 border-b border-[#d9e2ec] bg-white px-5 py-3">
-            <div className="min-w-0">
-              <Typography.Title className="!mb-1 !text-[16px] !leading-6" level={4}>
-                {selectedSession ? getSessionTitle(selectedSession) : "未选择 session"}
-              </Typography.Title>
-              <Typography.Paragraph
-                className="!mb-0 !text-[12px] !leading-5 !text-[#667085]"
-                ellipsis={{ rows: 1, tooltip: selectedSession?.projectDir ?? selectedSession?.sourcePath }}
-              >
-                {selectedSession?.projectDir ?? selectedSession?.sourcePath ?? "从左侧选择一个 Codex session"}
-              </Typography.Paragraph>
-            </div>
-            {selectedSession ? (
-              <div className="flex shrink-0 items-center gap-2">
-                <Tag bordered={false} className="m-0 rounded-[6px] bg-[#ecfdf3] text-[#027a48]">
-                  {formatDateTime(selectedSession.lastActiveAt ?? selectedSession.createdAt)}
-                </Tag>
-                <Tag bordered={false} className="m-0 rounded-[6px] bg-[#f2f4f7] text-[#475467]">
-                  {formatBytes(selectedSession.fileSizeBytes)}
-                </Tag>
-              </div>
-            ) : null}
-          </div>
+      <section aria-label="对话内容" className="flex min-h-0 min-w-0 flex-col">
+        <PaneHeader
+          actions={
+            <Checkbox
+              checked={showTechnicalMessages}
+              className="text-[12px]"
+              onChange={(event) => setShowTechnicalMessages(event.target.checked)}
+            >
+              显示技术项
+            </Checkbox>
+          }
+          meta={
+            selectedSession ? (
+              <span title={selectedSession.projectDir ?? selectedSession.sourcePath}>
+                {formatDateTime(selectedSession.lastActiveAt ?? selectedSession.createdAt)}
+                <span className="mx-2">·</span>
+                {formatBytes(selectedSession.fileSizeBytes)}
+                <span className="mx-2">·</span>
+                {selectedSession.projectDir ?? selectedSession.sourcePath}
+              </span>
+            ) : null
+          }
+          title={selectedSession ? getSessionTitle(selectedSession) : "未选择会话"}
+        />
 
-          <div
-            className="min-h-0 flex-1 overflow-y-auto px-5 py-5"
-            onScroll={handleMessagesScroll}
-            ref={messagesScrollRef}
-          >
-            {!selectedSession ? (
-              <CenteredState>
-                <Empty description="选择 session 后查看最近对话" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-              </CenteredState>
-            ) : messagesLoading ? (
-              <CenteredState>
-                <Spin />
-              </CenteredState>
-            ) : (
-              <div className="allow-text-selection flex w-full flex-col gap-3">
-                {hasMoreMessages ? (
-                  <div className="flex justify-center py-1">
-                    <Button
-                      loading={loadingOlder}
-                      onClick={() => void loadOlderMessages()}
-                      size="small"
-                    >
-                      加载更早消息
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3" onScroll={handleMessagesScroll} ref={messagesScrollRef}>
+          {!selectedSession ? (
+            <CenteredState>
+              <Empty description="在左侧选择一个会话" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            </CenteredState>
+          ) : messagesLoading ? (
+            <CenteredState>
+              <Spin size="small" />
+            </CenteredState>
+          ) : (
+            <div className="allow-text-selection flex w-full flex-col gap-3">
+              {hasMoreMessages ? (
+                <div className="flex justify-center py-1">
+                  <Button loading={loadingOlder} onClick={() => void loadOlderMessages()} size="small">
+                    加载更早消息
+                  </Button>
+                </div>
+              ) : messages.length ? (
+                <span className="self-center text-[12px] text-fg-3">已到会话开头</span>
+              ) : null}
+
+              {messageError ? (
+                <Alert
+                  action={
+                    <Button onClick={handleRetryMessages} size="small">
+                      重试
                     </Button>
-                  </div>
-                ) : messages.length ? (
-                  <Typography.Text className="self-center text-[11px] text-[#98a2b3]">
-                    已到达此 session 起点
-                  </Typography.Text>
-                ) : null}
+                  }
+                  message={messageError}
+                  showIcon
+                  type="error"
+                />
+              ) : null}
 
-                {messageError ? (
-                  <Alert
-                    action={
-                      <Button onClick={handleRetryMessages} size="small">
-                        重试
-                      </Button>
-                    }
-                    message={messageError}
-                    showIcon
-                    type="error"
-                  />
-                ) : null}
+              {!messages.length && !messageError ? (
+                <CenteredState compact>
+                  <Empty description="这个会话没有可显示的对话" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                </CenteredState>
+              ) : null}
+              {visibleMessages.length === 0 && hiddenMessageCount > 0 && !messageError ? (
+                <span className="self-center text-[12px] text-fg-3">已隐藏 {hiddenMessageCount} 条技术项</span>
+              ) : null}
 
-                {!messages.length && !messageError ? (
-                  <CenteredState compact>
-                    <Empty
-                      description="这个 session 没有可显示的对话"
-                      image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    />
-                  </CenteredState>
-                ) : null}
-                {visibleMessages.length === 0 && hiddenMessageCount > 0 && !messageError ? (
-                  <Typography.Text className="self-center text-[11px] text-[#98a2b3]">
-                    已隐藏 {hiddenMessageCount} 条技术项
-                  </Typography.Text>
-                ) : null}
-
-                {visibleMessages.map((message, index) => (
-                  <CodexHistoryMessageBlock
-                    key={`${message.timestamp ?? "no-ts"}-${message.role}-${message.itemType}-${index}`}
-                    message={message}
-                    viewPreferences={codexHistoryViewPreferences}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
-      </div>
+              {visibleMessages.map((message, index) => (
+                <CodexHistoryMessageBlock
+                  key={`${message.timestamp ?? "no-ts"}-${message.role}-${message.itemType}-${index}`}
+                  message={message}
+                  viewPreferences={codexHistoryViewPreferences}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
     </div>
   );
 }
@@ -605,60 +568,6 @@ function CenteredState({
   );
 }
 
-function SessionListItem({
-  active,
-  onSelect,
-  session,
-  style,
-}: {
-  active: boolean;
-  onSelect: () => void;
-  session: CodexHistorySession;
-  style: CSSProperties;
-}) {
-  return (
-    <button
-      className={cn(
-        "absolute left-0 right-0 flex w-full flex-col items-stretch rounded-[8px] border px-3 py-2 text-left transition-colors",
-        active
-          ? "border-[#8fd4ec] bg-[#f4fbfe]"
-          : "border-transparent bg-white hover:border-[#d9e2ec] hover:bg-[#f8fafc]",
-      )}
-      onClick={onSelect}
-      style={style}
-      type="button"
-    >
-      <div className="flex items-center justify-between gap-2">
-        <Typography.Text
-          className="min-w-0 text-[13px] font-medium text-[#1f2937]"
-          ellipsis={{ tooltip: getSessionTitle(session) }}
-        >
-          {getSessionTitle(session)}
-        </Typography.Text>
-        <Typography.Text className="shrink-0 text-[10px] text-[#98a2b3]">
-          {formatShortDate(session.lastActiveAt ?? session.createdAt)}
-        </Typography.Text>
-      </div>
-      <Typography.Paragraph
-        className="!mb-0 !mt-1 !text-[11px] !leading-4 !text-[#667085]"
-        ellipsis={{ rows: 1, tooltip: session.summary ?? session.sourcePath }}
-      >
-        {session.summary ?? session.sessionId}
-      </Typography.Paragraph>
-      <div className="mt-1 flex items-center justify-between gap-2">
-        <Typography.Text
-          className="min-w-0 !text-[10px] !leading-4 !text-[#98a2b3]"
-          ellipsis={{ tooltip: session.projectDir ?? session.sourcePath }}
-        >
-          {session.projectDir ?? session.sourcePath}
-        </Typography.Text>
-        <Typography.Text className="shrink-0 !text-[10px] !leading-4 !text-[#98a2b3]">
-          {formatBytes(session.fileSizeBytes)}
-        </Typography.Text>
-      </div>
-    </button>
-  );
-}
 
 function getSessionTitle(session: CodexHistorySession) {
   return session.title?.trim() || session.sessionId || "未命名 session";

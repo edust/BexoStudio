@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CaretRightOutlined,
+  CopyOutlined,
   DeleteOutlined,
   EditOutlined,
   HolderOutlined,
@@ -16,7 +17,6 @@ import {
   Select,
   Spin,
   Switch,
-  Tag,
   Tooltip,
   Typography,
 } from "antd";
@@ -27,7 +27,9 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { toast } from "sonner";
 
+import { PaneHeader } from "@/components/shell/pane-header";
 import { ResourceBrowserPane } from "@/features/resource-browser/resource-browser-pane";
+import { copyTextToClipboard, getClipboardErrorMessage } from "@/lib/clipboard";
 import { cn } from "@/lib/cn";
 import {
   deleteLaunchTask,
@@ -100,7 +102,7 @@ export default function HomePage() {
     }
 
     return (
-      workspaceQuery.data?.find((workspace) => workspace.id === selectedHomeWorkspaceId) ?? null
+      workspaceQuery.data?.find((workspace) => workspace.id === selectedHomeWorkspaceId && !workspace.isArchived) ?? null
     );
   }, [selectedHomeWorkspaceId, workspaceQuery.data]);
 
@@ -428,172 +430,158 @@ export default function HomePage() {
     await toggleTaskEnabledMutation.mutateAsync({ task, enabled });
   }
 
+  async function handleCopyWorkspacePath() {
+    try {
+      await copyTextToClipboard(workspacePath, "当前工作区没有目录");
+      toast.success("已复制工作区路径");
+    } catch (error) {
+      toast.error(getClipboardErrorMessage(error, "复制工作区路径失败"));
+    }
+  }
+
   if (!desktopRuntimeAvailable) {
     return (
-      <div className="flex h-full min-h-0 flex-col bg-white">
-        <div className="border-b border-[#e6edf5] px-4 py-4">
-          <Typography.Text className="block text-[11px] font-semibold uppercase tracking-[0.22em] text-[#1f2937]">
-            Workbench
-          </Typography.Text>
-        </div>
-
-        <div className="flex min-h-0 flex-1 items-center justify-center px-4 py-4">
-          <Alert
-            className="w-full max-w-[520px]"
-            message="当前页面需要在 Tauri 桌面 runtime 内管理工作区命令。"
-            showIcon
-            type="info"
-          />
+      <div className="flex h-full min-h-0 flex-col bg-surface">
+        <PaneHeader title="工作台" />
+        <div className="flex min-h-0 flex-1 items-center justify-center px-4">
+          <Empty description="请在 Bexo Studio 桌面应用中管理工作区命令" image={Empty.PRESENTED_IMAGE_SIMPLE} />
         </div>
       </div>
     );
   }
 
+  const enabledTaskCount = orderedTasks.filter((task) => task.enabled).length;
+
   return (
-    <div className="flex h-full min-h-0 flex-col bg-white">
-      <div className="border-b border-[#e6edf5] px-4 py-4">
-        <Typography.Text className="block text-[13px] font-semibold text-[#1f2937]">
-          {workspaceFolderName} 工作区设置
-        </Typography.Text>
-      </div>
+    <div className="flex h-full min-h-0 flex-col bg-surface">
+      <PaneHeader
+        actions={
+          workspacePath ? (
+            <Tooltip title="复制工作区路径">
+              <Button
+                aria-label="复制工作区路径"
+                icon={<CopyOutlined />}
+                onClick={() => void handleCopyWorkspacePath()}
+                size="small"
+                type="text"
+              />
+            </Tooltip>
+          ) : null
+        }
+        meta={
+          workspacePath ? (
+            <span className="allow-text-selection font-mono text-[12px]" title={workspacePath}>
+              {workspacePath}
+            </span>
+          ) : null
+        }
+        title={selectedWorkspace ? selectedWorkspace.name : "工作台"}
+      />
 
-      <div className="flex min-h-0 flex-1 flex-col gap-4 px-0 py-0">
-        {workspaceQuery.error ? (
-          <Alert
-            message="读取工作区失败"
-            description={getErrorSummary(workspaceQuery.error).message}
-            showIcon
-            type="error"
-          />
-        ) : null}
+      {workspaceQuery.error ? (
+        <Alert
+          banner
+          description={getErrorSummary(workspaceQuery.error).message}
+          message="读取工作区失败"
+          showIcon
+          type="error"
+        />
+      ) : null}
 
-        {workspaceQuery.isLoading ? (
-          <div className="flex min-h-0 flex-1 items-center justify-center">
-            <Spin size="small" />
-          </div>
-        ) : !selectedWorkspace ? (
-          <div className="flex min-h-0 flex-1 items-center justify-center rounded-[12px] border border-dashed border-[#e6edf5] bg-[#fbfcfe]">
-            <Empty description="请先在左侧选择一个工作区" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-          </div>
-        ) : !selectedProject ? (
-          <Alert
-            message="当前工作区缺少项目目录"
-            description="请先为这个工作区关联至少一个项目目录，再配置终端命令。"
-            showIcon
-            type="warning"
+      {workspaceQuery.isLoading ? (
+        <div className="flex min-h-0 flex-1 items-center justify-center">
+          <Spin size="small" />
+        </div>
+      ) : !selectedWorkspace ? (
+        <div className="flex min-h-0 flex-1 items-center justify-center">
+          <Empty description="在左侧选择一个工作区" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        </div>
+      ) : !selectedProject ? (
+        <div className="flex min-h-0 flex-1 items-center justify-center">
+          <Empty description="这个工作区还没有关联项目目录" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        </div>
+      ) : (
+        <div className="flex min-h-0 flex-1">
+          <ResourceBrowserPane
+            workspaceId={selectedWorkspace.id}
+            workspaceName={workspaceFolderName}
+            workspacePath={workspacePath}
           />
-        ) : (
-          <div className="flex min-h-0 flex-1">
-            <ResourceBrowserPane
-              workspaceId={selectedWorkspace.id}
-              workspaceName={workspaceFolderName}
-              workspacePath={workspacePath}
+
+          <section aria-label="启动命令" data-workspace-commands className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <PaneHeader
+              actions={
+                <>
+                  <Button
+                    disabled={!enabledTaskCount}
+                    icon={<CaretRightOutlined />}
+                    loading={runAllTasksMutation.isPending}
+                    onClick={() => void handleRunAllTasks()}
+                    size="small"
+                    type="primary"
+                  >
+                    运行全部
+                  </Button>
+                  <Button icon={<PlusOutlined />} onClick={openCreateEditor} size="small">
+                    新增命令
+                  </Button>
+                </>
+              }
+              meta={orderedTasks.length ? `${enabledTaskCount}/${orderedTasks.length} 启用` : null}
+              title="启动命令"
             />
 
-            <div className="flex min-w-0 flex-1 flex-col gap-4 px-0 py-0">
-              <div className="rounded-[0] border border-[#eef2f6] bg-white">
-                <div className="grid grid-cols-[140px_minmax(0,1fr)] items-center gap-3 px-4 py-4">
-                  <Typography.Text className="text-[12px] font-medium text-[#1f2937]">
-                    工作区目录
-                  </Typography.Text>
-                  <div
-                    className="flex h-[32px] items-center overflow-hidden rounded-[8px] border border-[#d8e1eb] bg-[#f8fafc] px-3 font-mono text-[12px] text-[#475467] select-none"
-                    title={workspacePath || "未配置工作区目录"}
-                  >
-                    <span className="truncate">{workspacePath || "未配置工作区目录"}</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex min-h-0 flex-1 flex-col rounded-[0] border border-[#eef2f6] bg-white">
-                <div className="flex items-center justify-between border-b border-[#eef2f6] px-4 py-3">
-                  <div>
-                    <Typography.Text className="block text-[12px] font-semibold uppercase tracking-[0.16em] text-[#1f2937]">
-                      终端命令组
-                    </Typography.Text>
-                    <Typography.Text className="block text-[11px] text-[#667085]">
-                      新增、编辑、删除并拖动排序；打开的命令才会参与执行。
-                    </Typography.Text>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      className="!h-[30px] !px-3 !text-[12px]"
-                      disabled={!orderedTasks.some((task) => task.enabled)}
-                      icon={<CaretRightOutlined />}
-                      loading={runAllTasksMutation.isPending}
-                      onClick={() => void handleRunAllTasks()}
-                      size="small"
-                      type="default"
-                    >
-                      运行全部
-                    </Button>
-                    <Button
-                      className="!h-[30px] !px-3 !text-[12px]"
-                      icon={<PlusOutlined />}
-                      onClick={openCreateEditor}
-                      size="small"
-                      type="default"
-                    >
+            <div className="min-h-0 flex-1 overflow-auto p-1">
+              {orderedTasks.length ? (
+                <Reorder.Group
+                  as="div"
+                  axis="y"
+                  className="flex flex-col"
+                  onReorder={handlePreviewReorder}
+                  values={orderedTasks}
+                >
+                  {orderedTasks.map((task) => (
+                    <CommandTaskReorderItem
+                      dragging={draggingTaskId === task.id}
+                      key={task.id}
+                      onDelete={() => void handleDeleteTask(task.id)}
+                      onDragEnd={() => void handleTaskDragEnd()}
+                      onDragStart={() => handleTaskDragStart(task.id)}
+                      onEdit={() => openEditEditor(task)}
+                      onRun={() => void handleRunSingleTask(task.id)}
+                      onToggleEnabled={(enabled) => void handleToggleTaskEnabled(task, enabled)}
+                      switchLoading={
+                        toggleTaskEnabledMutation.isPending &&
+                        toggleTaskEnabledMutation.variables?.task.id === task.id
+                      }
+                      runButtonLoading={
+                        runSingleTaskMutation.isPending &&
+                        runSingleTaskMutation.variables?.launchTaskId === task.id
+                      }
+                      runDisabled={
+                        !task.enabled ||
+                        runAllTasksMutation.isPending ||
+                        reorderTasksMutation.isPending ||
+                        toggleTaskEnabledMutation.isPending
+                      }
+                      task={task}
+                      workspacePath={workspacePath}
+                    />
+                  ))}
+                </Reorder.Group>
+              ) : (
+                <div className="flex min-h-[200px] items-center justify-center">
+                  <Empty description="还没有启动命令" image={Empty.PRESENTED_IMAGE_SIMPLE}>
+                    <Button icon={<PlusOutlined />} onClick={openCreateEditor} size="small" type="primary">
                       新增命令
                     </Button>
-                  </div>
+                  </Empty>
                 </div>
-
-                <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
-                  {orderedTasks.length ? (
-                    <Reorder.Group
-                      as="div"
-                      axis="y"
-                      className="flex flex-col gap-2"
-                      onReorder={handlePreviewReorder}
-                      values={orderedTasks}
-                    >
-                      {orderedTasks.map((task, index) => {
-                        return (
-                          <CommandTaskReorderItem
-                            dragging={draggingTaskId === task.id}
-                            index={index}
-                            key={task.id}
-                            onDelete={() => void handleDeleteTask(task.id)}
-                            onDragEnd={() => void handleTaskDragEnd()}
-                            onDragStart={() => handleTaskDragStart(task.id)}
-                            onEdit={() => openEditEditor(task)}
-                            onRun={() => void handleRunSingleTask(task.id)}
-                            onToggleEnabled={(enabled) => void handleToggleTaskEnabled(task, enabled)}
-                            switchLoading={
-                              toggleTaskEnabledMutation.isPending &&
-                              toggleTaskEnabledMutation.variables?.task.id === task.id
-                            }
-                            runButtonLoading={
-                              runSingleTaskMutation.isPending &&
-                              runSingleTaskMutation.variables?.launchTaskId === task.id
-                            }
-                            runDisabled={
-                              !task.enabled ||
-                              runAllTasksMutation.isPending ||
-                              reorderTasksMutation.isPending ||
-                              toggleTaskEnabledMutation.isPending
-                            }
-                            task={task}
-                            workspacePath={workspacePath}
-                          />
-                        );
-                      })}
-                    </Reorder.Group>
-                  ) : (
-                    <div className="flex min-h-[180px] items-center justify-center rounded-[12px] border border-dashed border-[#e6edf5] bg-[#fbfcfe]">
-                      <Empty
-                        description="还没有终端命令。点击右上角“新增命令”开始配置。"
-                        image={Empty.PRESENTED_IMAGE_SIMPLE}
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
+              )}
             </div>
-          </div>
-        )}
-      </div>
+          </section>
+        </div>
+      )}
 
       <Modal
         cancelText="取消"
@@ -625,7 +613,7 @@ export default function HomePage() {
           ) : null}
 
           <div className="space-y-1">
-            <Typography.Text className="text-[12px] font-medium text-[#1f2937]">
+            <Typography.Text className="text-[12px] font-medium text-fg">
               命令模板
             </Typography.Text>
             <Select
@@ -640,17 +628,14 @@ export default function HomePage() {
               placeholder={
                 terminalCommandTemplates.length
                   ? "从已保存的终端模板中选择"
-                  : "请先到 Settings > General 管理终端模板"
+                  : "还没有模板，可在 设置 > 通用 中添加"
               }
               value={selectedTemplateKey}
             />
-            <Typography.Text className="block text-[11px] text-[#98a2b3]">
-              模板来自 Settings &gt; General，这里只负责快速回填，后续仍可继续修改。
-            </Typography.Text>
           </div>
 
           <div className="space-y-1">
-            <Typography.Text className="text-[12px] font-medium text-[#1f2937]">
+            <Typography.Text className="text-[12px] font-medium text-fg">
               命令名称
             </Typography.Text>
             <Controller
@@ -665,14 +650,14 @@ export default function HomePage() {
               )}
             />
             {form.formState.errors.name ? (
-              <Typography.Text className="block text-[11px] text-[#cf5a4a]">
+              <Typography.Text className="block text-[11px] text-danger">
                 {form.formState.errors.name.message}
               </Typography.Text>
             ) : null}
           </div>
 
           <div className="space-y-1">
-            <Typography.Text className="text-[12px] font-medium text-[#1f2937]">
+            <Typography.Text className="text-[12px] font-medium text-fg">
               终端命令
             </Typography.Text>
             <Controller
@@ -681,19 +666,16 @@ export default function HomePage() {
               render={({ field }) => (
                 <Input
                   {...field}
-                  placeholder="例如：npm run dev"
+                  placeholder="单行命令，例如：npm run dev"
                   status={form.formState.errors.commandLine ? "error" : ""}
                 />
               )}
             />
             {form.formState.errors.commandLine ? (
-              <Typography.Text className="block text-[11px] text-[#cf5a4a]">
+              <Typography.Text className="block text-[11px] text-danger">
                 {form.formState.errors.commandLine.message}
               </Typography.Text>
             ) : null}
-            <Typography.Text className="block text-[11px] text-[#98a2b3]">
-              仅支持单行命令，基础校验会检查空值、换行和未闭合引号。
-            </Typography.Text>
           </div>
         </div>
       </Modal>
@@ -743,7 +725,6 @@ function buildLaunchTaskPayload(
 
 type CommandTaskReorderItemProps = {
   dragging: boolean;
-  index: number;
   onDelete: () => void;
   onDragEnd: () => void;
   onDragStart: () => void;
@@ -759,7 +740,6 @@ type CommandTaskReorderItemProps = {
 
 function CommandTaskReorderItem({
   dragging,
-  index,
   onDelete,
   onDragEnd,
   onDragStart,
@@ -774,122 +754,92 @@ function CommandTaskReorderItem({
 }: CommandTaskReorderItemProps) {
   const dragControls = useDragControls();
   const commandLine = buildTerminalCommandLine(task.command, task.args);
+  const workingDir = task.workingDir?.trim() ?? "";
+  // The working directory only adds information when it differs from the workspace root.
+  const showWorkingDir = Boolean(workingDir) && normalizeDirectory(workingDir) !== normalizeDirectory(workspacePath);
 
   return (
     <Reorder.Item
       as="div"
       className={cn(
-        "relative rounded-[12px] border border-[#e6edf5] bg-[#fbfcfe] px-3 py-3 transition-[border-color,background-color,opacity] duration-150",
-        !task.enabled && "border-[#e5e7eb] bg-[#f8fafc] opacity-72",
-        dragging && "border-[#1697c5] bg-[#f0fbff] opacity-95",
+        "group relative flex h-10 items-center gap-2 rounded-md px-1.5 transition-colors",
+        dragging ? "bg-selected" : "hover:bg-hover",
       )}
       dragControls={dragControls}
       dragListener={false}
       layout="position"
+      onDoubleClick={onEdit}
       onDragEnd={onDragEnd}
       onDragStart={onDragStart}
       transition={reorderLayoutTransition}
       value={task}
-      whileDrag={{
-        scale: 1.015,
-        zIndex: 3,
-        boxShadow: "0 22px 44px -28px rgba(22,151,197,0.45)",
-      }}
+      whileDrag={{ zIndex: 3, boxShadow: "0 8px 24px -12px rgba(15,23,42,0.35)" }}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-1 items-start gap-3">
-          <div
-            aria-label={`拖动排序 ${task.name}`}
-            className="mt-0.5 flex h-6 w-6 cursor-grab touch-none items-center justify-center rounded-[6px] border border-[#d8e1eb] bg-white text-[#667085] active:cursor-grabbing"
-            onPointerDown={(event) => dragControls.start(event)}
-            role="button"
-            tabIndex={-1}
-            title="拖动调整命令顺序"
-          >
-            <HolderOutlined />
-          </div>
-
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <Typography.Text className="text-[13px] font-medium text-[#1f2937]">
-                {task.name}
-              </Typography.Text>
-              {!task.enabled ? (
-                <Tag
-                  bordered={false}
-                  className="m-0 rounded-full bg-[#f3f4f6] px-2 py-0 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#6b7280]"
-                >
-                  已关闭
-                </Tag>
-              ) : null}
-              <Tag
-                bordered={false}
-                className="m-0 rounded-full bg-[#eef6fb] px-2 py-0 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#1283ab]"
-              >
-                #{index + 1}
-              </Tag>
-            </div>
-            <Typography.Paragraph
-              className="!mb-0 !mt-1 font-mono !text-[12px] !leading-5 !text-[#475467]"
-              ellipsis={{ rows: 1, tooltip: commandLine }}
-            >
-              {commandLine}
-            </Typography.Paragraph>
-            <Typography.Text className="mt-1 block text-[11px] text-[#98a2b3]">
-              工作目录：{task.workingDir || workspacePath}
-            </Typography.Text>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-1">
-          <Tooltip placement="bottom" title={task.enabled ? "关闭后将不参与执行" : "打开后将参与执行"}>
-            <Switch
-              checked={task.enabled}
-              loading={switchLoading}
-              onChange={(checked) => onToggleEnabled(checked)}
-              onClick={(_, event) => event?.stopPropagation()}
-              size="small"
-            />
-          </Tooltip>
-          <Tooltip placement="bottom" title="独立窗口运行这条终端命令">
-            <Button
-              className="!h-7 !w-7 !min-w-7 !p-0"
-              disabled={runDisabled}
-              icon={<CaretRightOutlined />}
-              loading={runButtonLoading}
-              onClick={onRun}
-              size="small"
-              type="text"
-            />
-          </Tooltip>
-          <Tooltip placement="bottom" title="编辑命令">
-            <Button
-              className="!h-7 !w-7 !min-w-7 !p-0"
-              icon={<EditOutlined />}
-              onClick={onEdit}
-              size="small"
-              type="text"
-            />
-          </Tooltip>
-          <Popconfirm
-            description="删除后不会影响工作区目录，只会移除这条终端命令。"
-            okButtonProps={{ danger: true }}
-            okText="删除"
-            onConfirm={onDelete}
-            title="是否删除这条终端命令？"
-          >
-            <Button
-              className="!h-7 !w-7 !min-w-7 !p-0"
-              danger
-              icon={<DeleteOutlined />}
-              size="small"
-              type="text"
-            />
-          </Popconfirm>
-        </div>
+      <div
+        aria-label={`拖动排序 ${task.name}`}
+        className="reveal-on-hover flex h-6 w-3.5 shrink-0 cursor-grab touch-none items-center justify-center text-[11px] text-fg-3 active:cursor-grabbing"
+        onPointerDown={(event) => dragControls.start(event)}
+        role="button"
+        tabIndex={-1}
+        title="拖动调整顺序"
+      >
+        <HolderOutlined />
+      </div>
+      <Tooltip mouseEnterDelay={0.4} title={task.enabled ? "已启用：参与“运行全部”" : "已停用：不参与“运行全部”"}>
+        <Switch
+          aria-label={`${task.enabled ? "停用" : "启用"} ${task.name}`}
+          checked={task.enabled}
+          loading={switchLoading}
+          onChange={(checked) => onToggleEnabled(checked)}
+          onClick={(_, event) => event?.stopPropagation()}
+          size="small"
+        />
+      </Tooltip>
+      <div className={cn("flex min-w-0 flex-1 items-baseline gap-3", !task.enabled && "opacity-55")}>
+        <span className="w-[180px] max-w-[40%] shrink-0 truncate text-[13px] font-medium text-fg" title={task.name}>
+          {task.name}
+        </span>
+        <span className="min-w-0 truncate font-mono text-[12px] text-fg-2" title={commandLine}>
+          {commandLine}
+        </span>
+        {showWorkingDir ? (
+          <span className="min-w-0 max-w-[35%] shrink truncate text-[12px] text-fg-3" title={`工作目录：${workingDir}`}>
+            {workingDir}
+          </span>
+        ) : null}
+      </div>
+      <div className="flex shrink-0 items-center">
+        <Tooltip title="在新终端窗口运行">
+          <Button
+            aria-label={`运行 ${task.name}`}
+            disabled={runDisabled}
+            icon={<CaretRightOutlined />}
+            loading={runButtonLoading}
+            onClick={onRun}
+            size="small"
+            type="text"
+          />
+        </Tooltip>
+        <Tooltip title="编辑">
+          <Button aria-label={`编辑 ${task.name}`} className="reveal-on-hover" icon={<EditOutlined />} onClick={onEdit} size="small" type="text" />
+        </Tooltip>
+        <Popconfirm
+          cancelText="取消"
+          description="只移除这条命令，不影响项目文件。"
+          okButtonProps={{ danger: true }}
+          okText="删除"
+          onConfirm={onDelete}
+          title={`删除“${task.name}”？`}
+        >
+          <Button aria-label={`删除 ${task.name}`} className="reveal-on-hover" danger icon={<DeleteOutlined />} size="small" type="text" />
+        </Popconfirm>
       </div>
     </Reorder.Item>
   );
+}
+
+function normalizeDirectory(path: string) {
+  return path.trim().replace(/[\\/]+/g, "/").replace(/\/$/, "").toLowerCase();
 }
 
 function isSameTaskOrder(previousOrder: string[], nextTasks: LaunchTaskRecord[]) {

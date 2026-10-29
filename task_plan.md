@@ -1,5 +1,21 @@
 # task_plan
 
+## 2026-10-01 OSS 私有下载链接有效期
+- [x] 核对默认值和前端 → service → signer 调用链。
+- [x] 将默认有效期改为 86400 秒，完成实际签名回归与文档同步；原 PUT 签名样例失败已在 HEAD 基线复现，未扩大修改范围。
+- 专项：`scripts/work/2026-10-01-oss-download-url-one-day/task_plan.md`。
+
+## 2026-10-01 Screenshot Save Latency
+- [x] 本机日志确认导出合成/编码主要延迟，去重清理为次要优化。
+- [x] 裁剪/编码、阻塞隔离、单次隐藏收尾及回归验证；真实桌面关闭耗时待人工验收。
+- 专项：`scripts/work/2026-10-01-screenshot-save-latency/task_plan.md`。
+
+## 2026-10-01 Screenshot UI and Performance
+- 用户确认实施浅色工具栏与选区性能优化；保留主应用 WebView2 GPU 禁用参数。
+- 专项计划：`scripts/work/2026-10-01-screenshot-ui-performance/task_plan.md`。
+- 实现：原生 Direct2D/D3D11/DirectComposition 几何绘制、消息唤醒与最新帧同步、浅色分层工具栏及多屏边界定位。
+- 当前：代码、相关自动回归与交付完成；可见输入延迟、高刷混合 DPI 与实际复制保存人工验收独立记录，未宣称完成。
+
 ## 2026-05-06 Terminal Shell Preference
 - 目标：让 Home 终端命令组和 restore `terminal_command` 支持用户选择 PowerShell 7，不再把所有一键命令固定到 `cmd.exe`。
 - 范围：
@@ -428,6 +444,13 @@
 - 目标：在资源浏览器右键菜单增加“在这里打开终端”，并在当前目录打开 wt。
 - 方案：新增 Rust 命令 `open_workspace_terminal_at_path`，前端菜单调用该命令。
 - 验证：前端构建 + Rust check + 手工路径场景验证。
+
+## 2026-10-19 全应用 UI 精简重构（商务实用）
+- [x] 语义 token + antd 同色板，删除暗色 hex 覆盖层
+- [x] 壳层贴边分栏、统一 40px 面板标题栏、行内次要操作悬停显示
+- [x] 工作台 / Prompts / Codex 授权 / 会话历史 / 独立历史窗口 / OSS / 设置逐页精简
+- [ ] 桌面端实机验收（用户）
+- 专项：`scripts/work/2026-10-19-app-ui-declutter/`。
 
 ## 2026-03-11 热键截图与标注（方案）
 - 新增方案蓝图：scripts/work/2026-03-11-hotkey-screenshot-annotate/task_plan.md
@@ -2195,3 +2218,14 @@ ativeToolbarActive 时才隐藏 WebView 主行，避免多次截图后工具整�
 - [x] 完成自动门禁；真实 Tauri 导入导出与亮暗主题按专项 `deliverable.md` 留待人工验收。
 
 专项计划：`scripts/work/2026-09-02-prompt-import-export/task_plan.md`
+
+## 2026-10-19 工作区导航
+- 已完成代码与相关本地验证；真实桌面验收及 Rust 测试宿主限制见 scripts/work/2026-10-19-workspace-navigation/deliverable.md。
+
+## 2026-10-19 工作台可读性
+- 实施范围和验证见 scripts/work/2026-10-19-workspace-readability/。
+- 本轮已完成：440px可调宽度、三行条目和黄色星标、命令区窄窗口适配；62项前端测试、production build及整页浏览器模拟验收通过。实际Tauri显示由用户验收；见专项deliverable。
+
+
+## 2026-10-19 恢复拖放动画
+- 恢复工作区拖放跟手、相邻行让位动画，保留虚拟化和组内提交。

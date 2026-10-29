@@ -13,16 +13,17 @@ use crate::{
         ensure_absolute_directory, AdapterAvailability, DeleteResult, LaunchTaskRecord,
         OpenWorkspaceInEditorResult, OpenWorkspaceTerminalResult, ProjectRecord,
         ReorderLaunchTasksInput, ReorderWorkspacesInput, RunWorkspaceTerminalCommandResult,
-        RunWorkspaceTerminalCommandsResult, UpdateWorkspaceDescriptionInput, UpsertLaunchTaskInput,
-        UpsertProjectInput, UpsertWorkspaceInput, WorkspaceRecord,
+        RunWorkspaceTerminalCommandsResult, SetWorkspacesArchivedInput,
+        UpdateWorkspaceDescriptionInput, UpsertLaunchTaskInput, UpsertProjectInput,
+        UpsertWorkspaceInput, WorkspaceRecord,
     },
     error::{AppError, AppResult},
     persistence::{
         delete_launch_task, delete_workspace, list_launch_tasks, list_workspaces,
         register_workspace_folder, register_workspace_folder_with_description,
         remove_workspace_registration, reorder_launch_tasks, reorder_workspaces,
-        update_workspace_description, upsert_launch_task, upsert_project, upsert_workspace,
-        Database,
+        set_workspaces_archived, update_workspace_description, upsert_launch_task, upsert_project,
+        upsert_workspace, Database,
     },
 };
 
@@ -62,6 +63,17 @@ impl WorkspaceService {
         self.database
             .write("update_workspace_description", move |connection| {
                 update_workspace_description(connection, input)
+            })
+            .await
+    }
+
+    pub async fn set_workspaces_archived(
+        &self,
+        input: SetWorkspacesArchivedInput,
+    ) -> AppResult<Vec<WorkspaceRecord>> {
+        self.database
+            .write("set_workspaces_archived", move |connection| {
+                set_workspaces_archived(connection, input)
             })
             .await
     }
@@ -295,6 +307,12 @@ impl WorkspaceService {
             })?;
 
         let project = resolve_workspace_primary_project(&workspace)?;
+        if workspace.is_archived {
+            return Err(AppError::new(
+                "WORKSPACE_ARCHIVED",
+                "请先恢复已归档工作区，再运行命令组",
+            ));
+        }
         let tasks = resolve_workspace_terminal_tasks_for_batch(&project)?;
         let launch_context =
             resolve_terminal_launch_context(preferences_service, &workspace, &project, &tasks[0])?;

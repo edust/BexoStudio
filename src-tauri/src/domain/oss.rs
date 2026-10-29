@@ -12,7 +12,7 @@ pub const OSS_MAX_OBJECT_KEY_BYTES: usize = 1_024;
 pub const OSS_MAX_FOLDER_NAME_CHARS: usize = 254;
 pub const OSS_MAX_ENDPOINT_BYTES: usize = 512;
 pub const OSS_MAX_TRANSFER_RETRIES: u32 = 3;
-pub const OSS_DEFAULT_DOWNLOAD_URL_EXPIRES_SECONDS: u64 = 900;
+pub const OSS_DEFAULT_DOWNLOAD_URL_EXPIRES_SECONDS: u64 = 86_400;
 pub const OSS_MIN_DOWNLOAD_URL_EXPIRES_SECONDS: u64 = 60;
 pub const OSS_MAX_DOWNLOAD_URL_EXPIRES_SECONDS: u64 = 604_800;
 pub const OSS_TRANSFER_PROGRESS_EVENT_NAME: &str = "oss://transfer-progress";
@@ -707,10 +707,12 @@ mod tests {
 
     #[test]
     fn download_url_expiration_has_safe_default_and_bounds() {
+        assert_eq!(OSS_DEFAULT_DOWNLOAD_URL_EXPIRES_SECONDS, 24 * 60 * 60);
         assert_eq!(
             normalize_download_url_expires(None).unwrap(),
             OSS_DEFAULT_DOWNLOAD_URL_EXPIRES_SECONDS
         );
+        assert_eq!(normalize_download_url_expires(Some(900)).unwrap(), 900);
         assert_eq!(
             normalize_download_url_expires(Some(OSS_MIN_DOWNLOAD_URL_EXPIRES_SECONDS)).unwrap(),
             OSS_MIN_DOWNLOAD_URL_EXPIRES_SECONDS

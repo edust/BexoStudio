@@ -19,7 +19,6 @@ import {
   Spin,
   Tag,
   Tooltip,
-  Typography,
   type MenuProps,
 } from "antd";
 import { watch, type UnwatchFn as FsUnwatchFn } from "@tauri-apps/plugin-fs";
@@ -40,6 +39,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 
+import { PaneHeader } from "@/components/shell/pane-header";
 import { copyTextToClipboard, getClipboardErrorMessage } from "@/lib/clipboard";
 import { cn } from "@/lib/cn";
 import {
@@ -99,7 +99,7 @@ const GIT_HYDRATE_DELAY_MS = 180;
 const WATCH_HYDRATE_DELAY_MS = 1200;
 const ENABLE_RESOURCE_WATCH = true;
 const REFRESH_BATCH_CONCURRENCY = 4;
-const TREE_ROW_HEIGHT = 34;
+const TREE_ROW_HEIGHT = 28;
 const TREE_OVERSCAN_ROWS = 10;
 const TREE_VIRTUALIZATION_THRESHOLD = 240;
 const WATCH_IGNORED_DIRECTORY_NAMES = new Set([
@@ -1358,43 +1358,33 @@ export function ResourceBrowserPane({
     : clamp(paneWidth, MIN_PANE_WIDTH, MAX_PANE_WIDTH);
 
   return (
-    <div className="flex min-h-0 shrink-0">
+    <div className="flex min-h-0 shrink-0" style={{ width: isCollapsed ? 40 : `min(${renderedPaneWidth + 4}px, max(228px, calc(100% - 360px)))` }}>
       <div
+        aria-label="项目文件"
         className={cn(
-          "flex min-h-0 shrink-0 flex-col border-r border-[#e6edf5] bg-[#fbfcfe] transition-[width] duration-200",
+          "flex min-h-0 shrink-0 flex-col border-r border-line bg-surface",
           isCollapsed && "items-center",
         )}
         ref={browserContainerRef}
-        style={{ width: renderedPaneWidth }}
+        style={{ width: isCollapsed ? "100%" : "calc(100% - 4px)" }}
         tabIndex={0}
       >
-        <div
-          className={cn(
-            "flex items-center border-b border-[#e6edf5] px-3 py-3",
-            isCollapsed ? "justify-center" : "justify-between",
-          )}
-        >
-          {isCollapsed ? (
-            <Tooltip placement="right" title="展开资源浏览器">
+        {isCollapsed ? (
+          <div className="flex h-10 w-full shrink-0 items-center justify-center border-b border-line">
+            <Tooltip placement="right" title="展开文件">
               <Button
-                className="!h-8 !w-8 !min-w-8 !p-0"
+                aria-label="展开文件"
                 icon={<MenuUnfoldOutlined />}
                 onClick={() => setIsCollapsed(false)}
                 size="small"
                 type="text"
               />
             </Tooltip>
-          ) : (
-            <>
-              <div className="min-w-0">
-                <Typography.Text className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-[#1f2937]">
-                  Resource Browser
-                </Typography.Text>
-                <Typography.Text className="block text-[11px] text-[#667085]">
-                  {workspaceName}
-                </Typography.Text>
-              </div>
-              <div className="flex items-center gap-1">
+          </div>
+        ) : (
+          <PaneHeader
+            actions={
+              <>
                 <ToolbarButton
                   icon={
                     isRootLayerLoading || loadingPaths.length || gitStatusQuery.isFetching ? (
@@ -1403,12 +1393,12 @@ export function ResourceBrowserPane({
                       <ReloadOutlined />
                     )
                   }
-                  title="刷新资源树"
+                  title="刷新"
                   onClick={() => void refreshVisibleDirectories()}
                 />
                 <ToolbarButton
                   icon={<CopyOutlined />}
-                  title="复制选中资源绝对路径（Ctrl+Shift+C）"
+                  title="复制选中项路径（Ctrl+Shift+C）"
                   onClick={() => void handleCopySelectedPaths()}
                 />
                 <ToolbarButton
@@ -1418,49 +1408,39 @@ export function ResourceBrowserPane({
                 />
                 <ToolbarButton
                   icon={<MenuFoldOutlined />}
-                  title="折叠资源浏览器"
+                  title="收起文件"
                   onClick={() => setIsCollapsed(true)}
                 />
-              </div>
-            </>
-          )}
-        </div>
+              </>
+            }
+            title="文件"
+          />
+        )}
 
         {!isCollapsed ? (
           <>
-            <div className="border-b border-[#eef2f6] px-3 py-2">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <StatusTag count={statusCounts.modified} label="M" tone="modified" />
-                <StatusTag count={statusCounts.renamed} label="R" tone="renamed" />
-                <StatusTag count={statusCounts.untracked} label="U" tone="untracked" />
-                <StatusTag count={statusCounts.ignored} label="I" tone="ignored" />
-                <Button
+            {gitStatusData?.gitAvailable ? (
+              <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-line px-2 py-1.5">
+                {statusCounts.modified ? <StatusTag count={statusCounts.modified} label="修改" tone="modified" /> : null}
+                {statusCounts.renamed ? <StatusTag count={statusCounts.renamed} label="重命名" tone="renamed" /> : null}
+                {statusCounts.untracked ? <StatusTag count={statusCounts.untracked} label="新增" tone="untracked" /> : null}
+                {statusCounts.ignored ? <StatusTag count={statusCounts.ignored} label="忽略" tone="ignored" /> : null}
+                {!statusCounts.modified && !statusCounts.renamed && !statusCounts.untracked ? (
+                  <span className="text-[12px] text-fg-3">无变更</span>
+                ) : null}
+                <button
+                  aria-pressed={showChangedOnly}
                   className={cn(
-                    "!h-5 !rounded-full !border !px-2 !text-[10px] !font-semibold !shadow-none",
-                    showChangedOnly
-                      ? "!border-[#1697c5] !bg-[#e7f5fb] !text-[#0d6987]"
-                      : "!border-[#d8e1eb] !bg-white !text-[#667085]",
+                    "ml-auto h-5 rounded px-1.5 text-[11px] transition-colors",
+                    showChangedOnly ? "bg-selected text-primary" : "text-fg-3 hover:bg-hover hover:text-fg-2",
                   )}
-                  disabled={!gitStatusData?.gitAvailable}
                   onClick={() => setShowChangedOnly((current) => !current)}
-                  size="small"
-                  type="default"
+                  type="button"
                 >
                   仅看变更
-                </Button>
+                </button>
               </div>
-              {gitStatusData?.gitAvailable === false ? (
-                <Typography.Text className="mt-2 block text-[11px] text-[#98a2b3]">
-                  当前目录不是 Git 仓库，已关闭状态筛选。
-                </Typography.Text>
-              ) : null}
-              <Typography.Text
-                className="mt-2 block font-mono text-[11px] leading-5 text-[#98a2b3]"
-                title={rootPath}
-              >
-                {rootPath}
-              </Typography.Text>
-            </div>
+            ) : null}
 
             {treeError ? (
               <Alert
@@ -1478,7 +1458,7 @@ export function ResourceBrowserPane({
               </div>
             ) : (
               <div
-                className="min-h-0 flex-1 overflow-auto px-2 py-2"
+                className="min-h-0 flex-1 overflow-auto p-1"
                 style={{ contain: "strict" }}
                 ref={treeViewportRef}
                 onScroll={virtualizationEnabled ? handleTreeScroll : undefined}
@@ -1505,7 +1485,7 @@ export function ResourceBrowserPane({
                       ))}
                     </div>
                   ) : (
-                    <div className="space-y-0.5">
+                    <div>
                       {visibleRows.map((row) => (
                         <div key={`${row.entry.path}-${row.depth}`}>
                           {renderTreeRow(row)}
@@ -1515,7 +1495,7 @@ export function ResourceBrowserPane({
                     </div>
                   )
                 ) : (
-                  <div className="flex min-h-full items-center justify-center rounded-[12px] border border-dashed border-[#e6edf5] bg-white/80 px-4 py-6">
+                  <div className="flex min-h-full items-center justify-center px-4 py-6">
                     <Empty description="当前目录没有可显示的资源" image={Empty.PRESENTED_IMAGE_SIMPLE} />
                   </div>
                 )}
@@ -1527,10 +1507,11 @@ export function ResourceBrowserPane({
 
       {!isCollapsed ? (
         <div
-          className="group flex w-2 cursor-col-resize items-center justify-center bg-transparent"
+          aria-label="调整文件栏宽度"
+          className="w-1 shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-primary/30"
+          role="separator"
           onPointerDown={handleResizePointerDown}
         >
-          <div className="h-12 w-[3px] rounded-full bg-[#d8e1eb] transition-colors group-hover:bg-[#1697c5]" />
         </div>
       ) : null}
     </div>
@@ -1624,9 +1605,9 @@ const ResourceTreeItem = memo(function ResourceTreeItem({
     <Dropdown menu={menu} trigger={["contextMenu"]}>
       <div
         className={cn(
-          "group flex h-8 items-center gap-1 rounded-[8px] px-2 text-[12px] text-[#1f2937] transition-colors",
-          isSelected ? "bg-[#e7f5fb] text-[#0d6987]" : "hover:bg-[#f1f5f9]",
-          displayStatus === "ignored" && "text-[#98a2b3]",
+          "group flex h-7 items-center gap-1 rounded px-2 text-[13px] text-fg transition-colors",
+          isSelected ? "bg-selected text-primary" : "hover:bg-hover",
+          displayStatus === "ignored" && "text-fg-3",
         )}
         draggable
         style={{ paddingLeft: `${depth * 14 + 8}px` }}
@@ -1647,7 +1628,7 @@ const ResourceTreeItem = memo(function ResourceTreeItem({
       >
         {isDirectory ? (
           <button
-            className="flex h-5 w-5 items-center justify-center rounded-[6px] text-[#98a2b3]"
+            className="flex h-5 w-4 items-center justify-center text-[10px] text-fg-3"
             onClick={(event) => {
               event.stopPropagation();
               onToggleExpand(activePath);
@@ -1663,7 +1644,7 @@ const ResourceTreeItem = memo(function ResourceTreeItem({
             )}
           </button>
         ) : (
-          <span className="h-5 w-5" />
+          <span className="h-5 w-4" />
         )}
 
         <span
@@ -1697,7 +1678,7 @@ const ResourceTreeItem = memo(function ResourceTreeItem({
         {displayStatus ? (
           <span
             className={cn(
-              "shrink-0 rounded-full px-1.5 py-0 text-[10px] font-semibold uppercase tracking-[0.12em]",
+              "shrink-0 px-1 text-[11px] font-semibold",
               getStatusToneClass(displayStatus, "badge"),
             )}
           >
@@ -1731,7 +1712,7 @@ function ToolbarButton({ icon, title, onClick }: ToolbarButtonProps) {
   return (
     <Tooltip placement="bottom" title={title}>
       <Button
-        className="!h-7 !w-7 !min-w-7 !p-0"
+        aria-label={title}
         icon={icon}
         onClick={onClick}
         size="small"
@@ -1752,7 +1733,7 @@ function StatusTag({ count, label, tone }: StatusTagProps) {
     <Tag
       bordered={false}
       className={cn(
-        "m-0 rounded-full px-2 py-0 text-[10px] font-semibold uppercase tracking-[0.12em]",
+        "m-0 rounded px-1.5 py-0 text-[11px] leading-5",
         getStatusToneClass(tone, "badge"),
       )}
     >
@@ -1770,14 +1751,14 @@ function ResourceTreeLoadingRows({ depth }: ResourceTreeLoadingRowsProps) {
     <>
       {Array.from({ length: 4 }, (_, index) => (
         <div
-          className="flex h-8 items-center gap-2 rounded-[8px] px-2 opacity-70"
+          className="flex h-7 items-center gap-2 px-2 opacity-70"
           key={`resource-tree-loading-${index}`}
           style={{ paddingLeft: `${depth * 14 + 8}px` }}
         >
-          <span className="h-4 w-4 shrink-0 rounded-[4px] bg-[#e6edf5]" />
+          <span className="h-4 w-4 shrink-0 rounded bg-hover" />
           <span
             className={cn(
-              "h-3 rounded-full bg-[#e6edf5] animate-pulse",
+              "h-3 rounded-full bg-hover animate-pulse",
               index % 2 === 0 ? "w-[42%]" : "w-[58%]",
             )}
           />

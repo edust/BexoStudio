@@ -40,6 +40,11 @@ export function areNativeInteractionStatesEqual(
   );
 }
 
+export function isNativeStateCurrent(current: NativeInteractionStateView | null, incoming: NativeInteractionStateView): boolean {
+  return incoming.hasActiveSession === false || !current || (incoming.selectionRevision >= current.selectionRevision &&
+    incoming.activeShapeRevision >= current.activeShapeRevision);
+}
+
 export function buildNativeInteractionRuntimeRequestKey(
   request: NativeInteractionRuntimeRequest,
 ): string {

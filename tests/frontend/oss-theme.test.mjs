@@ -28,7 +28,9 @@ test("OSS components use semantic theme classes for custom surfaces and states",
 
   assert.match(accountDialog, /oss-surface-info[\s\S]*oss-border-info/);
   assert.match(accountDialog, /oss-text-info/);
-  assert.match(accountSidebar, /oss-card-hover/);
+  // Row hover/selected states use the shared semantic tokens (bg-hover / bg-selected).
+  assert.match(accountSidebar, /hover:bg-hover/);
+  assert.match(accountSidebar, /bg-selected/);
   assert.match(accountSidebar, /oss-status-danger/);
   assert.match(targetDialog, /oss-surface-muted[\s\S]*oss-border/);
   assert.match(transferQueue, /oss-text-danger/);
@@ -37,6 +39,6 @@ test("OSS components use semantic theme classes for custom surfaces and states",
 
   for (const source of [accountDialog, accountSidebar, targetDialog, transferQueue, page]) {
     assert.doesNotMatch(source, /\b(?:bg|border|text)-\[\#/);
-    assert.doesNotMatch(source, /\bhover:(?:bg|border|text)-/);
+    assert.doesNotMatch(source, /\bhover:(?:bg|border|text)-(?:\[|white\b)/);
   }
 });

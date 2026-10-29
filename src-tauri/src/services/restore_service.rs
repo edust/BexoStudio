@@ -622,7 +622,17 @@ impl RestoreService {
         let snapshot = self
             .database
             .read("load_snapshot_for_restore", move |connection| {
-                get_snapshot(connection, input.snapshot_id.clone())
+                let snapshot = get_snapshot(connection, input.snapshot_id.clone())?;
+                if crate::persistence::list_workspaces(connection)?
+                    .iter()
+                    .any(|workspace| workspace.id == snapshot.workspace_id && workspace.is_archived)
+                {
+                    return Err(AppError::new(
+                        "WORKSPACE_ARCHIVED",
+                        "请先恢复已归档工作区，再执行快照恢复",
+                    ));
+                }
+                Ok(snapshot)
             })
             .await?;
         let preview = build_restore_preview(snapshot.clone(), input.mode.clone())?;
@@ -910,7 +920,13 @@ impl RestoreService {
     pub async fn list_recent_restore_targets(&self) -> AppResult<Vec<RecentRestoreTarget>> {
         self.database
             .read("list_recent_restore_targets", |connection| {
+                let active_ids: HashSet<String> = crate::persistence::list_workspaces(connection)?
+                    .into_iter()
+                    .filter(|workspace| !workspace.is_archived)
+                    .map(|workspace| workspace.id)
+                    .collect();
                 let mut snapshots = persist_list_snapshots(connection, None)?;
+                snapshots.retain(|snapshot| active_ids.contains(&snapshot.workspace_id));
                 snapshots.sort_by(|left, right| {
                     recent_target_sort_key(right)
                         .cmp(recent_target_sort_key(left))

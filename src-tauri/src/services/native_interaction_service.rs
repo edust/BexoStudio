@@ -366,6 +366,8 @@ struct NativeInteractionBackendRuntime {
     #[cfg(target_os = "windows")]
     command_sender: mpsc::Sender<NativeInteractionOwnerCommand>,
     #[cfg(target_os = "windows")]
+    owner_thread_id: u32,
+    #[cfg(target_os = "windows")]
     owner_thread: Option<thread::JoinHandle<()>>,
 }
 
@@ -405,7 +407,28 @@ const NATIVE_INTERACTION_PREPARE_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(target_os = "windows")]
 const NATIVE_INTERACTION_STARTUP_TIMEOUT: Duration = Duration::from_secs(8);
 #[cfg(target_os = "windows")]
-const NATIVE_INTERACTION_MESSAGE_PUMP_INTERVAL: Duration = Duration::from_millis(8);
+const NATIVE_INTERACTION_OWNER_WAKE: u32 = windows_sys::Win32::UI::WindowsAndMessaging::WM_APP + 37;
+
+#[cfg(target_os = "windows")]
+fn wake_interaction_owner(thread_id: u32) -> AppResult<()> {
+    if unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW(
+            thread_id,
+            NATIVE_INTERACTION_OWNER_WAKE,
+            0,
+            0,
+        )
+    } == 0
+    {
+        return Err(
+            AppError::new("NATIVE_INTERACTION_WAKE_FAILED", "唤醒截图交互线程失败").with_detail(
+                "win32Error",
+                unsafe { windows_sys::Win32::Foundation::GetLastError() }.to_string(),
+            ),
+        );
+    }
+    Ok(())
+}
 
 impl Default for NativeInteractionState {
     fn default() -> Self {
@@ -1211,6 +1234,7 @@ fn bootstrap_native_interaction_backend(
     Ok(NativeInteractionBackendBootstrap {
         backend_runtime: NativeInteractionBackendRuntime {
             command_sender,
+            owner_thread_id: started.owner_thread_id,
             owner_thread: Some(owner_thread),
         },
         backend_kind: NativeInteractionBackendKind::WindowsLayeredSelectionMvp,
@@ -1303,6 +1327,7 @@ impl NativeInteractionBackendRuntime {
                 .with_detail("reason", error.to_string())
             })?;
 
+        wake_interaction_owner(self.owner_thread_id)?;
         reply_receiver.recv_timeout(timeout).map_err(|error| {
             let code = match error {
                 mpsc::RecvTimeoutError::Timeout => "NATIVE_INTERACTION_OWNER_TIMEOUT",
@@ -1323,6 +1348,9 @@ impl Drop for NativeInteractionBackendRuntime {
         let _ = self
             .command_sender
             .send(NativeInteractionOwnerCommand::Shutdown);
+        if let Err(error) = wake_interaction_owner(self.owner_thread_id) {
+            log::error!(target: "bexo::service::native_interaction", "native_interaction_shutdown_wake_failed reason={}", error);
+        }
         if let Some(owner_thread) = self.owner_thread.take() {
             if owner_thread.join().is_err() {
                 log::warn!(
@@ -1358,52 +1386,75 @@ fn run_native_interaction_owner(
         return;
     }
 
-    loop {
+    'owner: loop {
         if !native_interaction_backend_windows::pump_messages() {
             break;
         }
-        let command = match command_receiver.recv_timeout(NATIVE_INTERACTION_MESSAGE_PUMP_INTERVAL)
-        {
-            Ok(command) => command,
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        // Drain commands, then render once from the latest input geometry.
+        loop {
+            let command = match command_receiver.try_recv() {
+                Ok(command) => command,
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => break 'owner,
+            };
+            match command {
+                NativeInteractionOwnerCommand::Prepare { session, reply } => {
+                    let result = backend.prepare_session(&session).map(|prepare| {
+                        NativeInteractionPrepareMetrics {
+                            total_ms: prepare.total_ms,
+                            window_x: prepare.window_x,
+                            window_y: prepare.window_y,
+                            window_width: prepare.window_width,
+                            window_height: prepare.window_height,
+                            present_ms: prepare.present_ms,
+                            copy_ms: prepare.copy_ms,
+                            update_ms: prepare.update_ms,
+                            surface_recreated: prepare.surface_recreated,
+                        }
+                    });
+                    let _ = reply.send(result);
+                }
+                NativeInteractionOwnerCommand::Show { reply } => {
+                    let _ = reply.send(backend.show());
+                }
+                NativeInteractionOwnerCommand::Hide { reply } => {
+                    let _ = reply.send(backend.hide());
+                }
+                NativeInteractionOwnerCommand::Clear { reply } => {
+                    let _ = reply.send(backend.clear());
+                }
+                NativeInteractionOwnerCommand::Snapshot { reply } => {
+                    let _ = reply.send(backend.snapshot_selection());
+                }
+                NativeInteractionOwnerCommand::UpdateExclusionRects { rects, reply } => {
+                    let _ = reply.send(backend.update_exclusion_rects(&rects));
+                }
+                NativeInteractionOwnerCommand::UpdateRuntime { input, reply } => {
+                    let _ = reply.send(backend.update_runtime(&input));
+                }
+                NativeInteractionOwnerCommand::Shutdown => break 'owner,
+            }
+        }
+        if let Err(error) = backend.present_pending() {
+            backend.report_render_failure(&error);
+        }
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            MsgWaitForMultipleObjectsEx, MWMO_INPUTAVAILABLE, QS_ALLINPUT,
         };
-        match command {
-            NativeInteractionOwnerCommand::Prepare { session, reply } => {
-                let result = backend.prepare_session(&session).map(|prepare| {
-                    NativeInteractionPrepareMetrics {
-                        total_ms: prepare.total_ms,
-                        window_x: prepare.window_x,
-                        window_y: prepare.window_y,
-                        window_width: prepare.window_width,
-                        window_height: prepare.window_height,
-                        present_ms: prepare.present_ms,
-                        copy_ms: prepare.copy_ms,
-                        update_ms: prepare.update_ms,
-                        surface_recreated: prepare.surface_recreated,
-                    }
-                });
-                let _ = reply.send(result);
-            }
-            NativeInteractionOwnerCommand::Show { reply } => {
-                let _ = reply.send(backend.show());
-            }
-            NativeInteractionOwnerCommand::Hide { reply } => {
-                let _ = reply.send(backend.hide());
-            }
-            NativeInteractionOwnerCommand::Clear { reply } => {
-                let _ = reply.send(backend.clear());
-            }
-            NativeInteractionOwnerCommand::Snapshot { reply } => {
-                let _ = reply.send(backend.snapshot_selection());
-            }
-            NativeInteractionOwnerCommand::UpdateExclusionRects { rects, reply } => {
-                let _ = reply.send(backend.update_exclusion_rects(&rects));
-            }
-            NativeInteractionOwnerCommand::UpdateRuntime { input, reply } => {
-                let _ = reply.send(backend.update_runtime(&input));
-            }
-            NativeInteractionOwnerCommand::Shutdown => break,
+        // Channel writes post a thread message; mouse messages wake the same wait immediately.
+        let result = unsafe {
+            MsgWaitForMultipleObjectsEx(
+                0,
+                std::ptr::null(),
+                u32::MAX,
+                QS_ALLINPUT,
+                MWMO_INPUTAVAILABLE,
+            )
+        };
+        if result == u32::MAX {
+            log::error!(target: "bexo::service::native_interaction", "native_interaction_message_wait_failed win32_error={}",
+                unsafe { windows_sys::Win32::Foundation::GetLastError() });
+            break;
         }
     }
 }

@@ -423,7 +423,7 @@ fn hwnd_from_raw(raw: isize) -> Option<HWND> {
     Some(HWND(raw as *mut _))
 }
 
-fn create_d3d_device() -> AppResult<(ID3D11Device, ID3D11DeviceContext)> {
+pub(super) fn create_d3d_device() -> AppResult<(ID3D11Device, ID3D11DeviceContext)> {
     let mut last_error = None;
     for driver_type in [D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP] {
         let feature_levels = [
@@ -471,7 +471,7 @@ fn create_d3d_device() -> AppResult<(ID3D11Device, ID3D11DeviceContext)> {
     })
 }
 
-fn resolve_dxgi_factory(dxgi_device: &IDXGIDevice) -> AppResult<IDXGIFactory2> {
+pub(super) fn resolve_dxgi_factory(dxgi_device: &IDXGIDevice) -> AppResult<IDXGIFactory2> {
     let adapter: IDXGIAdapter = unsafe { dxgi_device.GetAdapter() }.map_err(map_windows_error(
         "NATIVE_PREVIEW_DXGI_ADAPTER_FAILED",
         "读取 Native Preview DXGI 适配器失败",
@@ -556,7 +556,7 @@ fn register_native_preview_window_class(instance: HINSTANCE, cursor: HCURSOR) ->
     Ok(())
 }
 
-fn create_composition_swap_chain(
+pub(super) fn create_composition_swap_chain(
     factory: &IDXGIFactory2,
     device: &ID3D11Device,
 ) -> AppResult<IDXGISwapChain1> {
@@ -590,7 +590,7 @@ fn create_composition_swap_chain(
     ))
 }
 
-fn create_direct_composition_tree(
+pub(super) fn create_direct_composition_tree(
     dxgi_device: &IDXGIDevice,
     hwnd: HWND,
     swap_chain: &IDXGISwapChain1,

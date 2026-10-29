@@ -44,8 +44,8 @@ pub use sqlite::Database;
 pub use workspace_repo::{
     delete_workspace, get_workspace_primary_project_path, list_workspaces,
     register_workspace_folder, register_workspace_folder_with_description,
-    remove_workspace_registration, reorder_workspaces, update_workspace_description,
-    upsert_workspace,
+    remove_workspace_registration, reorder_workspaces, set_workspaces_archived,
+    update_workspace_description, upsert_workspace,
 };
 pub use workspace_transfer_repo::{
     apply_workspace_import_plan, collect_workspace_transfer_workspaces,

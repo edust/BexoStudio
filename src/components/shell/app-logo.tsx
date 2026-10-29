@@ -1,16 +1,15 @@
-import { Avatar, Tooltip } from "antd";
+import { Tooltip } from "antd";
 
 export function AppLogo() {
   return (
-    <Tooltip placement="right" title="Bexo Studio">
-      <Avatar
-        className="shrink-0 border border-[#d9e2ec] bg-white text-[#1f2937]"
-        shape="square"
-        size={30}
-        style={{ borderRadius: 9, fontWeight: 700 }}
+    <Tooltip mouseEnterDelay={0.3} placement="right" title="Bexo Studio">
+      <span
+        aria-label="Bexo Studio"
+        className="flex h-8 w-8 items-center justify-center rounded-md bg-primary text-[14px] font-bold text-white"
+        role="img"
       >
         B
-      </Avatar>
+      </span>
     </Tooltip>
   );
 }

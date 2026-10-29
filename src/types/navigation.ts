@@ -19,18 +19,13 @@ export type PrimaryNavItem = {
 export type SidebarItem = {
   key: string;
   label: string;
-  description: string;
-  badge?: string;
+  description?: string;
   href?: string;
 };
 
 export type SectionSidebarContent = {
-  eyebrow: string;
-  title?: string;
-  description: string;
+  title: string;
   searchPlaceholder?: string;
   dataSource?: "workspaces";
   items: SidebarItem[];
-  footerTitle?: string;
-  footerDescription?: string;
 };

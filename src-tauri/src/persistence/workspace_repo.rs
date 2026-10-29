@@ -8,8 +8,8 @@ use crate::{
     domain::{
         normalize_workspace_description, parse_color_or_none, require_non_empty,
         validate_optional_uuid, validate_ordered_uuid_list, validate_workspace_id, DeleteResult,
-        ProjectRecord, ReorderWorkspacesInput, UpdateWorkspaceDescriptionInput,
-        UpsertWorkspaceInput, WorkspaceRecord, MAX_REORDER_ITEMS,
+        ProjectRecord, ReorderWorkspacesInput, SetWorkspacesArchivedInput,
+        UpdateWorkspaceDescriptionInput, UpsertWorkspaceInput, WorkspaceRecord, MAX_REORDER_ITEMS,
     },
     error::{AppError, AppResult},
     persistence::list_all_launch_tasks,
@@ -326,6 +326,61 @@ pub fn update_workspace_description(
             )
             .with_detail("workspaceId", workspace_id)
         })
+}
+
+pub fn set_workspaces_archived(
+    connection: &mut Connection,
+    input: SetWorkspacesArchivedInput,
+) -> AppResult<Vec<WorkspaceRecord>> {
+    let ids = validate_ordered_uuid_list("workspaceIds", input.workspace_ids, MAX_REORDER_ITEMS)?;
+    let transaction = connection.savepoint().map_err(|error| {
+        AppError::new(
+            "DB_WRITE_FAILED",
+            "failed to open workspace archive transaction",
+        )
+        .with_detail("reason", error.to_string())
+    })?;
+    let timestamp = Utc::now().to_rfc3339();
+    for id in ids {
+        let current: Option<bool> = transaction
+            .query_row(
+                "SELECT is_archived FROM workspaces WHERE id = ?1",
+                [&id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| {
+                AppError::new("DB_READ_FAILED", "failed to read workspace archive state")
+                    .with_detail("reason", error.to_string())
+            })?;
+        let current = current.ok_or_else(|| {
+            AppError::new("WORKSPACE_NOT_FOUND", "workspace was not found")
+                .with_detail("workspaceId", id.clone())
+        })?;
+        if current != input.archived {
+            transaction
+                .execute(
+                    "UPDATE workspaces SET is_archived = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![input.archived, timestamp, id],
+                )
+                .map_err(|error| {
+                    AppError::new(
+                        "DB_WRITE_FAILED",
+                        "failed to update workspace archive state",
+                    )
+                    .with_detail("reason", error.to_string())
+                })?;
+        }
+    }
+    let workspaces = list_workspaces(&transaction)?;
+    transaction.commit().map_err(|error| {
+        AppError::new(
+            "DB_WRITE_FAILED",
+            "failed to commit workspace archive state",
+        )
+        .with_detail("reason", error.to_string())
+    })?;
+    Ok(workspaces)
 }
 
 pub fn reorder_workspaces(
@@ -691,4 +746,128 @@ fn contains_workspace_name(existing_names: &[String], candidate: &str) -> bool {
     existing_names
         .iter()
         .any(|name| name.eq_ignore_ascii_case(candidate))
+}
+
+#[cfg(test)]
+mod archive_tests {
+    use super::*;
+
+    fn setup() -> (Connection, String, String) {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(crate::persistence::schema::SCHEMA)
+            .unwrap();
+        let first = Uuid::new_v4().to_string();
+        let second = Uuid::new_v4().to_string();
+        for (index, id) in [&first, &second].into_iter().enumerate() {
+            connection.execute("INSERT INTO workspaces (id, name, description, sort_order, created_at, updated_at) VALUES (?1, ?2, '备注', ?3, 'before', 'before')", params![id, format!("项目{index}"), index as i64]).unwrap();
+        }
+        let project = Uuid::new_v4().to_string();
+        connection.execute("INSERT INTO projects (id, workspace_id, name, path, platform, terminal_type, created_at, updated_at) VALUES (?1, ?2, 'project', 'C:/project', 'windows', 'windows_terminal', 'before', 'before')", params![project, first]).unwrap();
+        (connection, first, second)
+    }
+
+    #[test]
+    fn archive_round_trip_preserves_project_note_order_and_is_idempotent() {
+        let (mut connection, first, second) = setup();
+        let input = SetWorkspacesArchivedInput {
+            workspace_ids: vec![first.clone(), second.clone()],
+            archived: true,
+        };
+        let archived = set_workspaces_archived(&mut connection, input.clone()).unwrap();
+        assert!(archived.iter().all(|item| item.is_archived));
+        assert_eq!(archived[0].description.as_deref(), Some("备注"));
+        assert_eq!(archived[0].projects.len(), 1);
+        let before = serde_json::to_value(&archived).unwrap();
+        assert_eq!(
+            before,
+            serde_json::to_value(set_workspaces_archived(&mut connection, input).unwrap()).unwrap()
+        );
+        let restored = set_workspaces_archived(
+            &mut connection,
+            SetWorkspacesArchivedInput {
+                workspace_ids: vec![first, second],
+                archived: false,
+            },
+        )
+        .unwrap();
+        assert!(restored.iter().all(|item| !item.is_archived));
+        assert_eq!(restored[0].sort_order, 0);
+        assert_eq!(restored[0].projects.len(), 1);
+    }
+
+    #[test]
+    fn archive_export_import_preserves_state_note_projects_and_pin() {
+        use crate::domain::WorkspaceImportAction;
+        use crate::persistence::{
+            apply_workspace_import_plan, collect_workspace_transfer_workspaces,
+            WorkspaceImportPlanEntry,
+        };
+        let (mut connection, first, _) = setup();
+        set_workspaces_archived(
+            &mut connection,
+            SetWorkspacesArchivedInput {
+                workspace_ids: vec![first.clone()],
+                archived: true,
+            },
+        )
+        .unwrap();
+        let exported = collect_workspace_transfer_workspaces(
+            &connection,
+            &std::collections::HashSet::from([first]),
+        )
+        .unwrap();
+        let mut target = Connection::open_in_memory().unwrap();
+        target
+            .execute_batch(crate::persistence::schema::SCHEMA)
+            .unwrap();
+        let outcome = apply_workspace_import_plan(
+            &mut target,
+            exported
+                .into_iter()
+                .enumerate()
+                .map(|(index, workspace)| WorkspaceImportPlanEntry {
+                    workspace_index: index,
+                    action: WorkspaceImportAction::Create,
+                    workspace,
+                    existing_workspace_id: None,
+                    existing_project_ids: vec![],
+                })
+                .collect(),
+        )
+        .unwrap();
+        let imported = list_workspaces(&target).unwrap();
+        let archived = imported.iter().find(|item| item.is_archived).unwrap();
+        assert_eq!(archived.description.as_deref(), Some("备注"));
+        assert_eq!(archived.projects.len(), 1);
+        assert!(outcome.pinned_workspace_ids_to_add.contains(&archived.id));
+    }
+
+    #[test]
+    fn archive_batch_rolls_back_on_missing_id_and_rejects_invalid_input() {
+        let (mut connection, first, _) = setup();
+        let error = set_workspaces_archived(
+            &mut connection,
+            SetWorkspacesArchivedInput {
+                workspace_ids: vec![first.clone(), Uuid::new_v4().to_string()],
+                archived: true,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "WORKSPACE_NOT_FOUND");
+        assert!(list_workspaces(&connection)
+            .unwrap()
+            .iter()
+            .all(|item| !item.is_archived && item.updated_at == "before"));
+        for ids in [vec![], vec!["bad-id".into()], vec![first.clone(), first]] {
+            assert!(set_workspaces_archived(
+                &mut connection,
+                SetWorkspacesArchivedInput {
+                    workspace_ids: ids,
+                    archived: true
+                }
+            )
+            .is_err());
+        }
+    }
 }

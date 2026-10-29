@@ -222,6 +222,10 @@ export function upsertWorkspace(input: UpsertWorkspacePayload) {
   return invokeCommand<WorkspaceRecord>("upsert_workspace", { input });
 }
 
+export function setWorkspacesArchived(input: { workspaceIds: string[]; archived: boolean }) {
+  return invokeCommand<{ workspaces: WorkspaceRecord[]; warning: string | null }>("set_workspaces_archived", { input });
+}
+
 export function reorderWorkspaces(input: ReorderWorkspacesPayload) {
   return invokeCommand<WorkspaceRecord[]>("reorder_workspaces", { input });
 }

@@ -35,6 +35,7 @@ permissions = [
   "allow-upsert-workspace",
   "allow-update-workspace-description",
   "allow-reorder-workspaces",
+  "allow-set-workspaces-archived",
   "allow-delete-workspace",
   "allow-register-workspace-folder",
   "allow-remove-workspace-registration",

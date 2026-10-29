@@ -54,16 +54,16 @@ export function CodexHistoryMessageBlock({
           {formatRole(message.role)}
         </Tag>
         {message.itemType !== "message" ? (
-          <Tag bordered={false} className="m-0 rounded-[6px] bg-[#f2f4f7] px-2 py-0 text-[#475467]">
+          <Tag bordered={false} className="m-0 rounded-[6px] bg-surface-2 px-2 py-0 text-fg-2">
             {formatItemType(message.itemType)}
           </Tag>
         ) : null}
         {message.truncated ? (
-          <Tag bordered={false} className="m-0 rounded-[6px] bg-[#fff7ed] px-2 py-0 text-[#b54708]">
+          <Tag bordered={false} className="m-0 rounded-[6px] bg-warning-soft px-2 py-0 text-warning">
             已截断
           </Tag>
         ) : null}
-        <Typography.Text className="text-[11px] text-[#98a2b3]">
+        <Typography.Text className="text-[11px] text-fg-3">
           {formatDateTime(message.timestamp)}
         </Typography.Text>
         {defaultCollapsed ? (

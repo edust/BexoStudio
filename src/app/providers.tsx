@@ -14,68 +14,54 @@ import {
 } from "@/lib/command-client";
 import { bootstrapDesktopRuntime } from "@/lib/tauri-runtime";
 import { createAppQueryClient } from "@/queries/query-client";
+import { uiFontFamily, uiPalette } from "@/lib/theme-tokens";
 import { useShellStore } from "@/stores/shell-store";
 
 const RUNTIME_STYLE_NONCE_ELEMENT_ID = "bexo-runtime-style-nonce";
 const runtimeStyleNonce = resolveRuntimeStyleNonce();
 
-const lightAppTheme: ThemeConfig = {
-  algorithm: [theme.defaultAlgorithm, theme.compactAlgorithm],
-  token: {
-    colorPrimary: "#1697c5",
-    colorInfo: "#1697c5",
-    colorSuccess: "#25a56a",
-    colorWarning: "#d99215",
-    colorError: "#cf5a4a",
-    colorBgBase: "#f3f6fb",
-    colorBgContainer: "#ffffff",
-    colorBgElevated: "#ffffff",
-    colorText: "#1f2937",
-    colorTextSecondary: "#667085",
-    colorTextTertiary: "#98a2b3",
-    colorBorder: "#d9e2ec",
-    colorBorderSecondary: "#e6edf5",
-    borderRadius: 10,
-    borderRadiusLG: 14,
-    borderRadiusSM: 8,
-    controlHeight: 34,
-    controlHeightLG: 38,
-    controlHeightSM: 28,
-    fontFamily: `"MiSans","Segoe UI","PingFang SC","Noto Sans SC",sans-serif`,
-    boxShadowSecondary: "0 18px 42px -28px rgba(15, 23, 42, 0.14)",
-    motion: false,
-  },
-};
+function buildAppTheme(mode: "light" | "dark"): ThemeConfig {
+  const palette = uiPalette[mode];
+  return {
+    algorithm: mode === "dark" ? theme.darkAlgorithm : theme.defaultAlgorithm,
+    token: {
+      colorPrimary: palette.primary,
+      colorInfo: palette.primary,
+      colorLink: palette.primary,
+      colorSuccess: palette.success,
+      colorWarning: palette.warning,
+      colorError: palette.danger,
+      colorBgBase: palette.canvas,
+      colorBgLayout: palette.canvas,
+      colorBgContainer: palette.surface,
+      colorBgElevated: palette.surface,
+      colorText: palette.fg,
+      colorTextSecondary: palette.fg2,
+      colorTextTertiary: palette.fg3,
+      colorBorder: palette.lineStrong,
+      colorBorderSecondary: palette.line,
+      fontSize: 13,
+      fontSizeSM: 12,
+      borderRadius: 6,
+      borderRadiusLG: 8,
+      borderRadiusSM: 4,
+      controlHeight: 30,
+      controlHeightLG: 34,
+      controlHeightSM: 24,
+      fontFamily: uiFontFamily,
+      boxShadowSecondary:
+        mode === "dark"
+          ? "0 8px 24px -12px rgba(0, 0, 0, 0.6)"
+          : "0 8px 24px -12px rgba(15, 23, 42, 0.18)",
+      motion: false,
+    },
+  };
+}
+
+const lightAppTheme = buildAppTheme("light");
+const darkAppTheme = buildAppTheme("dark");
 
 let hotkeyHealthWarningShown = false;
-
-const darkAppTheme: ThemeConfig = {
-  algorithm: [theme.darkAlgorithm, theme.compactAlgorithm],
-  token: {
-    colorPrimary: "#007acc",
-    colorInfo: "#007acc",
-    colorSuccess: "#2ea043",
-    colorWarning: "#d29922",
-    colorError: "#f14c4c",
-    colorBgBase: "#1e1e1e",
-    colorBgContainer: "#252526",
-    colorBgElevated: "#2d2d30",
-    colorText: "#cccccc",
-    colorTextSecondary: "#a6a6a6",
-    colorTextTertiary: "#8e8e8e",
-    colorBorder: "#3c3c3c",
-    colorBorderSecondary: "#2f2f2f",
-    borderRadius: 10,
-    borderRadiusLG: 14,
-    borderRadiusSM: 8,
-    controlHeight: 34,
-    controlHeightLG: 38,
-    controlHeightSM: 28,
-    fontFamily: `"MiSans","Segoe UI","PingFang SC","Noto Sans SC",sans-serif`,
-    boxShadowSecondary: "0 12px 28px -20px rgba(0, 0, 0, 0.55)",
-    motion: false,
-  },
-};
 
 export function AppProviders({ children }: PropsWithChildren) {
   const [queryClient] = useState(createAppQueryClient);
@@ -86,21 +72,12 @@ export function AppProviders({ children }: PropsWithChildren) {
     [themeMode],
   );
   const toasterClassNames = useMemo(
-    () =>
-      themeMode === "dark"
-        ? {
-            toast:
-              "border border-[#3c3c3c] bg-[#2d2d30] text-[#cccccc] shadow-[0_12px_28px_-20px_rgba(0,0,0,0.55)]",
-            description: "text-[#a6a6a6]",
-            actionButton: "bg-[#007acc] text-[#ffffff]",
-          }
-        : {
-            toast:
-              "border border-[#d9e2ec] bg-white text-[#1f2937] shadow-[0_18px_42px_-28px_rgba(15,23,42,0.14)]",
-            description: "text-[#667085]",
-            actionButton: "bg-[#1697c5] text-white",
-          },
-    [themeMode],
+    () => ({
+      toast: "border border-line bg-surface text-fg shadow-[0_8px_24px_-12px_rgba(15,23,42,0.25)]",
+      description: "text-fg-2",
+      actionButton: "bg-primary text-white",
+    }),
+    [],
   );
 
   useEffect(() => {
@@ -279,6 +256,7 @@ export function AppProviders({ children }: PropsWithChildren) {
   return (
     <AppErrorBoundary>
       <ConfigProvider
+        button={{ autoInsertSpace: false }}
         componentSize="small"
         csp={runtimeStyleNonce ? { nonce: runtimeStyleNonce } : undefined}
         locale={zhCN}

@@ -1,47 +1,58 @@
-import { Layout } from "antd";
 import { Outlet, useLocation } from "react-router-dom";
 
+import { ResizableWorkspaceSidebar } from "@/components/shell/resizable-workspace-sidebar";
 import { PrimaryRail } from "@/components/shell/primary-rail";
 import { SectionSidebar } from "@/components/shell/section-sidebar";
 import { OssAccountSidebar } from "@/features/oss/oss-account-sidebar";
 import { routeKeyFromPathname, sidebarContentByRoute } from "@/lib/navigation";
 
-const { Content } = Layout;
+// Routes that render their own list pane inside the content area.
+const ROUTES_WITHOUT_SECTION_SIDEBAR = new Set(["history", "codexAuth", "prompts", "settings"]);
+// Routes whose page manages scrolling internally.
+const ROUTES_OWNING_SCROLL = new Set(["history", "codexAuth", "prompts", "oss", "home"]);
 
 export function AppShell() {
   const location = useLocation();
   const routeKey = routeKeyFromPathname(location.pathname);
   const sidebarContent = sidebarContentByRoute[routeKey];
-  const showSectionSidebar =
-    routeKey !== "history" && routeKey !== "codexAuth" && routeKey !== "prompts";
-  const routeOwnsScroll =
-    routeKey === "history" || routeKey === "codexAuth" || routeKey === "prompts" || routeKey === "oss";
+  const showSectionSidebar = !ROUTES_WITHOUT_SECTION_SIDEBAR.has(routeKey);
+
+  let sidebar = null;
+  if (showSectionSidebar) {
+    if (routeKey === "oss") {
+      sidebar = (
+        <div className="h-full min-h-0 w-[280px] shrink-0 border-r border-line">
+          <OssAccountSidebar />
+        </div>
+      );
+    } else if (sidebarContent && routeKey === "home") {
+      sidebar = (
+        <ResizableWorkspaceSidebar>
+          <SectionSidebar content={sidebarContent} />
+        </ResizableWorkspaceSidebar>
+      );
+    } else if (sidebarContent) {
+      sidebar = (
+        <div className="h-full min-h-0 w-[240px] shrink-0 border-r border-line">
+          <SectionSidebar content={sidebarContent} />
+        </div>
+      );
+    }
+  }
 
   return (
-    <div className="h-screen overflow-hidden bg-background p-2">
-      <div
+    <div className="flex h-screen overflow-hidden bg-canvas text-fg">
+      <PrimaryRail />
+      {sidebar}
+      <main
         className={
-          showSectionSidebar
-            ? "grid h-full min-h-0 grid-cols-[52px_320px_minmax(0,1fr)] gap-2"
-            : "grid h-full min-h-0 grid-cols-[52px_minmax(0,1fr)] gap-2"
+          ROUTES_OWNING_SCROLL.has(routeKey)
+            ? "h-full min-h-0 min-w-0 flex-1 overflow-hidden bg-surface"
+            : "h-full min-h-0 min-w-0 flex-1 overflow-y-auto bg-surface"
         }
       >
-        <PrimaryRail />
-        {showSectionSidebar ? (
-          routeKey === "oss" ? <OssAccountSidebar /> : <SectionSidebar content={sidebarContent} />
-        ) : null}
-        <Layout className="bexo-shell-surface h-full min-h-0 overflow-hidden rounded-[16px]">
-          <Content
-            className={
-              routeOwnsScroll
-                ? "h-full min-h-0 overflow-hidden px-0 py-0"
-                : "h-full min-h-0 overflow-y-auto px-0 py-0"
-            }
-          >
-            <Outlet />
-          </Content>
-        </Layout>
-      </div>
+        <Outlet />
+      </main>
     </div>
   );
 }

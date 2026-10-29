@@ -381,7 +381,7 @@ export default function PromptsPage() {
   const pageBusy = busy || promptsQuery.isLoading || transferBusy;
   return (
     <>
-      <div className="grid h-full min-h-0 grid-cols-[320px_minmax(0,1fr)] overflow-hidden bg-panel">
+      <div className="grid h-full min-h-0 grid-cols-[300px_minmax(0,1fr)] overflow-hidden bg-surface">
         <PromptSidebar
           busy={pageBusy}
           desktopRuntimeAvailable={desktopRuntimeAvailable}

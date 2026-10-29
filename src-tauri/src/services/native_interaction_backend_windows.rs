@@ -1,34 +1,32 @@
 use std::{
     mem::{size_of, zeroed},
-    ptr::{copy_nonoverlapping, null},
+    ptr::null,
     sync::{Arc, Mutex, MutexGuard, TryLockError},
     time::Instant,
 };
 
 use windows::core::w;
 use windows_sys::Win32::{
-    Foundation::{GetLastError, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM},
-    Graphics::Gdi::{
-        CombineRgn, CreateCompatibleDC, CreateDIBSection, CreateRectRgn, DeleteDC, DeleteObject,
-        GetDC, ReleaseDC, SelectObject, SetWindowRgn, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO,
-        BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HDC, HGDIOBJ, RGN_DIFF,
-    },
+    Foundation::{GetLastError, HWND, LPARAM, LRESULT, WPARAM},
+    Graphics::Gdi::{CombineRgn, CreateRectRgn, DeleteObject, SetWindowRgn, HGDIOBJ, RGN_DIFF},
     System::LibraryLoader::GetModuleHandleW,
     UI::{
         Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
         WindowsAndMessaging::{
             CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetWindowLongPtrW,
             LoadCursorW, PeekMessageW, RegisterClassExW, SetCursor, SetWindowLongPtrW,
-            SetWindowPos, ShowWindow, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW,
-            CS_VREDRAW, GWLP_USERDATA, HTCLIENT, HTTRANSPARENT, HWND_TOPMOST, IDC_ARROW, IDC_CROSS,
-            IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, MSG,
-            PM_REMOVE, SWP_HIDEWINDOW, SWP_NOACTIVATE, SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA,
-            WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY,
-            WM_NCHITTEST, WM_QUIT, WM_SETCURSOR, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
-            WS_EX_TOPMOST, WS_POPUP,
+            SetWindowPos, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA,
+            HTCLIENT, HTTRANSPARENT, HWND_TOPMOST, IDC_ARROW, IDC_CROSS, IDC_NO, IDC_SIZEALL,
+            IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, MSG, PM_REMOVE, SWP_HIDEWINDOW,
+            SWP_NOACTIVATE, SW_HIDE, SW_SHOWNOACTIVATE, WM_CAPTURECHANGED, WM_ERASEBKGND,
+            WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NCHITTEST,
+            WM_QUIT, WM_SETCURSOR, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
+            WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
         },
     },
 };
+
+use super::native_selection_renderer_windows::{Primitive, SelectionRenderer};
 
 use crate::{
     error::{AppError, AppResult},
@@ -50,7 +48,6 @@ const INITIAL_WINDOW_HEIGHT: i32 = 1;
 const MASK_COLOR: [u8; 4] = [0x28, 0x28, 0x28, 104];
 const BORDER_COLOR: [u8; 4] = [0x8F, 0xD0, 0x00, 0xFF];
 const HANDLE_COLOR: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xF0];
-const SELECTION_HOLE_ALPHA: u8 = 1;
 const RECT_ANNOTATION_FILL_ALPHA: u8 = 28;
 const MIN_SELECTION_SIZE_LOGICAL: f64 = 8.0;
 const HANDLE_SIZE_LOGICAL: f64 = 10.0;
@@ -67,11 +64,13 @@ pub struct NativeInteractionWindowsBackend {
     current_window_height: u32,
     shared_state: Arc<Mutex<InteractionWindowSharedState>>,
     userdata_ptr: usize,
+    renderer: Option<SelectionRenderer>,
 }
 
 pub struct NativeInteractionWindowsBackendStarted {
     pub window_create_ms: u128,
     pub initial_hide_ms: u128,
+    pub owner_thread_id: u32,
 }
 
 pub struct NativeInteractionPrepareResult {
@@ -87,7 +86,7 @@ pub struct NativeInteractionPrepareResult {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct InteractionPresentMetrics {
+pub(super) struct InteractionPresentMetrics {
     copy_ms: u128,
     update_ms: u128,
     total_ms: u128,
@@ -167,9 +166,7 @@ struct InteractionWindowSharedState {
     drag_origin_selection: Option<PhysicalRect>,
     drag_origin_shape: Option<PhysicalShapeAnnotation>,
     drag_started_at: Option<Instant>,
-    pixel_buffer: Vec<u8>,
-    base_mask_buffer: Vec<u8>,
-    layered_surface: Option<LayeredWindowSurface>,
+    render_dirty: bool,
     drag_present_samples: u32,
     drag_present_total_ms: u128,
     drag_present_max_ms: u128,
@@ -203,116 +200,13 @@ impl Default for InteractionWindowSharedState {
             drag_origin_selection: None,
             drag_origin_shape: None,
             drag_started_at: None,
-            pixel_buffer: Vec::new(),
-            base_mask_buffer: Vec::new(),
-            layered_surface: None,
+            render_dirty: false,
             drag_present_samples: 0,
             drag_present_total_ms: 0,
             drag_present_max_ms: 0,
             last_cursor_kind: NativeInteractionCursorKind::Crosshair,
             last_state_event_ms: None,
             event_sink: None,
-        }
-    }
-}
-
-#[derive(Debug)]
-struct LayeredWindowSurface {
-    screen_dc: HDC,
-    mem_dc: HDC,
-    bitmap: HGDIOBJ,
-    previous_bitmap: HGDIOBJ,
-    bitmap_bits: *mut u8,
-    width: u32,
-    height: u32,
-}
-
-impl LayeredWindowSurface {
-    fn create(width: u32, height: u32) -> AppResult<Self> {
-        unsafe {
-            let screen_dc = GetDC(0);
-            if screen_dc == 0 {
-                return Err(last_error(
-                    "NATIVE_INTERACTION_GET_DC_FAILED",
-                    "获取屏幕 DC 失败",
-                ));
-            }
-            let mem_dc = CreateCompatibleDC(screen_dc);
-            if mem_dc == 0 {
-                ReleaseDC(0, screen_dc);
-                return Err(last_error(
-                    "NATIVE_INTERACTION_CREATE_DC_FAILED",
-                    "创建内存 DC 失败",
-                ));
-            }
-
-            let mut bmi: BITMAPINFO = zeroed();
-            bmi.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
-            bmi.bmiHeader.biWidth = width as i32;
-            bmi.bmiHeader.biHeight = -(height as i32);
-            bmi.bmiHeader.biPlanes = 1;
-            bmi.bmiHeader.biBitCount = 32;
-            bmi.bmiHeader.biCompression = BI_RGB;
-
-            let mut dib_bits = null::<core::ffi::c_void>() as *mut core::ffi::c_void;
-            let dib = CreateDIBSection(mem_dc, &bmi, DIB_RGB_COLORS, &mut dib_bits, 0, 0);
-            if dib == 0 {
-                DeleteDC(mem_dc);
-                ReleaseDC(0, screen_dc);
-                return Err(last_error(
-                    "NATIVE_INTERACTION_CREATE_DIB_FAILED",
-                    "创建 DIBSection 失败",
-                ));
-            }
-
-            let previous = SelectObject(mem_dc, dib as HGDIOBJ);
-            if previous == 0 {
-                DeleteObject(dib as HGDIOBJ);
-                DeleteDC(mem_dc);
-                ReleaseDC(0, screen_dc);
-                return Err(last_error(
-                    "NATIVE_INTERACTION_SELECT_BITMAP_FAILED",
-                    "选择 DIBSection 到内存 DC 失败",
-                ));
-            }
-
-            Ok(Self {
-                screen_dc,
-                mem_dc,
-                bitmap: dib as HGDIOBJ,
-                previous_bitmap: previous,
-                bitmap_bits: dib_bits as *mut u8,
-                width,
-                height,
-            })
-        }
-    }
-
-    fn matches_size(&self, width: u32, height: u32) -> bool {
-        self.width == width && self.height == height
-    }
-}
-
-impl Drop for LayeredWindowSurface {
-    fn drop(&mut self) {
-        unsafe {
-            if self.mem_dc != 0 {
-                if self.previous_bitmap != 0 {
-                    SelectObject(self.mem_dc, self.previous_bitmap);
-                    self.previous_bitmap = 0;
-                }
-                if self.bitmap != 0 {
-                    DeleteObject(self.bitmap);
-                    self.bitmap = 0;
-                }
-                DeleteDC(self.mem_dc);
-                self.mem_dc = 0;
-            }
-            if self.screen_dc != 0 {
-                ReleaseDC(0, self.screen_dc);
-                self.screen_dc = 0;
-            }
-            self.bitmap_bits = std::ptr::null_mut();
         }
     }
 }
@@ -355,17 +249,22 @@ pub fn initialize() -> AppResult<(
             current_window_height: INITIAL_WINDOW_HEIGHT as u32,
             shared_state,
             userdata_ptr,
+            renderer: None,
         },
         NativeInteractionWindowsBackendStarted {
             window_create_ms,
             initial_hide_ms,
+            owner_thread_id: unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() },
         },
     ))
 }
 
 pub fn pump_messages() -> bool {
     let mut message = unsafe { zeroed::<MSG>() };
-    while unsafe { PeekMessageW(&mut message, 0, 0, 0, PM_REMOVE) } != 0 {
+    for _ in 0..256 {
+        if unsafe { PeekMessageW(&mut message, 0, 0, 0, PM_REMOVE) } == 0 {
+            break;
+        }
         if message.message == WM_QUIT {
             return false;
         }
@@ -440,10 +339,10 @@ impl NativeInteractionWindowsBackend {
             shared.drag_present_max_ms = 0;
             shared.last_cursor_kind = NativeInteractionCursorKind::Crosshair;
             shared.last_state_event_ms = None;
-            ensure_pixel_buffer(&mut shared, window_width, window_height)?;
+            shared.render_dirty = true;
             sync_window_input_region(self.hwnd, &shared)?;
         }
-        let present_metrics = present_interaction_surface(self.hwnd, &self.shared_state)?;
+        let present_metrics = self.present_pending()?;
         let present_ms = present_metrics.total_ms;
 
         Ok(NativeInteractionPrepareResult {
@@ -460,16 +359,15 @@ impl NativeInteractionWindowsBackend {
     }
 
     pub fn show(&mut self) -> AppResult<()> {
+        resize_window(
+            self.hwnd,
+            self.current_window_x,
+            self.current_window_y,
+            self.current_window_width,
+            self.current_window_height,
+            true,
+        )?;
         unsafe {
-            SetWindowPos(
-                self.hwnd,
-                HWND_TOPMOST,
-                self.current_window_x,
-                self.current_window_y,
-                self.current_window_width as i32,
-                self.current_window_height as i32,
-                SWP_NOACTIVATE,
-            );
             ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
         }
         self.visible = true;
@@ -485,7 +383,8 @@ impl NativeInteractionWindowsBackend {
             ShowWindow(self.hwnd, SW_HIDE);
         }
         self.visible = false;
-        if let Ok(mut shared) = self.lock_state() {
+        {
+            let mut shared = self.lock_state()?;
             shared.rect_annotation_draft_physical = None;
             shared.line_annotation_draft_physical = None;
             shared.arrow_annotation_draft_physical = None;
@@ -497,6 +396,7 @@ impl NativeInteractionWindowsBackend {
             shared.drag_started_at = None;
             shared.hovered_hit_region = NativeInteractionHitRegion::None;
             shared.last_cursor_kind = NativeInteractionCursorKind::Crosshair;
+            shared.render_dirty = false;
         }
         Ok(())
     }
@@ -525,6 +425,8 @@ impl NativeInteractionWindowsBackend {
         shared.drag_present_total_ms = 0;
         shared.drag_present_max_ms = 0;
         shared.last_cursor_kind = NativeInteractionCursorKind::Crosshair;
+        shared.render_dirty = false;
+        shared.session = None;
         Ok(())
     }
 
@@ -547,7 +449,8 @@ impl NativeInteractionWindowsBackend {
             .collect();
         sync_window_input_region(self.hwnd, &shared)?;
         drop(shared);
-        let _ = present_interaction_surface(self.hwnd, &self.shared_state)?;
+        self.mark_dirty()?;
+        self.present_pending()?;
         Ok(())
     }
 
@@ -556,6 +459,9 @@ impl NativeInteractionWindowsBackend {
         let Some(session) = shared.session.clone() else {
             return Ok(());
         };
+        if shared.drag_mode.is_some() {
+            return Ok(());
+        }
         shared.interaction_mode = input.mode;
         if let Some(selection) = input
             .selection
@@ -635,8 +541,89 @@ impl NativeInteractionWindowsBackend {
             shared.active_shape_revision = shared.active_shape_revision.saturating_add(1);
         }
         drop(shared);
-        let _ = present_interaction_surface(self.hwnd, &self.shared_state)?;
+        self.mark_dirty()?;
+        self.present_pending()?;
         Ok(())
+    }
+
+    fn mark_dirty(&self) -> AppResult<()> {
+        self.lock_state()?.render_dirty = true;
+        Ok(())
+    }
+
+    pub(super) fn present_pending(&mut self) -> AppResult<InteractionPresentMetrics> {
+        let started = Instant::now();
+        let (session, primitives, dragging) = {
+            let mut state = self.lock_state()?;
+            let Some(session) = state.session.clone().filter(|_| state.render_dirty) else {
+                return Ok(InteractionPresentMetrics {
+                    copy_ms: 0,
+                    update_ms: 0,
+                    total_ms: 0,
+                    surface_recreated: false,
+                });
+            };
+            state.render_dirty = false;
+            (
+                session.clone(),
+                build_primitives(&state, &session),
+                state.drag_mode.is_some(),
+            )
+        }; // Never hold the input mutex during Win32/GPU work.
+        if self.renderer.is_none() {
+            self.renderer = Some(SelectionRenderer::new(self.hwnd)?);
+        }
+        let result = self
+            .renderer
+            .as_mut()
+            .expect("renderer initialized")
+            .render(session.physical_width, session.physical_height, &primitives);
+        let recreated = match result {
+            Ok(value) => value,
+            Err(error) => {
+                self.mark_dirty()?;
+                return Err(error);
+            }
+        };
+        let elapsed = started.elapsed().as_millis();
+        if dragging {
+            let mut state = self.lock_state()?;
+            state.drag_present_samples = state.drag_present_samples.saturating_add(1);
+            state.drag_present_total_ms += elapsed;
+            state.drag_present_max_ms = state.drag_present_max_ms.max(elapsed);
+        }
+        Ok(InteractionPresentMetrics {
+            copy_ms: 0,
+            update_ms: elapsed,
+            total_ms: elapsed,
+            surface_recreated: recreated,
+        })
+    }
+
+    pub fn report_render_failure(&mut self, error: &AppError) {
+        log::error!(target: "bexo::service::native_interaction", "native_interaction_render_failed reason={}", error);
+        let event = match self.lock_state() {
+            Ok(mut state) => {
+                state.render_dirty = false;
+                build_state_updated_event_from_shared(&state).map(|mut event| {
+                    event.lifecycle_state = "failed".to_string();
+                    (
+                        state.event_sink.clone(),
+                        NativeInteractionBackendEvent::StateUpdated(event),
+                    )
+                })
+            }
+            Err(state_error) => {
+                log::error!(target: "bexo::service::native_interaction", "native_interaction_failure_event_unavailable reason={}", state_error);
+                None
+            }
+        };
+        if let Err(hide_error) = self.hide() {
+            log::error!(target: "bexo::service::native_interaction", "native_interaction_hide_failed reason={}", hide_error);
+        }
+        if let Some((sink, event)) = event {
+            emit_backend_event(sink, event);
+        }
     }
 
     fn lock_state(&self) -> AppResult<std::sync::MutexGuard<'_, InteractionWindowSharedState>> {
@@ -651,6 +638,7 @@ impl NativeInteractionWindowsBackend {
 
 impl Drop for NativeInteractionWindowsBackend {
     fn drop(&mut self) {
+        self.renderer.take();
         unsafe {
             if self.hwnd != 0 {
                 ShowWindow(self.hwnd, SW_HIDE);
@@ -728,27 +716,64 @@ unsafe extern "system" fn native_interaction_window_proc(
         WM_MOUSEMOVE => {
             let (x, y) = mouse_point_from_lparam(l_param);
             if let Some(shared) = shared_state_from_hwnd(hwnd) {
-                let _ = handle_mouse_move(hwnd, shared, x, y);
+                if let Err(error) = handle_mouse_move(hwnd, shared, x, y) {
+                    log::error!(target: "bexo::service::native_interaction", "native_interaction_mouse_move_failed reason={}", error);
+                }
             }
             0
         }
         WM_LBUTTONDOWN => {
             let (x, y) = mouse_point_from_lparam(l_param);
             if let Some(shared) = shared_state_from_hwnd(hwnd) {
-                let _ = handle_left_button_down(hwnd, shared, x, y);
+                if let Err(error) = handle_left_button_down(hwnd, shared, x, y) {
+                    log::error!(target: "bexo::service::native_interaction", "native_interaction_button_down_failed reason={}", error);
+                }
             }
             0
         }
         WM_LBUTTONUP => {
             let (x, y) = mouse_point_from_lparam(l_param);
             if let Some(shared) = shared_state_from_hwnd(hwnd) {
-                let _ = handle_left_button_up(hwnd, shared, x, y);
+                if let Err(error) = handle_left_button_up(hwnd, shared, x, y) {
+                    log::error!(target: "bexo::service::native_interaction", "native_interaction_button_up_failed reason={}", error);
+                }
             }
             0
         }
         WM_NCDESTROY => {
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             DefWindowProcW(hwnd, message, w_param, l_param)
+        }
+        WM_CAPTURECHANGED => {
+            if let Some(shared) = shared_state_from_hwnd(hwnd) {
+                let state = match try_lock_shared_state(shared) {
+                    Ok(state) => state,
+                    Err(error) => {
+                        log::error!(target: "bexo::service::native_interaction", "native_interaction_capture_changed_failed reason={}", error);
+                        return 0;
+                    }
+                };
+                if let Some(mut state) = state {
+                    if state.drag_mode.take().is_some() {
+                        state.drag_origin_point = None;
+                        state.drag_origin_selection = None;
+                        state.drag_origin_shape = None;
+                        state.drag_started_at = None;
+                        state.rect_annotation_draft_physical = None;
+                        state.line_annotation_draft_physical = None;
+                        state.arrow_annotation_draft_physical = None;
+                        state.active_shape_draft_physical = None;
+                        state.render_dirty = true;
+                        let sink = state.event_sink.clone();
+                        let event = emit_state_updated_from_shared(&mut state, true);
+                        drop(state);
+                        if let Some(event) = event {
+                            emit_backend_event(sink, event);
+                        }
+                    }
+                }
+            }
+            0
         }
         _ => DefWindowProcW(hwnd, message, w_param, l_param),
     }
@@ -946,6 +971,7 @@ fn handle_left_button_down(
     state.drag_present_max_ms = 0;
     apply_cursor_for_shared_state(&mut state);
     sync_window_input_region(hwnd, &state)?;
+    state.render_dirty = true;
     let snapshot = snapshot_from_shared(&state);
     let event_sink = state.event_sink.clone();
     let throttled_event = emit_state_updated_from_shared(&mut state, true);
@@ -955,7 +981,6 @@ fn handle_left_button_down(
     unsafe {
         SetCapture(hwnd);
     }
-    let _ = try_present_interaction_surface(hwnd, shared, "wm_lbuttondown")?;
     if let Some(event) = throttled_event {
         emit_backend_event(event_sink, event);
     }
@@ -974,7 +999,7 @@ fn handle_left_button_down(
 }
 
 fn handle_mouse_move(
-    hwnd: HWND,
+    _hwnd: HWND,
     shared: &Arc<Mutex<InteractionWindowSharedState>>,
     x: i32,
     y: i32,
@@ -1174,6 +1199,7 @@ fn handle_mouse_move(
     }
 
     apply_cursor_for_shared_state(&mut state);
+    state.render_dirty |= state_changed;
     let snapshot = state_changed.then(|| snapshot_from_shared(&state));
     let event_sink = state.event_sink.clone();
     let throttled_event = if state_changed {
@@ -1185,7 +1211,6 @@ fn handle_mouse_move(
     drop(state);
 
     if state_changed {
-        let _ = try_present_interaction_surface(hwnd, shared, "wm_mousemove")?;
         if let Some(event) = throttled_event {
             emit_backend_event(event_sink, event);
         }
@@ -1211,6 +1236,8 @@ fn handle_left_button_up(
     x: i32,
     y: i32,
 ) -> AppResult<()> {
+    // Mouse-up can carry a newer point than the last WM_MOUSEMOVE.
+    handle_mouse_move(hwnd, shared, x, y)?;
     let mut state = match try_lock_shared_state(shared)? {
         Some(state) => state,
         None => {
@@ -1413,6 +1440,7 @@ fn handle_left_button_up(
     }
     apply_cursor_for_shared_state(&mut state);
     sync_window_input_region(hwnd, &state)?;
+    state.render_dirty = true;
     let snapshot = snapshot_from_shared(&state);
     let state_event = emit_state_updated_from_shared(&mut state, true);
     let session_id = session.session_id.clone();
@@ -1421,7 +1449,6 @@ fn handle_left_button_up(
     unsafe {
         ReleaseCapture();
     }
-    let _ = try_present_interaction_surface(hwnd, shared, "wm_lbuttonup")?;
     if let Some(event) = state_event {
         emit_backend_event(event_sink.clone(), event);
     }
@@ -1444,391 +1471,177 @@ fn handle_left_button_up(
     Ok(())
 }
 
-fn present_interaction_surface(
-    hwnd: HWND,
-    shared: &Arc<Mutex<InteractionWindowSharedState>>,
-) -> AppResult<InteractionPresentMetrics> {
-    let started_at = Instant::now();
-    let mut state = shared.lock().map_err(|_| {
-        AppError::new(
-            "NATIVE_INTERACTION_STATE_LOCK_FAILED",
-            "读取 Native Interaction 共享状态失败",
-        )
-    })?;
-    present_interaction_surface_locked(hwnd, &mut state, started_at)
-}
-
-fn try_present_interaction_surface(
-    hwnd: HWND,
-    shared: &Arc<Mutex<InteractionWindowSharedState>>,
-    trigger: &'static str,
-) -> AppResult<Option<InteractionPresentMetrics>> {
-    let started_at = Instant::now();
-    let mut state = match try_lock_shared_state(shared)? {
-        Some(state) => state,
-        None => {
-            log::debug!(
-                target: "bexo::service::native_interaction",
-                "native_interaction_present_skipped reason=state_lock_contended trigger={}",
-                trigger
-            );
-            return Ok(None);
-        }
-    };
-    Ok(Some(present_interaction_surface_locked(
-        hwnd, &mut state, started_at,
-    )?))
-}
-
-fn present_interaction_surface_locked(
-    hwnd: HWND,
-    state: &mut InteractionWindowSharedState,
-    started_at: Instant,
-) -> AppResult<InteractionPresentMetrics> {
-    let Some(session) = state.session.clone() else {
-        return Ok(InteractionPresentMetrics {
-            copy_ms: 0,
-            update_ms: 0,
-            total_ms: 0,
-            surface_recreated: false,
-        });
-    };
-    ensure_pixel_buffer(state, session.physical_width, session.physical_height)?;
-    let surface_recreated =
-        ensure_layered_surface(state, session.physical_width, session.physical_height)?;
-    render_selection_overlay(state, &session);
-    let pixel_buffer_ptr = state.pixel_buffer.as_ptr();
-    let pixel_buffer_len = state.pixel_buffer.len();
-    let pixel_buffer = unsafe { std::slice::from_raw_parts(pixel_buffer_ptr, pixel_buffer_len) };
-    let metrics = update_layered_window_surface(
-        hwnd,
-        session.physical_x,
-        session.physical_y,
-        session.physical_width,
-        session.physical_height,
-        pixel_buffer,
-        state.layered_surface.as_mut().ok_or_else(|| {
-            AppError::new(
-                "NATIVE_INTERACTION_SURFACE_UNAVAILABLE",
-                "Native Interaction GDI surface 不可用",
-            )
-        })?,
-    )?;
-    if state.drag_mode.is_some() {
-        state.drag_present_samples = state.drag_present_samples.saturating_add(1);
-        state.drag_present_total_ms = state.drag_present_total_ms.saturating_add(metrics.total_ms);
-        state.drag_present_max_ms = state.drag_present_max_ms.max(metrics.total_ms);
-    }
-    Ok(InteractionPresentMetrics {
-        copy_ms: metrics.copy_ms,
-        update_ms: metrics.update_ms,
-        total_ms: started_at.elapsed().as_millis(),
-        surface_recreated,
-    })
-}
-
-fn render_selection_overlay(
-    state: &mut InteractionWindowSharedState,
+fn build_primitives(
+    state: &InteractionWindowSharedState,
     session: &InteractionWindowSession,
-) {
-    let width = usize::try_from(session.physical_width).unwrap_or(0);
-    let height = usize::try_from(session.physical_height).unwrap_or(0);
-    state.pixel_buffer.copy_from_slice(&state.base_mask_buffer);
-
+) -> Vec<Primitive> {
+    let mut result = Vec::with_capacity(32);
+    let width = session.physical_width as f32;
+    let height = session.physical_height as f32;
     if let Some(selection) = state.selection_physical {
-        let left = selection.x.max(0.0).floor() as i32;
-        let top = selection.y.max(0.0).floor() as i32;
-        let right = (selection.x + selection.width)
-            .min(f64::from(session.physical_width))
-            .ceil() as i32;
-        let bottom = (selection.y + selection.height)
-            .min(f64::from(session.physical_height))
-            .ceil() as i32;
-
-        for row in top.max(0) as usize..bottom.max(0) as usize {
-            if row >= height {
-                break;
-            }
-            let row_start = row * width * 4;
-            for column in left.max(0) as usize..right.max(0) as usize {
-                if column >= width {
-                    break;
-                }
-                let offset = row_start + column * 4;
-                state.pixel_buffer[offset] = 0;
-                state.pixel_buffer[offset + 1] = 0;
-                state.pixel_buffer[offset + 2] = 0;
-                state.pixel_buffer[offset + 3] = SELECTION_HOLE_ALPHA;
-            }
+        let [left, top, right, bottom] = rect_bounds(selection);
+        // Four rectangles replace a full-screen pixel copy and per-pixel hole clearing.
+        for bounds in [
+            [0.0, 0.0, width, top],
+            [0.0, bottom, width, height],
+            [0.0, top, left, bottom],
+            [right, top, width, bottom],
+        ] {
+            result.push(Primitive::Fill(bounds, MASK_COLOR));
         }
-
-        let border = logical_to_physical(BORDER_THICKNESS_LOGICAL, session.scale_factor).max(1);
-        fill_rect(
-            &mut state.pixel_buffer,
-            width,
-            height,
-            left,
-            top,
-            (right - left).max(1),
-            border,
+        result.push(Primitive::Rect(
+            [left, top, right, bottom],
+            logical_to_physical(BORDER_THICKNESS_LOGICAL, session.scale_factor).max(1) as f32,
             BORDER_COLOR,
-        );
-        fill_rect(
-            &mut state.pixel_buffer,
-            width,
-            height,
-            left,
-            (bottom - border).max(top),
-            (right - left).max(1),
-            border,
-            BORDER_COLOR,
-        );
-        fill_rect(
-            &mut state.pixel_buffer,
-            width,
-            height,
-            left,
-            top,
-            border,
-            (bottom - top).max(1),
-            BORDER_COLOR,
-        );
-        fill_rect(
-            &mut state.pixel_buffer,
-            width,
-            height,
-            (right - border).max(left),
-            top,
-            border,
-            (bottom - top).max(1),
-            BORDER_COLOR,
-        );
-
-        for handle_rect in handle_rects(selection, session.scale_factor) {
-            fill_rect(
-                &mut state.pixel_buffer,
-                width,
-                height,
-                handle_rect.x.floor() as i32,
-                handle_rect.y.floor() as i32,
-                handle_rect.width.ceil() as i32,
-                handle_rect.height.ceil() as i32,
-                HANDLE_COLOR,
-            );
-        }
+        ));
+        append_handles(&mut result, selection, session.scale_factor);
+    } else {
+        result.push(Primitive::Fill([0.0, 0.0, width, height], MASK_COLOR));
     }
-
-    if let Some(active_shape) = current_active_shape(state).cloned() {
-        draw_shape_annotation(&mut state.pixel_buffer, width, height, &active_shape);
-        draw_shape_annotation_handles(
-            &mut state.pixel_buffer,
-            width,
-            height,
-            &active_shape,
-            session.scale_factor,
+    if let Some(shape) = current_active_shape(state) {
+        append_shape(
+            &mut result,
+            shape.kind,
+            rect_bounds(bounds_from_shape(shape)),
+            [
+                shape.start_x as f32,
+                shape.start_y as f32,
+                shape.end_x as f32,
+                shape.end_y as f32,
+            ],
+            shape.stroke_width_physical as f32,
+            shape.color,
         );
-    }
-
-    if let Some(rect_draft) = state.rect_annotation_draft_physical {
-        let fill_color = [
-            state.rect_annotation_color[0],
-            state.rect_annotation_color[1],
-            state.rect_annotation_color[2],
-            RECT_ANNOTATION_FILL_ALPHA,
-        ];
         if matches!(
-            state.interaction_mode,
-            NativeInteractionMode::EllipseAnnotation
+            shape.kind,
+            NativeInteractionShapeAnnotationKind::Line
+                | NativeInteractionShapeAnnotationKind::Arrow
         ) {
-            fill_ellipse(
-                &mut state.pixel_buffer,
-                width,
-                height,
-                rect_draft,
-                fill_color,
-            );
-            stroke_ellipse(
-                &mut state.pixel_buffer,
-                width,
-                height,
-                rect_draft,
-                state.rect_annotation_stroke_width_physical.max(1),
-                state.rect_annotation_color,
-            );
+            let size = logical_to_physical(HANDLE_SIZE_LOGICAL, session.scale_factor).max(6) as f32;
+            for (x, y) in [
+                (shape.start_x as f32, shape.start_y as f32),
+                (shape.end_x as f32, shape.end_y as f32),
+            ] {
+                result.push(Primitive::Fill(
+                    [
+                        x - size / 2.0,
+                        y - size / 2.0,
+                        x + size / 2.0,
+                        y + size / 2.0,
+                    ],
+                    HANDLE_COLOR,
+                ));
+            }
         } else {
-            fill_rect(
-                &mut state.pixel_buffer,
-                width,
-                height,
-                rect_draft.x.floor() as i32,
-                rect_draft.y.floor() as i32,
-                rect_draft.width.ceil() as i32,
-                rect_draft.height.ceil() as i32,
-                fill_color,
-            );
-            let border = state.rect_annotation_stroke_width_physical.max(1);
-            let left = rect_draft.x.floor() as i32;
-            let top = rect_draft.y.floor() as i32;
-            let right = (rect_draft.x + rect_draft.width).ceil() as i32;
-            let bottom = (rect_draft.y + rect_draft.height).ceil() as i32;
-            fill_rect(
-                &mut state.pixel_buffer,
-                width,
-                height,
-                left,
-                top,
-                (right - left).max(1),
-                border,
-                state.rect_annotation_color,
-            );
-            fill_rect(
-                &mut state.pixel_buffer,
-                width,
-                height,
-                left,
-                (bottom - border).max(top),
-                (right - left).max(1),
-                border,
-                state.rect_annotation_color,
-            );
-            fill_rect(
-                &mut state.pixel_buffer,
-                width,
-                height,
-                left,
-                top,
-                border,
-                (bottom - top).max(1),
-                state.rect_annotation_color,
-            );
-            fill_rect(
-                &mut state.pixel_buffer,
-                width,
-                height,
-                (right - border).max(left),
-                top,
-                border,
-                (bottom - top).max(1),
-                state.rect_annotation_color,
+            append_handles(&mut result, bounds_from_shape(shape), session.scale_factor);
+        }
+    }
+    let color = state.rect_annotation_color;
+    let stroke = state.rect_annotation_stroke_width_physical.max(1) as f32;
+    if let Some(rect) = state.rect_annotation_draft_physical {
+        append_shape(
+            &mut result,
+            if state.interaction_mode == NativeInteractionMode::EllipseAnnotation {
+                NativeInteractionShapeAnnotationKind::Ellipse
+            } else {
+                NativeInteractionShapeAnnotationKind::Rect
+            },
+            rect_bounds(rect),
+            [0.0; 4],
+            stroke,
+            color,
+        );
+    }
+    for (draft, kind) in [
+        (
+            state.line_annotation_draft_physical,
+            NativeInteractionShapeAnnotationKind::Line,
+        ),
+        (
+            state.arrow_annotation_draft_physical,
+            NativeInteractionShapeAnnotationKind::Arrow,
+        ),
+    ] {
+        if let Some(draft) = draft {
+            append_shape(
+                &mut result,
+                kind,
+                [0.0; 4],
+                [
+                    draft.start_x as f32,
+                    draft.start_y as f32,
+                    draft.end_x as f32,
+                    draft.end_y as f32,
+                ],
+                stroke,
+                color,
             );
         }
     }
+    result
+}
 
-    if let Some(arrow_draft) = state.arrow_annotation_draft_physical {
-        draw_arrow(
-            &mut state.pixel_buffer,
-            width,
-            height,
-            arrow_draft,
-            state.rect_annotation_stroke_width_physical.max(1),
-            state.rect_annotation_color,
-        );
-    }
+fn rect_bounds(rect: PhysicalRect) -> [f32; 4] {
+    [
+        rect.x as f32,
+        rect.y as f32,
+        (rect.x + rect.width) as f32,
+        (rect.y + rect.height) as f32,
+    ]
+}
 
-    if let Some(line_draft) = state.line_annotation_draft_physical {
-        draw_line_segment(
-            &mut state.pixel_buffer,
-            width,
-            height,
-            line_draft.start_x,
-            line_draft.start_y,
-            line_draft.end_x,
-            line_draft.end_y,
-            state.rect_annotation_stroke_width_physical.max(1),
-            state.rect_annotation_color,
-        );
-    }
-
-    for exclusion in &state.exclusion_rects_physical {
-        clear_rect_transparent(
-            &mut state.pixel_buffer,
-            width,
-            height,
-            exclusion.x.floor() as i32,
-            exclusion.y.floor() as i32,
-            exclusion.width.ceil() as i32,
-            exclusion.height.ceil() as i32,
-        );
+fn append_handles(result: &mut Vec<Primitive>, rect: PhysicalRect, scale: f32) {
+    for handle in handle_rects(rect, scale) {
+        result.push(Primitive::Fill(rect_bounds(handle), HANDLE_COLOR));
     }
 }
 
-fn update_layered_window_surface(
-    hwnd: HWND,
-    window_x: i32,
-    window_y: i32,
-    window_width: u32,
-    window_height: u32,
-    buffer: &[u8],
-    surface: &mut LayeredWindowSurface,
-) -> AppResult<InteractionPresentMetrics> {
-    let expected_len = usize::try_from(window_width)
-        .ok()
-        .and_then(|value| value.checked_mul(usize::try_from(window_height).ok()?))
-        .and_then(|value| value.checked_mul(4))
-        .ok_or_else(|| {
-            AppError::new(
-                "NATIVE_INTERACTION_BUFFER_INVALID",
-                "Native Interaction 缓冲区尺寸溢出",
-            )
-        })?;
-    if buffer.len() != expected_len {
-        return Err(AppError::new(
-            "NATIVE_INTERACTION_BUFFER_INVALID",
-            "Native Interaction 缓冲区尺寸不匹配",
-        )
-        .with_detail("expected", expected_len.to_string())
-        .with_detail("actual", buffer.len().to_string()));
-    }
-
-    let copy_started_at = Instant::now();
-    unsafe {
-        copy_nonoverlapping(buffer.as_ptr(), surface.bitmap_bits, buffer.len());
-    }
-    let copy_ms = copy_started_at.elapsed().as_millis();
-
-    let update_started_at = Instant::now();
-    unsafe {
-        let dst_point = POINT {
-            x: window_x,
-            y: window_y,
-        };
-        let size = SIZE {
-            cx: window_width as i32,
-            cy: window_height as i32,
-        };
-        let src_point = POINT { x: 0, y: 0 };
-        let blend = BLENDFUNCTION {
-            BlendOp: AC_SRC_OVER as u8,
-            BlendFlags: 0,
-            SourceConstantAlpha: 255,
-            AlphaFormat: AC_SRC_ALPHA as u8,
-        };
-
-        let updated = UpdateLayeredWindow(
-            hwnd,
-            surface.screen_dc,
-            &dst_point,
-            &size,
-            surface.mem_dc,
-            &src_point,
-            0,
-            &blend,
-            ULW_ALPHA,
-        );
-        if updated == 0 {
-            return Err(last_error(
-                "NATIVE_INTERACTION_UPDATE_LAYERED_WINDOW_FAILED",
-                "更新 Native Interaction Layered Window 失败",
-            ));
+fn append_shape(
+    result: &mut Vec<Primitive>,
+    kind: NativeInteractionShapeAnnotationKind,
+    bounds: [f32; 4],
+    points: [f32; 4],
+    stroke: f32,
+    color: [u8; 4],
+) {
+    let fill = [color[0], color[1], color[2], RECT_ANNOTATION_FILL_ALPHA];
+    match kind {
+        NativeInteractionShapeAnnotationKind::Rect => {
+            result.push(Primitive::Fill(bounds, fill));
+            result.push(Primitive::Rect(bounds, stroke, color));
+        }
+        NativeInteractionShapeAnnotationKind::Ellipse => {
+            result.push(Primitive::Ellipse(bounds, None, fill));
+            result.push(Primitive::Ellipse(bounds, Some(stroke), color));
+        }
+        NativeInteractionShapeAnnotationKind::Line
+        | NativeInteractionShapeAnnotationKind::Arrow => {
+            result.push(Primitive::Line(points, stroke, color));
+            if kind == NativeInteractionShapeAnnotationKind::Arrow {
+                let dx = points[2] - points[0];
+                let dy = points[3] - points[1];
+                let length = (dx * dx + dy * dy).sqrt();
+                if length >= 2.0 {
+                    let head = (stroke * ARROW_HEAD_LENGTH_MULTIPLIER as f32)
+                        .max(10.0)
+                        .min(length);
+                    let angle = dy.atan2(dx) + std::f32::consts::PI;
+                    for wing in [-std::f32::consts::PI / 7.0, std::f32::consts::PI / 7.0] {
+                        result.push(Primitive::Line(
+                            [
+                                points[2],
+                                points[3],
+                                points[2] + (angle + wing).cos() * head,
+                                points[3] + (angle + wing).sin() * head,
+                            ],
+                            stroke,
+                            color,
+                        ));
+                    }
+                }
+            }
         }
     }
-
-    Ok(InteractionPresentMetrics {
-        copy_ms,
-        update_ms: update_started_at.elapsed().as_millis(),
-        total_ms: copy_started_at.elapsed().as_millis(),
-        surface_recreated: false,
-    })
 }
 
 fn create_native_interaction_window() -> AppResult<HWND> {
@@ -1865,7 +1678,7 @@ fn create_native_interaction_window() -> AppResult<HWND> {
 
     let hwnd = unsafe {
         CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+            WS_EX_NOREDIRECTIONBITMAP | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
             WINDOW_CLASS_NAME.as_ptr(),
             WINDOW_TITLE.as_ptr(),
             WS_POPUP,
@@ -1929,55 +1742,6 @@ fn resize_window(
         ));
     }
     Ok(())
-}
-
-fn ensure_pixel_buffer(
-    state: &mut InteractionWindowSharedState,
-    width: u32,
-    height: u32,
-) -> AppResult<()> {
-    let expected = usize::try_from(width)
-        .ok()
-        .and_then(|value| value.checked_mul(usize::try_from(height).ok()?))
-        .and_then(|value| value.checked_mul(4))
-        .ok_or_else(|| {
-            AppError::new(
-                "NATIVE_INTERACTION_BUFFER_INVALID",
-                "Native Interaction 缓冲区尺寸溢出",
-            )
-        })?;
-    if state.pixel_buffer.len() != expected {
-        state.pixel_buffer = vec![0; expected];
-    }
-    if state.base_mask_buffer.len() != expected {
-        state.base_mask_buffer = build_base_mask_buffer(expected);
-    }
-    Ok(())
-}
-
-fn build_base_mask_buffer(expected: usize) -> Vec<u8> {
-    let mut buffer = vec![0; expected];
-    for pixel in buffer.chunks_exact_mut(4) {
-        pixel.copy_from_slice(&MASK_COLOR);
-    }
-    buffer
-}
-
-fn ensure_layered_surface(
-    state: &mut InteractionWindowSharedState,
-    width: u32,
-    height: u32,
-) -> AppResult<bool> {
-    let needs_recreate = match state.layered_surface.as_ref() {
-        Some(surface) => !surface.matches_size(width, height),
-        None => true,
-    };
-    if !needs_recreate {
-        return Ok(false);
-    }
-
-    state.layered_surface = Some(LayeredWindowSurface::create(width, height)?);
-    Ok(true)
 }
 
 fn snapshot_from_shared(
@@ -3029,414 +2793,6 @@ fn resolve_interaction_input_bounds(
     })
 }
 
-fn fill_rect(
-    buffer: &mut [u8],
-    width: usize,
-    height: usize,
-    left: i32,
-    top: i32,
-    rect_width: i32,
-    rect_height: i32,
-    color: [u8; 4],
-) {
-    let left = left.max(0) as usize;
-    let top = top.max(0) as usize;
-    let right = (left + usize::try_from(rect_width.max(0)).unwrap_or(0)).min(width);
-    let bottom = (top + usize::try_from(rect_height.max(0)).unwrap_or(0)).min(height);
-    for row in top..bottom {
-        let row_start = row * width * 4;
-        for column in left..right {
-            let offset = row_start + column * 4;
-            buffer[offset..offset + 4].copy_from_slice(&color);
-        }
-    }
-}
-
-fn clear_rect_transparent(
-    buffer: &mut [u8],
-    width: usize,
-    height: usize,
-    left: i32,
-    top: i32,
-    rect_width: i32,
-    rect_height: i32,
-) {
-    let left = left.max(0) as usize;
-    let top = top.max(0) as usize;
-    let right = (left + usize::try_from(rect_width.max(0)).unwrap_or(0)).min(width);
-    let bottom = (top + usize::try_from(rect_height.max(0)).unwrap_or(0)).min(height);
-    for row in top..bottom {
-        let row_start = row * width * 4;
-        for column in left..right {
-            let offset = row_start + column * 4;
-            buffer[offset] = 0;
-            buffer[offset + 1] = 0;
-            buffer[offset + 2] = 0;
-            buffer[offset + 3] = 0;
-        }
-    }
-}
-
-fn draw_arrow(
-    buffer: &mut [u8],
-    width: usize,
-    height: usize,
-    draft: PhysicalArrowDraft,
-    stroke_width: i32,
-    color: [u8; 4],
-) {
-    let thickness = stroke_width.max(1);
-    draw_line_segment(
-        buffer,
-        width,
-        height,
-        draft.start_x,
-        draft.start_y,
-        draft.end_x,
-        draft.end_y,
-        thickness,
-        color,
-    );
-
-    let dx = draft.end_x - draft.start_x;
-    let dy = draft.end_y - draft.start_y;
-    let length = (dx * dx + dy * dy).sqrt();
-    if length < 2.0 {
-        return;
-    }
-
-    let head_length = (f64::from(thickness) * ARROW_HEAD_LENGTH_MULTIPLIER)
-        .max(10.0)
-        .min(length);
-    let base_angle = dy.atan2(dx);
-    let wing_angle = std::f64::consts::PI / 7.0;
-    let left_angle = base_angle + std::f64::consts::PI - wing_angle;
-    let right_angle = base_angle + std::f64::consts::PI + wing_angle;
-    let left_x = draft.end_x + left_angle.cos() * head_length;
-    let left_y = draft.end_y + left_angle.sin() * head_length;
-    let right_x = draft.end_x + right_angle.cos() * head_length;
-    let right_y = draft.end_y + right_angle.sin() * head_length;
-
-    draw_line_segment(
-        buffer,
-        width,
-        height,
-        draft.end_x,
-        draft.end_y,
-        left_x,
-        left_y,
-        thickness,
-        color,
-    );
-    draw_line_segment(
-        buffer,
-        width,
-        height,
-        draft.end_x,
-        draft.end_y,
-        right_x,
-        right_y,
-        thickness,
-        color,
-    );
-}
-
-fn draw_shape_annotation(
-    buffer: &mut [u8],
-    width: usize,
-    height: usize,
-    shape: &PhysicalShapeAnnotation,
-) {
-    match shape.kind {
-        NativeInteractionShapeAnnotationKind::Line => draw_line_segment(
-            buffer,
-            width,
-            height,
-            shape.start_x,
-            shape.start_y,
-            shape.end_x,
-            shape.end_y,
-            shape.stroke_width_physical.max(1),
-            shape.color,
-        ),
-        NativeInteractionShapeAnnotationKind::Arrow => draw_arrow(
-            buffer,
-            width,
-            height,
-            PhysicalArrowDraft {
-                start_x: shape.start_x,
-                start_y: shape.start_y,
-                end_x: shape.end_x,
-                end_y: shape.end_y,
-            },
-            shape.stroke_width_physical.max(1),
-            shape.color,
-        ),
-        NativeInteractionShapeAnnotationKind::Rect => {
-            let bounds = bounds_from_shape(shape);
-            let fill_color = [
-                shape.color[0],
-                shape.color[1],
-                shape.color[2],
-                RECT_ANNOTATION_FILL_ALPHA,
-            ];
-            fill_rect(
-                buffer,
-                width,
-                height,
-                bounds.x.floor() as i32,
-                bounds.y.floor() as i32,
-                bounds.width.ceil() as i32,
-                bounds.height.ceil() as i32,
-                fill_color,
-            );
-            let border = shape.stroke_width_physical.max(1);
-            let left = bounds.x.floor() as i32;
-            let top = bounds.y.floor() as i32;
-            let right = (bounds.x + bounds.width).ceil() as i32;
-            let bottom = (bounds.y + bounds.height).ceil() as i32;
-            fill_rect(
-                buffer,
-                width,
-                height,
-                left,
-                top,
-                (right - left).max(1),
-                border,
-                shape.color,
-            );
-            fill_rect(
-                buffer,
-                width,
-                height,
-                left,
-                (bottom - border).max(top),
-                (right - left).max(1),
-                border,
-                shape.color,
-            );
-            fill_rect(
-                buffer,
-                width,
-                height,
-                left,
-                top,
-                border,
-                (bottom - top).max(1),
-                shape.color,
-            );
-            fill_rect(
-                buffer,
-                width,
-                height,
-                (right - border).max(left),
-                top,
-                border,
-                (bottom - top).max(1),
-                shape.color,
-            );
-        }
-        NativeInteractionShapeAnnotationKind::Ellipse => {
-            let bounds = bounds_from_shape(shape);
-            let fill_color = [
-                shape.color[0],
-                shape.color[1],
-                shape.color[2],
-                RECT_ANNOTATION_FILL_ALPHA,
-            ];
-            fill_ellipse(buffer, width, height, bounds, fill_color);
-            stroke_ellipse(
-                buffer,
-                width,
-                height,
-                bounds,
-                shape.stroke_width_physical.max(1),
-                shape.color,
-            );
-        }
-    }
-}
-
-fn draw_shape_annotation_handles(
-    buffer: &mut [u8],
-    width: usize,
-    height: usize,
-    shape: &PhysicalShapeAnnotation,
-    scale_factor: f32,
-) {
-    match shape.kind {
-        NativeInteractionShapeAnnotationKind::Line
-        | NativeInteractionShapeAnnotationKind::Arrow => {
-            let size = logical_to_physical(HANDLE_SIZE_LOGICAL, scale_factor).max(6) as f64;
-            let half = size / 2.0;
-            for (x, y) in [(shape.start_x, shape.start_y), (shape.end_x, shape.end_y)] {
-                fill_rect(
-                    buffer,
-                    width,
-                    height,
-                    (x - half).floor() as i32,
-                    (y - half).floor() as i32,
-                    size.ceil() as i32,
-                    size.ceil() as i32,
-                    HANDLE_COLOR,
-                );
-            }
-        }
-        NativeInteractionShapeAnnotationKind::Rect
-        | NativeInteractionShapeAnnotationKind::Ellipse => {
-            for handle_rect in handle_rects(bounds_from_shape(shape), scale_factor) {
-                fill_rect(
-                    buffer,
-                    width,
-                    height,
-                    handle_rect.x.floor() as i32,
-                    handle_rect.y.floor() as i32,
-                    handle_rect.width.ceil() as i32,
-                    handle_rect.height.ceil() as i32,
-                    HANDLE_COLOR,
-                );
-            }
-        }
-    }
-}
-
-fn draw_line_segment(
-    buffer: &mut [u8],
-    width: usize,
-    height: usize,
-    start_x: f64,
-    start_y: f64,
-    end_x: f64,
-    end_y: f64,
-    thickness: i32,
-    color: [u8; 4],
-) {
-    let delta_x = end_x - start_x;
-    let delta_y = end_y - start_y;
-    let steps = delta_x.abs().max(delta_y.abs()).ceil() as i32;
-    let radius = (thickness.max(1) as f64 / 2.0).max(0.75);
-    if steps <= 0 {
-        draw_disk(buffer, width, height, start_x, start_y, radius, color);
-        return;
-    }
-    for step in 0..=steps {
-        let progress = f64::from(step) / f64::from(steps);
-        let x = start_x + delta_x * progress;
-        let y = start_y + delta_y * progress;
-        draw_disk(buffer, width, height, x, y, radius, color);
-    }
-}
-
-fn draw_disk(
-    buffer: &mut [u8],
-    width: usize,
-    height: usize,
-    center_x: f64,
-    center_y: f64,
-    radius: f64,
-    color: [u8; 4],
-) {
-    let left = (center_x - radius).floor().max(0.0) as i32;
-    let top = (center_y - radius).floor().max(0.0) as i32;
-    let right = (center_x + radius).ceil().min(width as f64 - 1.0) as i32;
-    let bottom = (center_y + radius).ceil().min(height as f64 - 1.0) as i32;
-    let radius_squared = radius * radius;
-
-    for row in top..=bottom {
-        let row_start = row as usize * width * 4;
-        for column in left..=right {
-            let dx = (f64::from(column) + 0.5) - center_x;
-            let dy = (f64::from(row) + 0.5) - center_y;
-            if dx * dx + dy * dy <= radius_squared {
-                let offset = row_start + column as usize * 4;
-                buffer[offset..offset + 4].copy_from_slice(&color);
-            }
-        }
-    }
-}
-
-fn fill_ellipse(
-    buffer: &mut [u8],
-    width: usize,
-    height: usize,
-    bounds: PhysicalRect,
-    color: [u8; 4],
-) {
-    let left = bounds.x.floor().max(0.0) as i32;
-    let top = bounds.y.floor().max(0.0) as i32;
-    let right = (bounds.x + bounds.width).ceil().min(width as f64) as i32;
-    let bottom = (bounds.y + bounds.height).ceil().min(height as f64) as i32;
-    let radius_x = bounds.width.max(1.0) / 2.0;
-    let radius_y = bounds.height.max(1.0) / 2.0;
-    let center_x = bounds.x + radius_x;
-    let center_y = bounds.y + radius_y;
-
-    for row in top.max(0) as usize..bottom.max(0) as usize {
-        let y = row as f64 + 0.5;
-        let normalized_y = ((y - center_y) / radius_y).powi(2);
-        if normalized_y > 1.0 {
-            continue;
-        }
-        let row_start = row * width * 4;
-        for column in left.max(0) as usize..right.max(0) as usize {
-            let x = column as f64 + 0.5;
-            let normalized_x = ((x - center_x) / radius_x).powi(2);
-            if normalized_x + normalized_y <= 1.0 {
-                let offset = row_start + column * 4;
-                buffer[offset..offset + 4].copy_from_slice(&color);
-            }
-        }
-    }
-}
-
-fn stroke_ellipse(
-    buffer: &mut [u8],
-    width: usize,
-    height: usize,
-    bounds: PhysicalRect,
-    stroke_width: i32,
-    color: [u8; 4],
-) {
-    let outer_rx = bounds.width.max(1.0) / 2.0;
-    let outer_ry = bounds.height.max(1.0) / 2.0;
-    let inner_rx = (outer_rx - f64::from(stroke_width.max(1))).max(0.0);
-    let inner_ry = (outer_ry - f64::from(stroke_width.max(1))).max(0.0);
-    let center_x = bounds.x + outer_rx;
-    let center_y = bounds.y + outer_ry;
-    let left = bounds.x.floor().max(0.0) as i32;
-    let top = bounds.y.floor().max(0.0) as i32;
-    let right = (bounds.x + bounds.width).ceil().min(width as f64) as i32;
-    let bottom = (bounds.y + bounds.height).ceil().min(height as f64) as i32;
-
-    for row in top.max(0) as usize..bottom.max(0) as usize {
-        let y = row as f64 + 0.5;
-        let outer_y = ((y - center_y) / outer_ry).powi(2);
-        let inner_y = if inner_ry > 0.0 {
-            ((y - center_y) / inner_ry).powi(2)
-        } else {
-            f64::INFINITY
-        };
-        let row_start = row * width * 4;
-        for column in left.max(0) as usize..right.max(0) as usize {
-            let x = column as f64 + 0.5;
-            let outer = ((x - center_x) / outer_rx).powi(2) + outer_y;
-            if outer > 1.0 {
-                continue;
-            }
-            let inner = if inner_rx > 0.0 && inner_ry > 0.0 {
-                ((x - center_x) / inner_rx).powi(2) + inner_y
-            } else {
-                f64::INFINITY
-            };
-            if inner <= 1.0 {
-                continue;
-            }
-            let offset = row_start + column * 4;
-            buffer[offset..offset + 4].copy_from_slice(&color);
-        }
-    }
-}
-
 fn shared_state_from_hwnd(hwnd: HWND) -> Option<&'static Arc<Mutex<InteractionWindowSharedState>>> {
     let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) }
         as *const Arc<Mutex<InteractionWindowSharedState>>;
@@ -3473,4 +2829,176 @@ fn format_selection(selection: Option<NativeInteractionSelectionRect>) -> String
 
 fn last_error(code: &str, message: &str) -> AppError {
     AppError::new(code, message).with_detail("win32Error", unsafe { GetLastError() }.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(scale: f32) -> InteractionWindowSession {
+        InteractionWindowSession {
+            session_id: "test".into(),
+            physical_x: -3840,
+            physical_y: 0,
+            physical_width: 3840,
+            physical_height: 2160,
+            scale_factor: scale,
+        }
+    }
+
+    #[test]
+    fn selection_scene_is_constant_size_at_4k_and_hidpi() {
+        for scale in [1.0, 1.5, 2.0] {
+            let mut state = InteractionWindowSharedState::default();
+            state.selection_physical = Some(PhysicalRect {
+                x: 100.0,
+                y: 200.0,
+                width: 3000.0,
+                height: 1800.0,
+            });
+            let scene = build_primitives(&state, &session(scale));
+            assert_eq!(scene.len(), 13); // four masks, one border, eight handles; no pixels.
+            assert!(matches!(scene[4], Primitive::Rect(_, _, _)));
+            state.selection_physical = None;
+            assert_eq!(build_primitives(&state, &session(scale)).len(), 1);
+        }
+    }
+
+    #[test]
+    fn eight_handles_clamp_without_crossing_and_keep_dpi_minimum() {
+        let session = session(1.5);
+        let origin = PhysicalRect {
+            x: 100.0,
+            y: 100.0,
+            width: 500.0,
+            height: 400.0,
+        };
+        for (handle, _) in handle_hit_boxes(origin, session.scale_factor) {
+            for (x, y) in [(-100, -100), (5000, 5000), (300, 300), (100, 100)] {
+                let resized = resize_selection_rect(origin, handle, x, y, &session);
+                assert!(resized.x >= 0.0 && resized.y >= 0.0);
+                assert!(
+                    resized.x + resized.width <= 3840.0 && resized.y + resized.height <= 2160.0
+                );
+                assert!(resized.width >= 12.0 && resized.height >= 12.0);
+            }
+        }
+    }
+
+    #[test]
+    fn exclusion_hit_testing_maps_negative_display_origins() {
+        let mut state = InteractionWindowSharedState::default();
+        state.session = Some(session(1.5));
+        state.exclusion_rects_physical.push(PhysicalRect {
+            x: 100.0,
+            y: 100.0,
+            width: 300.0,
+            height: 100.0,
+        });
+        assert!(point_hits_exclusion_rects(&state, -3700, 140));
+        assert!(!point_hits_exclusion_rects(&state, -3300, 140));
+    }
+
+    #[test]
+    fn native_mouse_up_uses_final_point_and_runtime_cannot_overwrite_drag() {
+        let (mut backend, _) = initialize().unwrap();
+        backend
+            .prepare_session(&NativeInteractionSessionSpec {
+                session_id: "input-regression".into(),
+                display_x: 0,
+                display_y: 0,
+                display_width: 1920,
+                display_height: 1080,
+                scale_factor: 1.0,
+            })
+            .unwrap();
+        let shared = backend.shared_state.clone();
+        handle_left_button_down(backend.hwnd, &shared, 100, 100).unwrap();
+        for (x, y) in [(800, 700), (150, 200), (500, 400)] {
+            handle_mouse_move(backend.hwnd, &shared, x, y).unwrap();
+        }
+        let revision = backend.snapshot_selection().unwrap().selection_revision;
+        backend
+            .update_runtime(&NativeInteractionRuntimeUpdateInput {
+                session_id: "input-regression".into(),
+                visible: true,
+                exclusion_rects: vec![],
+                mode: NativeInteractionMode::ArrowAnnotation,
+                selection: Some(NativeInteractionSelectionRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 8.0,
+                    height: 8.0,
+                }),
+                active_shape: None,
+                shape_candidates: vec![],
+                annotation_color: None,
+                annotation_stroke_width: None,
+            })
+            .unwrap();
+        assert_eq!(
+            backend.snapshot_selection().unwrap().interaction_mode,
+            NativeInteractionMode::Selection
+        );
+        handle_left_button_up(backend.hwnd, &shared, 700, 600).unwrap();
+        let snapshot = backend.snapshot_selection().unwrap();
+        let selection = snapshot.selection.unwrap();
+        assert_eq!(
+            (selection.x, selection.y, selection.width, selection.height),
+            (100.0, 100.0, 600.0, 500.0)
+        );
+        assert_eq!(snapshot.drag_mode, None);
+        assert!(snapshot.selection_revision > revision);
+        backend.present_pending().unwrap();
+        // Repeated movement: no revision rollback and final position remains clamped.
+        for _ in 0..20 {
+            handle_left_button_down(backend.hwnd, &shared, 400, 350).unwrap();
+            handle_mouse_move(backend.hwnd, &shared, 410, 360).unwrap();
+            handle_left_button_up(backend.hwnd, &shared, 400, 350).unwrap();
+        }
+        let selection = backend.snapshot_selection().unwrap().selection.unwrap();
+        assert_eq!((selection.x, selection.y), (100.0, 100.0));
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = events.clone();
+        backend
+            .set_event_sink(Arc::new(move |event| captured.lock().unwrap().push(event)))
+            .unwrap();
+        for mode in [
+            NativeInteractionMode::LineAnnotation,
+            NativeInteractionMode::ArrowAnnotation,
+            NativeInteractionMode::RectAnnotation,
+            NativeInteractionMode::EllipseAnnotation,
+        ] {
+            backend
+                .update_runtime(&NativeInteractionRuntimeUpdateInput {
+                    session_id: "input-regression".into(),
+                    visible: true,
+                    mode,
+                    selection: Some(selection),
+                    active_shape: None,
+                    shape_candidates: vec![],
+                    exclusion_rects: vec![],
+                    annotation_color: Some("#00d08f".into()),
+                    annotation_stroke_width: Some(3.0),
+                })
+                .unwrap();
+            handle_left_button_down(backend.hwnd, &shared, 200, 200).unwrap();
+            handle_mouse_move(backend.hwnd, &shared, 300, 300).unwrap();
+            backend.present_pending().unwrap();
+            handle_left_button_up(backend.hwnd, &shared, 400, 400).unwrap();
+            let events = events.lock().unwrap();
+            let committed = events
+                .iter()
+                .rev()
+                .find_map(|event| match event {
+                    NativeInteractionBackendEvent::ShapeAnnotationCommitted(shape) => Some(shape),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!((committed.end.x, committed.end.y), (400.0, 400.0));
+            assert!(backend.snapshot_selection().unwrap().drag_mode.is_none());
+        }
+        backend.clear().unwrap();
+    }
 }

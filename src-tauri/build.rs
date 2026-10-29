@@ -33,6 +33,7 @@ fn main() {
         "upsert_workspace",
         "update_workspace_description",
         "reorder_workspaces",
+        "set_workspaces_archived",
         "delete_workspace",
         "register_workspace_folder",
         "remove_workspace_registration",

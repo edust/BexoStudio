@@ -119,18 +119,17 @@ test("Prompts stays reachable from the primary menu and owns its two-pane route"
   assert.doesNotMatch(navigation, /SnippetsOutlined/);
   assert.match(promptIcon, />\s*P\s*<\/span>/);
   assert.match(router, /path: "prompts"[\s\S]*?<PromptsPage/);
-  assert.match(shell, /routeKey !== "prompts"/);
+  assert.match(shell, /ROUTES_WITHOUT_SECTION_SIDEBAR = new Set\(\[[^\]]*"prompts"/);
 });
 
 test("Prompt list rows clip long previews inside the fixed virtual row", () => {
   const item = readFileSync("src/features/prompts/prompt-list-item.tsx", "utf8");
   const sidebar = readFileSync("src/features/prompts/prompt-sidebar.tsx", "utf8");
 
-  assert.match(item, /h-\[94px\][^"\n]*overflow-hidden/);
+  assert.match(item, /h-\[56px\][^"\n]*overflow-hidden/);
   assert.match(item, /h-full[^"\n]*overflow-hidden[^"\n]*text-left/);
-  assert.match(item, /line-clamp-2[^"\n]*max-h-\[40px\][^"\n]*break-words/);
-  assert.doesNotMatch(item, /line-clamp-2[^"\n]*\bblock\b|\bblock\b[^"\n]*line-clamp-2/);
-  assert.match(sidebar, /const PROMPT_ROW_HEIGHT = 99;/);
+  assert.match(item, /block truncate text-\[12px\]/);
+  assert.match(sidebar, /const PROMPT_ROW_HEIGHT = 56;/);
   assert.match(sidebar, /layoutScroll/);
   assert.match(sidebar, /values=\{orderedPrompts\.map\(\(prompt\) => prompt\.id\)\}/);
   assert.match(sidebar, /至少需要两条 Prompt 才能排序/);
@@ -138,10 +137,10 @@ test("Prompt list rows clip long previews inside the fixed virtual row", () => {
   assert.match(item, /layout=\{pointerReorderEnabled \? "position" : false\}/);
   assert.match(item, /value=\{prompt\.id\}/);
   assert.match(item, /transition=\{reorderLayoutTransition\}/);
-  assert.match(
-    item,
-    /themeMode === "dark"[\s\S]*?hover:border-\[#3c3c3c\] hover:bg-\[#2a2d2e\][\s\S]*?hover:border-\[#d9e2ec\] hover:bg-\[#f8fafc\]/,
-  );
+  // Light/dark states come from semantic tokens instead of per-theme hex branches.
+  assert.match(item, /bg-selected/);
+  assert.match(item, /hover:bg-hover/);
+  assert.doesNotMatch(item, /#[0-9a-fA-F]{6}/);
 });
 
 test("Prompt editor uses large readable text for title and body", () => {

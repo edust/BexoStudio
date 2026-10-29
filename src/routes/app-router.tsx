@@ -19,15 +19,15 @@ function RouterFallback() {
   return (
     <Flex
       align="center"
-      className="min-h-[320px] rounded-[14px] border border-[#e6edf5] bg-[#f8fafc]"
+      className="min-h-[320px] rounded-[14px] border border-line bg-surface-2"
       justify="center"
       vertical
     >
       <Spin size="large" />
-      <Typography.Text className="mt-3 text-[13px] font-medium text-[#1f2937]">
+      <Typography.Text className="mt-3 text-[13px] font-medium text-fg">
         正在载入模块
       </Typography.Text>
-      <Typography.Paragraph className="!mb-0 !mt-1 !text-[12px] !text-[#667085]">
+      <Typography.Paragraph className="!mb-0 !mt-1 !text-[12px] !text-fg-2">
         Bexo Studio 正在准备当前页面壳。
       </Typography.Paragraph>
     </Flex>

@@ -4,7 +4,8 @@ use crate::{
     domain::{
         DeleteResult, OpenWorkspaceInEditorResult, OpenWorkspaceTerminalResult, ProjectRecord,
         ReorderWorkspacesInput, RunWorkspaceTerminalCommandResult,
-        RunWorkspaceTerminalCommandsResult, UpdateWorkspaceDescriptionInput, UpsertProjectInput,
+        RunWorkspaceTerminalCommandsResult, SetWorkspacesArchivedInput,
+        SetWorkspacesArchivedResult, UpdateWorkspaceDescriptionInput, UpsertProjectInput,
         UpsertWorkspaceInput, WorkspaceRecord,
     },
     error::{AppError, CommandResponse},
@@ -51,6 +52,33 @@ pub async fn update_workspace_description(
                 "update_workspace_description failed: {}",
                 error
             );
+            Ok(CommandResponse::failure(error))
+        }
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn set_workspaces_archived(
+    app_handle: tauri::AppHandle,
+    workspace_service: State<'_, WorkspaceService>,
+    input: SetWorkspacesArchivedInput,
+) -> Result<CommandResponse<SetWorkspacesArchivedResult>, AppError> {
+    match workspace_service.set_workspaces_archived(input).await {
+        Ok(data) => {
+            let warning = match crate::app::refresh_tray_menu(&app_handle).await {
+                Ok(()) => None,
+                Err(error) => {
+                    log::error!(target: "bexo::command::workspace", "archive saved but tray refresh failed: {}", error);
+                    Some("归档状态已保存，但托盘菜单刷新失败，请重启应用刷新托盘。".to_string())
+                }
+            };
+            Ok(CommandResponse::success(SetWorkspacesArchivedResult {
+                workspaces: data,
+                warning,
+            }))
+        }
+        Err(error) => {
+            log::error!(target: "bexo::command::workspace", "set_workspaces_archived failed: {}", error);
             Ok(CommandResponse::failure(error))
         }
     }

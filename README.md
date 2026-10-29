@@ -202,6 +202,11 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
   - 默认截图全局热键为 `Ctrl+Shift+X`，可在 Settings / Hotkeys 中录制和恢复默认
   - 热键冲突、注册失败和 degraded 状态会明确显示，并支持重新注册
   - 截图底图与高频选区交互由 Windows 原生层负责，WebView 负责工具栏、属性面板和复杂配置 UI
+  - 截图工具栏固定浅色，工具与属性分层，复制/保存始终可见；支持选区底部空间不足时向上定位
+  - 保存导出按选区裁剪、快速无损 PNG 编码并在阻塞工作线程执行；保存成功先隐藏各层窗口，再做单次清理，失败仍保留选区供重试
+  - 保持原始分辨率与像素；速度优先的无损压缩可能比默认压缩产生更大的 PNG 文件
+  - 原生选区改用 Direct2D/D3D11/DirectComposition 几何绘制，不再每次移动 CPU 复制全屏位图；保留 WebView2 GPU 禁用设置
+  - 本次实现及实测边界见 `scripts/work/2026-10-01-screenshot-ui-performance/deliverable.md`
 - Reliability & Security Hardening：
   - SQLite 写 timeout 会 interrupt 并等待事务确定提交或回滚，不遗留后台悬空写
   - Native Preview/Interaction 由 typed owner thread 独占，跨线程不再传递裸指针
@@ -362,8 +367,20 @@ npm run release:build
 - 上传入口支持选择器多选和 Windows 资源管理器多文件拖放；每个文件独立入队，批次采用有界并发，单项失败不会阻塞其他文件。
 - 传输队列显示账号、Bucket、Region、Object Key、本地路径、数值进度、速度、预计剩余时间和错误码；上传完成后自动刷新当前对象目录。
 - 大文件使用 Multipart Upload / Range 下载，保存 checkpoint，支持取消、恢复、重启后继续和清理失败提示；单 PUT 取消在远端结果未知时进入“待确认”，避免误报已取消。
-- 文件对象支持右键快捷菜单：下载文件、同 Bucket 复制文件、复制 15 分钟有效的私有下载 URL、删除；删除仍需二次确认，复制目标 Key 会阻止覆盖已有对象。
+- 文件对象支持右键快捷菜单：下载文件、同 Bucket 复制文件、复制 1 天（24 小时）有效的私有下载 URL、删除；删除仍需二次确认，复制目标 Key 会阻止覆盖已有对象。时长从 URL 生成时起算，已复制的旧 URL 不会自动延长。
 - 预签名下载 URL 只在本次操作中生成并复制，不写入 SQLite、日志、传输事件或应用状态；URL 生成由 Rust V4 signer 完成，Secret 不离开 Credential Manager。
 - 前端不直连 OSS、不持有 Secret；Rust 统一负责 V4 签名、超时、有限重试、路径校验和传输状态事件。
 
 详细实现记录见 [OSS 文件管理交付清单](scripts/work/2026-07-12-oss-file-manager/deliverable.md)、[新建文件夹交付清单](scripts/work/2026-07-12-oss-create-folder/deliverable.md)、[传输体验交付清单](scripts/work/2026-07-12-oss-transfer-ux/deliverable.md) 和 [对象右键菜单交付清单](scripts/work/2026-07-12-oss-object-context-menu/deliverable.md)。
+
+## Workbench 项目收纳与定位
+
+- 默认只展示使用中的项目；已归档项目可单独搜索、批量恢复。归档保留磁盘文件、项目、备注、启动任务、快照及常用状态。
+- 星标设置常用项目，顶部常用分区可折叠；列表采用固定 88px 行高和虚拟滚动。
+- `Ctrl+K` 聚焦搜索；上下键选择结果、回车切换使用中项目、Escape 清空搜索。搜索名称、路径、备注；使用中搜索会提示归档命中数。
+- 行内保留编辑器入口，其余操作从“更多”或右键进入；完整路径、备注与最后恢复运行时间可悬停或聚焦查看。
+- 左侧手柄拖动排序，更多菜单也可上移/下移；仅在未搜索时进行同分区排序，不跨常用/其他或归档状态。
+- 批量操作作用于当前使用中/归档范围已勾选项目（可包含筛选外的已选项目）；切换范围会清空勾选。归档不终止已经启动的外部进程，归档后须恢复才能运行命令组或快照恢复。
+- 实施与验证：`scripts/work/2026-10-19-workspace-navigation/deliverable.md`。
+
+- 工作台项目栏默认 440px，可拖动右边界并记忆宽度；方向键微调，Home/双击恢复默认。窗口缩小时限制宽度并为命令区保留空间。项目名称、目录、备注分别展示，常用星标为黄色。

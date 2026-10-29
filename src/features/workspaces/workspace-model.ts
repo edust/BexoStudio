@@ -2,7 +2,7 @@ export const MAX_WORKSPACE_DESCRIPTION_CHARS = 200;
 
 export type WorkspaceSearchableItem = {
   label: string;
-  description: string;
+  description?: string;
   badge?: string;
   note?: string;
 };
@@ -33,7 +33,7 @@ export function filterWorkspaceItems<T extends WorkspaceSearchableItem>(items: T
   }
 
   return items.filter((item) => {
-    const searchableText = [item.label, item.description, item.badge ?? "", item.note ?? ""]
+    const searchableText = [item.label, item.description ?? "", item.badge ?? "", item.note ?? ""]
       .join(" ")
       .toLocaleLowerCase();
     return searchableText.includes(normalizedQuery);

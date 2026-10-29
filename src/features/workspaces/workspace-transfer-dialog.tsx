@@ -204,7 +204,7 @@ export function WorkspaceTransferDialog({
       destroyOnHidden
       footer={
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <Typography.Text className="text-[11px] text-[#667085]">
+          <Typography.Text className="text-[11px] text-fg-2">
             将新建 {actionSummary.create}、更新 {actionSummary.update}、跳过 {actionSummary.skip}
           </Typography.Text>
           <div className="flex items-center gap-2">
@@ -241,10 +241,10 @@ export function WorkspaceTransferDialog({
         <Alert
           description={
             <div className="space-y-1">
-              <Typography.Text className="block break-all text-[11px] text-[#475467]">
+              <Typography.Text className="block break-all text-[11px] text-fg-2">
                 {sourcePath}
               </Typography.Text>
-              <Typography.Text className="block text-[11px] leading-5 text-[#667085]">
+              <Typography.Text className="block text-[11px] leading-5 text-fg-2">
                 导入只合并本地配置，不会删除现有工作区或磁盘文件。绝对路径与启动命令会在写入前由 Rust 再次校验。
               </Typography.Text>
             </div>
@@ -278,7 +278,7 @@ export function WorkspaceTransferDialog({
 
         {preview ? (
           <>
-            <div className="flex flex-wrap items-center gap-2 rounded-[10px] border border-[#e6edf5] bg-[#fbfcfe] px-3 py-2">
+            <div className="flex flex-wrap items-center gap-2 rounded-[10px] border border-line bg-surface-2 px-3 py-2">
               <Tag color="blue">共 {preview.summary.totalWorkspaceCount} 个工作区</Tag>
               <Tag color="success">可新建 {preview.summary.readyWorkspaceCount}</Tag>
               <Tag color="default">已存在 {preview.summary.existingWorkspaceCount}</Tag>
@@ -291,7 +291,7 @@ export function WorkspaceTransferDialog({
               {preview.summary.invalidProjectCount ? (
                 <Tag color="error">无效项目 {preview.summary.invalidProjectCount}</Tag>
               ) : null}
-              <Typography.Text className="ml-auto text-[10px] text-[#98a2b3]">
+              <Typography.Text className="ml-auto text-[10px] text-fg-3">
                 格式版本 v{preview.schemaVersion}
               </Typography.Text>
             </div>
@@ -307,9 +307,9 @@ export function WorkspaceTransferDialog({
 
             <Spin spinning={previewMutation.isPending} tip="正在重新预检目录与冲突...">
               <div className="grid min-h-[352px] grid-cols-1 gap-3 lg:grid-cols-[minmax(280px,0.9fr)_minmax(0,1.35fr)]">
-                <div className="overflow-hidden rounded-[12px] border border-[#e6edf5] bg-white">
-                  <div className="border-b border-[#e6edf5] px-3 py-2">
-                    <Typography.Text className="text-[12px] font-semibold text-[#344054]">
+                <div className="overflow-hidden rounded-[12px] border border-line bg-surface">
+                  <div className="border-b border-line px-3 py-2">
+                    <Typography.Text className="text-[12px] font-semibold text-fg">
                       工作区列表
                     </Typography.Text>
                   </div>
@@ -399,23 +399,23 @@ function WorkspaceImportListItem({
   return (
     <button
       className={cn(
-        "mb-2 flex h-[76px] w-full items-start gap-2 rounded-[10px] border px-2.5 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#24a8d8]",
+        "mb-2 flex h-[76px] w-full items-start gap-2 rounded-[10px] border px-2.5 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
         selected
-          ? "border-[#8fd4ec] bg-[#f4fbfe]"
-          : "border-transparent bg-transparent hover:border-[#d9e2ec] hover:bg-[#f8fafc]",
+          ? "border-primary bg-selected"
+          : "border-transparent bg-transparent hover:border-line hover:bg-hover",
       )}
       onClick={onSelect}
       type="button"
     >
       <ImportStatusIcon item={item} />
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[12px] font-semibold text-[#1f2937]">
+        <span className="block truncate text-[12px] font-semibold text-fg">
           {item.name}
         </span>
-        <span className="mt-1 block truncate text-[10px] text-[#667085]">
+        <span className="mt-1 block truncate text-[10px] text-fg-2">
           {item.projects[0]?.resolvedPath ?? "没有项目目录"}
         </span>
-        <span className="mt-1 flex items-center gap-1.5 text-[10px] text-[#98a2b3]">
+        <span className="mt-1 flex items-center gap-1.5 text-[10px] text-fg-3">
           <ImportActionTag action={action} />
           {item.projects.length} 个项目
         </span>
@@ -441,7 +441,7 @@ function WorkspaceImportDetail({
 }) {
   if (!item) {
     return (
-      <div className="flex min-h-[352px] items-center justify-center rounded-[12px] border border-dashed border-[#d9e2ec] bg-[#fbfcfe] text-[12px] text-[#98a2b3]">
+      <div className="flex min-h-[352px] items-center justify-center rounded-[12px] border border-dashed border-line bg-surface-2 text-[12px] text-fg-3">
         请选择一个工作区查看预检详情
       </div>
     );
@@ -453,13 +453,13 @@ function WorkspaceImportDetail({
   ].filter(Boolean) as Array<{ value: WorkspaceImportAction; label: string }>;
 
   return (
-    <div className="min-h-[352px] overflow-hidden rounded-[12px] border border-[#e6edf5] bg-white">
-      <div className="flex flex-wrap items-start justify-between gap-2 border-b border-[#e6edf5] px-3 py-2.5">
+    <div className="min-h-[352px] overflow-hidden rounded-[12px] border border-line bg-surface">
+      <div className="flex flex-wrap items-start justify-between gap-2 border-b border-line px-3 py-2.5">
         <div className="min-w-0 flex-[1_1_220px]">
-          <Typography.Text className="block truncate text-[13px] font-semibold text-[#1f2937]">
+          <Typography.Text className="block truncate text-[13px] font-semibold text-fg">
             {item.name}
           </Typography.Text>
-          <Typography.Text className="mt-0.5 block text-[10px] text-[#667085]">
+          <Typography.Text className="mt-0.5 block text-[10px] text-fg-2">
             {item.existingWorkspaceName
               ? `匹配现有工作区：${item.existingWorkspaceName}`
               : item.suggestedName !== item.name
@@ -529,23 +529,23 @@ function ProjectPreviewRow({
   onResetRelocation: () => void;
 }) {
   return (
-    <div className="rounded-[10px] border border-[#e6edf5] bg-[#fbfcfe] px-3 py-2.5">
+    <div className="rounded-[10px] border border-line bg-surface-2 px-3 py-2.5">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <Typography.Text className="truncate text-[12px] font-semibold text-[#344054]">
+            <Typography.Text className="truncate text-[12px] font-semibold text-fg">
               {project.name}
             </Typography.Text>
             <ProjectStatusTag status={project.status} />
           </div>
           <Typography.Text
-            className="mt-1 block break-all text-[10px] leading-4 text-[#667085]"
+            className="mt-1 block break-all text-[10px] leading-4 text-fg-2"
             title={project.resolvedPath}
           >
             {project.resolvedPath}
           </Typography.Text>
           {project.message ? (
-            <Typography.Text className="mt-1 block text-[10px] leading-4 text-[#7b8794]">
+            <Typography.Text className="mt-1 block text-[10px] leading-4 text-fg-2">
               {project.message}
             </Typography.Text>
           ) : null}
@@ -567,12 +567,12 @@ function ProjectPreviewRow({
 
 function ImportStatusIcon({ item }: { item: WorkspaceImportItemPreview }) {
   return item.status === "blocked" ? (
-    <ExclamationCircleOutlined className="mt-0.5 text-[14px] text-[#cf5a4a]" />
+    <ExclamationCircleOutlined className="mt-0.5 text-[14px] text-danger" />
   ) : (
     <CheckCircleOutlined
       className={cn(
         "mt-0.5 text-[14px]",
-        item.status === "existing" ? "text-[#667085]" : "text-[#027a48]",
+        item.status === "existing" ? "text-fg-2" : "text-success",
       )}
     />
   );

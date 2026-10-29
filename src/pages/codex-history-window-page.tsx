@@ -1,10 +1,12 @@
 import { ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Button, Checkbox, Empty, Input, Spin, Tag, Tooltip, Typography } from "antd";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Alert, Button, Checkbox, Empty, Input, Spin, Tooltip, Typography } from "antd";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
+import { PaneHeader } from "@/components/shell/pane-header";
 import { CodexHistoryMessageBlock } from "@/features/codex-history/codex-history-message-block";
+import { CODEX_HISTORY_SESSION_ROW_HEIGHT, CodexHistorySessionItem } from "@/features/codex-history/codex-history-session-item";
 import { filterCodexHistoryMessages } from "@/features/codex-history/codex-history-message-rules";
 import { useCodexHistoryViewPreferences } from "@/features/codex-history/codex-history-view-preferences";
 import { cn } from "@/lib/cn";
@@ -17,7 +19,7 @@ import {
 import type { CodexHistoryMessage, CodexHistorySession } from "@/types/backend";
 
 const MESSAGE_PAGE_SIZE = 40;
-const SESSION_ROW_HEIGHT = 88;
+const SESSION_ROW_HEIGHT = CODEX_HISTORY_SESSION_ROW_HEIGHT;
 const SESSION_OVERSCAN = 6;
 
 type ScrollRestoreState = {
@@ -309,43 +311,29 @@ export default function CodexHistoryWindowPage() {
   }
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#f5f7fa] text-[#101828]">
-      <aside className="flex w-[340px] shrink-0 flex-col border-r border-[#d9e2ec] bg-white">
-        <div className="border-b border-[#e4eaf1] px-4 py-3">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <Typography.Title className="!mb-1 !text-[16px] !leading-6" level={4}>
-                Codex 历史
-              </Typography.Title>
-              <Typography.Paragraph
-                className="!mb-0 !text-[12px] !leading-5 !text-[#667085]"
-                ellipsis={{ rows: 2, tooltip: rootLabel }}
-              >
-                {rootLabel}
-              </Typography.Paragraph>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <Checkbox
-                checked={showTechnicalMessages}
-                className="text-[12px] text-[#667085]"
-                onChange={(event) => setShowTechnicalMessages(event.target.checked)}
-              >
-                显示技术项
-              </Checkbox>
-              <Tooltip title="刷新">
-                <Button
-                  className="!h-8 !w-8 !min-w-8 !p-0"
-                  icon={<ReloadOutlined />}
-                  loading={sessionsQuery.isFetching}
-                  onClick={() => void handleRefreshSessions()}
-                  type="text"
-                />
-              </Tooltip>
-            </div>
-          </div>
+    <div className="flex h-screen w-screen overflow-hidden bg-surface text-fg">
+      <aside className="flex w-[320px] shrink-0 flex-col border-r border-line bg-surface">
+        <PaneHeader
+          actions={
+            <Tooltip title="刷新">
+              <Button
+                aria-label="刷新会话列表"
+                icon={<ReloadOutlined />}
+                loading={sessionsQuery.isFetching}
+                onClick={() => void handleRefreshSessions()}
+                size="small"
+                type="text"
+              />
+            </Tooltip>
+          }
+          meta={query.trim() ? `${filteredSessions.length}/${sessionsTotal}` : sessionsTotal}
+          title="Codex 历史"
+        />
+        <div className="shrink-0 space-y-1 border-b border-line px-2 py-2">
+          <div className="truncate px-1 text-[12px] text-fg-3" title={rootLabel}>{rootLabel}</div>
           <Input
             allowClear
-            className="mt-3"
+            aria-label="搜索会话"
             onChange={(event) => {
               setQuery(event.target.value);
               setSessionScrollTop(0);
@@ -353,25 +341,11 @@ export default function CodexHistoryWindowPage() {
                 sessionListRef.current.scrollTop = 0;
               }
             }}
-            placeholder="搜索 session"
-            prefix={<SearchOutlined className="text-[#98a2b3]" />}
+            placeholder="搜索会话"
+            prefix={<SearchOutlined className="text-fg-3" />}
             value={query}
           />
-          <div className="mt-2 flex items-center justify-between">
-            <Typography.Text className="text-[11px] text-[#98a2b3]">
-              {filteredSessions.length} / {sessionsTotal}
-            </Typography.Text>
-            {sessionsQuery.data?.codexRoots.length ? (
-              <Tag
-                bordered={false}
-                className="m-0 max-w-[190px] truncate rounded-[6px] bg-[#eef6fb] px-2 py-0 text-[11px] text-[#12718f]"
-              >
-                {sessionsQuery.data.codexRoots.length} 个 Codex 根
-              </Tag>
-            ) : null}
-          </div>
         </div>
-
         <div className="min-h-0 flex-1">
           {sessionsQuery.isLoading ? (
             <CenteredState>
@@ -391,7 +365,7 @@ export default function CodexHistoryWindowPage() {
             </CenteredState>
           ) : (
             <div
-              className="h-full overflow-y-auto px-2 py-2"
+              className="h-full overflow-y-auto p-1"
               onScroll={(event) => setSessionScrollTop(event.currentTarget.scrollTop)}
               ref={sessionListRef}
             >
@@ -402,13 +376,16 @@ export default function CodexHistoryWindowPage() {
                 {visibleSessions.map((session, index) => {
                   const absoluteIndex = sessionVisibleRange.start + index;
                   return (
-                    <SessionListItem
+                    <CodexHistorySessionItem
                       key={session.sourcePath}
                       active={selectedSourcePath === session.sourcePath}
+                      dateLabel={formatShortDate(session.lastActiveAt ?? session.createdAt)}
                       onSelect={() => setSelectedSourcePath(session.sourcePath)}
-                      session={session}
+                      secondary={session.summary || (session.projectDir ?? session.sourcePath)}
+                      title={getSessionTitle(session)}
+                      tooltip={`${getSessionTitle(session)}\n${session.projectDir ?? session.sourcePath}`}
                       style={{
-                        height: SESSION_ROW_HEIGHT - 6,
+                        height: SESSION_ROW_HEIGHT,
                         top: absoluteIndex * SESSION_ROW_HEIGHT,
                       }}
                     />
@@ -421,32 +398,29 @@ export default function CodexHistoryWindowPage() {
       </aside>
 
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <header className="flex min-h-[76px] items-center justify-between gap-4 border-b border-[#d9e2ec] bg-white px-6 py-3">
-          <div className="min-w-0">
-            <Typography.Title className="!mb-1 !text-[17px] !leading-6" level={4}>
-              {selectedSession ? getSessionTitle(selectedSession) : "Codex 会话"}
-            </Typography.Title>
-            <Typography.Paragraph
-              className="!mb-0 !text-[12px] !leading-5 !text-[#667085]"
-              ellipsis={{ rows: 1, tooltip: selectedSession?.sourcePath }}
+        <PaneHeader
+          actions={
+            <Checkbox
+              checked={showTechnicalMessages}
+              className="text-[12px]"
+              onChange={(event) => setShowTechnicalMessages(event.target.checked)}
             >
-              {selectedSession?.sourcePath ?? "未选择 session"}
-            </Typography.Paragraph>
-          </div>
-          {selectedSession ? (
-            <div className="flex shrink-0 items-center gap-2">
-              <Tag bordered={false} className="m-0 rounded-[6px] bg-[#ecfdf3] text-[#027a48]">
+              显示技术项
+            </Checkbox>
+          }
+          meta={
+            selectedSession ? (
+              <span title={selectedSession.sourcePath}>
                 {formatDateTime(selectedSession.lastActiveAt ?? selectedSession.createdAt)}
-              </Tag>
-              <Tag bordered={false} className="m-0 rounded-[6px] bg-[#f2f4f7] text-[#475467]">
+                <span className="mx-2">·</span>
                 {formatBytes(selectedSession.fileSizeBytes)}
-              </Tag>
-            </div>
-          ) : null}
-        </header>
-
+              </span>
+            ) : null
+          }
+          title={selectedSession ? getSessionTitle(selectedSession) : "未选择会话"}
+        />
         <div
-          className="min-h-0 flex-1 overflow-y-auto px-6 py-5"
+          className="min-h-0 flex-1 overflow-y-auto px-4 py-3"
           onScroll={handleMessagesScroll}
           ref={messagesScrollRef}
         >
@@ -471,8 +445,8 @@ export default function CodexHistoryWindowPage() {
                   </Button>
                 </div>
               ) : messages.length ? (
-                <Typography.Text className="self-center text-[11px] text-[#98a2b3]">
-                  已到达此 session 起点
+                <Typography.Text className="self-center text-[11px] text-fg-3">
+                  已到会话开头
                 </Typography.Text>
               ) : null}
 
@@ -491,11 +465,11 @@ export default function CodexHistoryWindowPage() {
 
               {!messages.length && !messageError ? (
                 <CenteredState compact>
-                  <Empty description="这个 session 没有可显示的对话" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                  <Empty description="这个会话没有可显示的对话" image={Empty.PRESENTED_IMAGE_SIMPLE} />
                 </CenteredState>
               ) : null}
               {visibleMessages.length === 0 && hiddenMessageCount > 0 && !messageError ? (
-                <Typography.Text className="self-center text-[11px] text-[#98a2b3]">
+                <Typography.Text className="self-center text-[11px] text-fg-3">
                   已隐藏 {hiddenMessageCount} 条技术项
                 </Typography.Text>
               ) : null}
@@ -517,7 +491,7 @@ export default function CodexHistoryWindowPage() {
 
 function WindowStateShell({ children }: { children: ReactNode }) {
   return (
-    <div className="flex h-screen w-screen items-center justify-center bg-[#f5f7fa] p-6">
+    <div className="flex h-screen w-screen items-center justify-center bg-surface-2 p-6">
       <div className="w-full max-w-[520px]">{children}</div>
     </div>
   );
@@ -542,62 +516,6 @@ function CenteredState({
   );
 }
 
-function SessionListItem({
-  active,
-  onSelect,
-  session,
-  style,
-}: {
-  active: boolean;
-  onSelect: () => void;
-  session: CodexHistorySession;
-  style: CSSProperties;
-}) {
-  return (
-    <button
-      className={cn(
-        "absolute left-0 right-0 flex w-full flex-col items-stretch rounded-[8px] border px-3 py-2 text-left transition-colors",
-        active
-          ? "border-[#8fd4ec] bg-[#f4fbfe]"
-          : "border-transparent bg-white hover:border-[#d9e2ec] hover:bg-[#f8fafc]",
-      )}
-      onClick={onSelect}
-      style={style}
-      type="button"
-    >
-      <div className="flex items-center justify-between gap-2">
-        <Typography.Text
-          className="min-w-0 text-[13px] font-medium text-[#1f2937]"
-          ellipsis={{ tooltip: getSessionTitle(session) }}
-        >
-          {getSessionTitle(session)}
-        </Typography.Text>
-        <Typography.Text className="shrink-0 text-[10px] text-[#98a2b3]">
-          {formatShortDate(session.lastActiveAt ?? session.createdAt)}
-        </Typography.Text>
-      </div>
-      {session.summary ? (
-        <Typography.Paragraph
-          className="!mb-0 !mt-1 !text-[11px] !leading-4 !text-[#667085]"
-          ellipsis={{ rows: 1, tooltip: session.summary }}
-        >
-          {session.summary}
-        </Typography.Paragraph>
-      ) : null}
-      <div className="mt-1 flex items-center justify-between gap-2">
-        <Typography.Text
-          className="min-w-0 !text-[10px] !leading-4 !text-[#98a2b3]"
-          ellipsis={{ tooltip: session.projectDir ?? session.sourcePath }}
-        >
-          {session.projectDir ?? session.sourcePath}
-        </Typography.Text>
-        <Typography.Text className="shrink-0 !text-[10px] !leading-4 !text-[#98a2b3]">
-          {formatBytes(session.fileSizeBytes)}
-        </Typography.Text>
-      </div>
-    </button>
-  );
-}
 
 function getSessionTitle(session: CodexHistorySession) {
   return session.title?.trim() || session.sessionId || "未命名 session";

@@ -21,15 +21,17 @@ import {
   Select,
   Spin,
   Switch,
+  Tooltip,
   Typography,
 } from "antd";
 import { Reorder, useDragControls } from "motion/react";
 import { Controller, useForm } from "react-hook-form";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { toast } from "sonner";
 
 import { PromptQuickPasteSettings } from "@/features/settings/prompt-quick-paste-settings";
+import { PathValue, SettingsGroup, SettingsRow } from "@/features/settings/settings-layout";
 import { useHotkeyRecorder } from "@/features/settings/use-hotkey-recorder";
 import {
   CommandClientError,
@@ -48,6 +50,7 @@ import {
   type TerminalCommandTemplateFormValues,
 } from "@/lib/terminal-command";
 import { cn } from "@/lib/cn";
+import { settingsSections } from "@/lib/navigation";
 import { reorderLayoutTransition } from "@/lib/reorder-motion";
 import {
   appPreferencesQueryKey,
@@ -294,14 +297,6 @@ export default function SettingsPage() {
     (template) => template.id === selectedTemplateId,
   );
   const hasPersistedSelectedTemplate = Boolean(selectedOrderedTemplate);
-
-  function preventCopy(event: {
-    preventDefault: () => void;
-    stopPropagation: () => void;
-  }) {
-    event.preventDefault();
-    event.stopPropagation();
-  }
 
   function resetTemplateEditor(template?: TerminalCommandTemplateRecord | null) {
     const nextTemplate =
@@ -1243,29 +1238,42 @@ export default function SettingsPage() {
     }
   }, [persistTerminalTemplates, terminalTemplates, updatePreferencesMutation.isPending]);
 
-  return (
-    <div className="flex min-h-full flex-col bg-white">
-      <div className="border-b border-[#e6edf5] px-5 py-4">
-        <Typography.Text className="block text-[11px] font-semibold uppercase tracking-[0.22em] text-[#1f2937]">
-          {activeSection === "hotkeys" ? "Hotkeys" : "General"}
-        </Typography.Text>
-      </div>
+  const startupSwitchDisabled =
+    !desktopRuntimeAvailable || preferencesQuery.isFetching || preferencesQuery.isError;
 
-      <div className="flex flex-1 flex-col px-4 pb-6 pt-4">
+  return (
+    <div className="flex min-h-full flex-col bg-surface">
+      <header className="sticky top-0 z-10 flex h-10 shrink-0 items-center gap-4 border-b border-line bg-surface px-3">
+        <h2 className="m-0 text-[13px] font-semibold text-fg">设置</h2>
+        <nav aria-label="设置分组" className="flex h-full items-stretch gap-4 text-[13px]">
+          {settingsSections.map((item) => {
+            const active = item.key === activeSection;
+            return (
+              <Link
+                aria-current={active ? "page" : undefined}
+                className={cn(
+                  "flex items-center border-b-2 transition-colors",
+                  active ? "border-primary font-medium !text-fg" : "border-transparent !text-fg-3 hover:!text-fg-2",
+                )}
+                key={item.key}
+                to={item.href}
+              >
+                {item.label}
+              </Link>
+            );
+          })}
+        </nav>
+      </header>
+
+      <div className="flex w-full max-w-[920px] flex-1 flex-col gap-5 px-4 pb-8 pt-4">
         {!desktopRuntimeAvailable ? (
-          <Alert
-            className="mb-4"
-            message="当前页面需要在 Tauri 桌面 runtime 内设置运行偏好。"
-            showIcon
-            type="info"
-          />
+          <Alert message="设置需要在 Bexo Studio 桌面应用中修改" showIcon type="info" />
         ) : null}
 
         {preferencesQuery.error ? (
           <Alert
-            className="mb-4"
-            message="读取设置失败"
             description={getErrorSummary(preferencesQuery.error).message}
+            message="读取设置失败"
             showIcon
             type="error"
           />
@@ -1273,93 +1281,38 @@ export default function SettingsPage() {
 
         {activeSection === "general" ? (
           <>
-            {pathInlineError ? (
-              <Alert
-                className="mb-4"
-                closable
-                message="保存设置失败"
-                onClose={() => setPathInlineError(null)}
-                showIcon
-                type="error"
-                description={pathInlineError}
-              />
-            ) : null}
-
-            {startupInlineError ? (
-              <Alert
-                className="mb-4"
-                closable
-                message="更新启动设置失败"
-                onClose={() => setStartupInlineError(null)}
-                showIcon
-                type="error"
-                description={startupInlineError}
-              />
-            ) : null}
-
-            {codexHomeInlineError ? (
-              <Alert
-                className="mb-4"
-                closable
-                message="打开目录失败"
-                onClose={() => setCodexHomeInlineError(null)}
-                showIcon
-                type="error"
-                description={codexHomeInlineError}
-              />
-            ) : null}
-
-            {codexHistoryInlineError ? (
-              <Alert
-                className="mb-4"
-                closable
-                message="Codex 历史字体设置失败"
-                onClose={() => setCodexHistoryInlineError(null)}
-                showIcon
-                type="error"
-                description={codexHistoryInlineError}
-              />
-            ) : null}
-
-            {codexAuthInlineError ? (
-              <Alert
-                className="mb-4"
-                closable
-                message="Codex Auth 设置失败"
-                onClose={() => setCodexAuthInlineError(null)}
-                showIcon
-                type="error"
-                description={codexAuthInlineError}
-              />
-            ) : null}
+            {[
+              { error: pathInlineError, title: "保存设置失败", clear: () => setPathInlineError(null) },
+              { error: startupInlineError, title: "更新启动设置失败", clear: () => setStartupInlineError(null) },
+              { error: codexHomeInlineError, title: "打开目录失败", clear: () => setCodexHomeInlineError(null) },
+              { error: codexHistoryInlineError, title: "Codex 历史字体设置失败", clear: () => setCodexHistoryInlineError(null) },
+              { error: codexAuthInlineError, title: "Codex 授权设置失败", clear: () => setCodexAuthInlineError(null) },
+            ].map((item) =>
+              item.error ? (
+                <Alert
+                  closable
+                  description={item.error}
+                  key={item.title}
+                  message={item.title}
+                  onClose={item.clear}
+                  showIcon
+                  type="error"
+                />
+              ) : null,
+            )}
 
             {desktopRuntimeAvailable && settingsPageLoading ? (
-              <div className="flex min-h-0 flex-1 items-center justify-center">
+              <div className="flex min-h-[240px] items-center justify-center">
                 <Spin size="small" />
               </div>
             ) : (
-              <div className="flex flex-col gap-0">
-                <div className="rounded-[0] border border-[#eef2f6] bg-white">
-                  <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
-                    <div className="min-w-0">
-                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
-                        随系统启动
-                      </Typography.Text>
-                    </div>
-
-                    <div className="min-w-0">
-                      <Typography.Text className="block text-[11px] text-[#667085]">
-                        应用会在系统登录后自动启动。
-                      </Typography.Text>
-                    </div>
-
+              <div className="flex flex-col gap-5">
+                <SettingsGroup title="启动">
+                  <SettingsRow description="登录系统后自动启动 Bexo Studio" label="随系统启动">
                     <Switch
+                      aria-label="随系统启动"
                       checked={launchAtLoginEnabled}
-                      disabled={
-                        !desktopRuntimeAvailable ||
-                        preferencesQuery.isFetching ||
-                        preferencesQuery.isError
-                      }
+                      disabled={startupSwitchDisabled}
                       loading={updatePreferencesMutation.isPending}
                       onChange={(checked) =>
                         void handleToggleStartupSetting(
@@ -1370,30 +1323,12 @@ export default function SettingsPage() {
                       }
                       size="small"
                     />
-                  </div>
-                </div>
-
-                <div className="rounded-[0] border border-[#eef2f6] bg-white">
-                  <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
-                    <div className="min-w-0">
-                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
-                        静默启动
-                      </Typography.Text>
-                    </div>
-
-                    <div className="min-w-0">
-                      <Typography.Text className="block text-[11px] text-[#667085]">
-                        仅在自启动场景生效：应用启动后保持托盘常驻，不主动弹出主窗口。
-                      </Typography.Text>
-                    </div>
-
+                  </SettingsRow>
+                  <SettingsRow description="自启动时只驻留托盘，不弹出主窗口" label="静默启动">
                     <Switch
+                      aria-label="静默启动"
                       checked={startSilentlyEnabled}
-                      disabled={
-                        !desktopRuntimeAvailable ||
-                        preferencesQuery.isFetching ||
-                        preferencesQuery.isError
-                      }
+                      disabled={startupSwitchDisabled}
                       loading={updatePreferencesMutation.isPending}
                       onChange={(checked) =>
                         void handleToggleStartupSetting(
@@ -1404,331 +1339,157 @@ export default function SettingsPage() {
                       }
                       size="small"
                     />
-                  </div>
-                </div>
+                  </SettingsRow>
+                </SettingsGroup>
 
-                <div className="rounded-[0] border border-[#eef2f6] bg-white">
-                  <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
-                    <div className="min-w-0">
-                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
-                        Windows Terminal 位置
-                      </Typography.Text>
-                    </div>
-
-                    <div
-                      className="flex h-[32px] items-center overflow-hidden rounded-[8px] border border-[#d8e1eb] bg-[#f8fafc] px-3 font-mono text-[12px] text-[#475467] select-none"
-                      onContextMenu={preventCopy}
-                      onCopy={preventCopy}
-                      onCut={preventCopy}
-                      onMouseDown={(event) => {
-                        if (event.detail > 1) {
-                          preventCopy(event);
-                        }
-                      }}
-                      onSelect={(event) => preventCopy(event)}
-                      title={windowsTerminalPath || "未配置 Windows Terminal 路径"}
-                    >
-                      <span className="truncate">
-                        {windowsTerminalPath || "未配置 Windows Terminal 路径"}
-                      </span>
-                    </div>
-
+                <SettingsGroup title="终端与编辑器">
+                  <SettingsRow label="Windows Terminal 位置" wide>
+                    <PathValue value={windowsTerminalPath || "未配置"} />
                     <Button
-                      className="!h-[32px] !px-3 !text-[12px]"
-                      disabled={
-                        !desktopRuntimeAvailable ||
-                        preferencesQuery.isFetching ||
-                        preferencesQuery.isError
-                      }
+                      disabled={startupSwitchDisabled}
                       icon={<FolderOpenOutlined />}
                       loading={updatePreferencesMutation.isPending}
                       onClick={() => void handlePickWindowsTerminalDirectory()}
-                      size="small"
                     >
                       选择目录
                     </Button>
-                  </div>
-                </div>
-
-                <div className="rounded-[0] border border-[#eef2f6] bg-white">
-                  <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
-                    <div className="min-w-0">
-                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
-                        终端命令 Shell
-                      </Typography.Text>
-                    </div>
-
-                    <div className="min-w-0">
-                      <Typography.Text className="block text-[11px] text-[#667085]">
-                        影响首页终端命令组和恢复任务中的 terminal_command。PowerShell 7
-                        不可用时会回退到 cmd.exe。
-                      </Typography.Text>
-                    </div>
-
+                  </SettingsRow>
+                  <SettingsRow
+                    description={
+                      <Tooltip title="影响工作台启动命令和恢复任务中的 terminal_command；PowerShell 7 不可用时回退到 cmd.exe。">
+                        <span>启动命令使用的 Shell</span>
+                      </Tooltip>
+                    }
+                    label="终端命令 Shell"
+                  >
                     <Select<TerminalCommandShell>
-                      className="!w-[132px]"
+                      aria-label="终端命令 Shell"
+                      className="!w-[140px]"
                       disabled={preferenceActionsDisabled}
                       onChange={(value) => void handleSaveTerminalCommandShell(value)}
                       options={TERMINAL_COMMAND_SHELL_OPTIONS}
-                      size="small"
                       value={terminalCommandShell}
                     />
-                  </div>
-                </div>
-
-                <div className="rounded-[0] border border-[#eef2f6] bg-white">
-                  <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
-                    <div className="min-w-0">
-                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
-                        Codex 配置目录
-                      </Typography.Text>
-                    </div>
-
-                    <div className="min-w-0">
-                      <div
-                        className="flex h-[32px] items-center overflow-hidden rounded-[8px] border border-[#d8e1eb] bg-[#f8fafc] px-3 font-mono text-[12px] text-[#475467] select-none"
-                        onContextMenu={preventCopy}
-                        onCopy={preventCopy}
-                        onCut={preventCopy}
-                        onMouseDown={(event) => {
-                          if (event.detail > 1) {
-                            preventCopy(event);
-                          }
-                        }}
-                        onSelect={(event) => preventCopy(event)}
-                        title={codexHomeDisplayValue}
-                      >
-                        <span className="truncate">{codexHomeDisplayValue}</span>
-                      </div>
-                      <Typography.Text className="mt-1 block text-[11px] text-[#667085]">
-                        {codexHomeDescription}
-                      </Typography.Text>
-                    </div>
-
+                  </SettingsRow>
+                  <SettingsRow description={`工作台“新增命令”可直接套用，已保存 ${terminalTemplates.length} 个`} label="终端命令模板">
                     <Button
-                      className="!h-[32px] !px-3 !text-[12px]"
-                      disabled={!canOpenCodexHomeDirectory}
-                      icon={<FolderOpenOutlined />}
-                      onClick={() => void handleOpenCodexHomeDirectory()}
-                      size="small"
-                    >
-                      打开目录
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="rounded-[0] border border-[#eef2f6] bg-white">
-                  <div className="flex items-center justify-between gap-4 px-4 py-4">
-                    <div className="min-w-0">
-                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
-                        终端模板管理
-                      </Typography.Text>
-                      <Typography.Text className="mt-1 block text-[11px] text-[#667085]">
-                        首页“新增命令”弹窗会直接读取这里维护的终端命令模板。当前已保存{" "}
-                        {terminalTemplates.length} 个模板。
-                      </Typography.Text>
-                    </div>
-                    <Button
-                      className="!h-[32px] !px-3 !text-[12px]"
                       disabled={!desktopRuntimeAvailable || preferencesQuery.isError}
                       icon={<SettingOutlined />}
                       onClick={openTemplateManager}
-                      size="small"
                     >
                       管理模板
                     </Button>
-                  </div>
-                </div>
-
-                <div className="rounded-[0] border border-[#eef2f6] bg-white">
-                  <div className="flex items-center justify-between gap-4 px-4 py-4">
-                    <div className="min-w-0">
-                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
-                        编辑器管理
-                      </Typography.Text>
-                      <Typography.Text className="mt-1 block text-[11px] text-[#667085]">
-                        管理 VS Code / JetBrains 路径。支持从系统变量 PATH 自动检测。当前已配置{" "}
-                        {configuredEditorCount} 个编辑器。
-                      </Typography.Text>
-                    </div>
+                  </SettingsRow>
+                  <SettingsRow description={`VS Code / JetBrains / 自定义编辑器，已配置 ${configuredEditorCount} 个`} label="编辑器">
                     <Button
-                      className="!h-[32px] !px-3 !text-[12px]"
                       disabled={!desktopRuntimeAvailable || preferencesQuery.isError}
                       icon={<SettingOutlined />}
                       onClick={openEditorManager}
-                      size="small"
                     >
                       管理编辑器
                     </Button>
-                  </div>
-                </div>
+                  </SettingsRow>
+                </SettingsGroup>
 
-                <div className="rounded-[0] border border-[#eef2f6] bg-white">
-                  <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
-                    <div className="min-w-0">
-                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
-                        Codex 对话字体
-                      </Typography.Text>
-                    </div>
-
-                    <div className="min-w-0">
-                      <Input
-                        allowClear
-                        className="max-w-[420px]"
-                        disabled={preferenceActionsDisabled}
-                        onBlur={() => void handleSaveCodexHistoryFontFamily()}
-                        onChange={(event) =>
-                          setCodexHistoryFontFamilyDraft(event.target.value)
-                        }
-                        onPressEnter={(event) => event.currentTarget.blur()}
-                        placeholder="系统默认"
-                        size="small"
-                        value={codexHistoryFontFamilyDraft}
-                      />
-                      <Typography.Text className="mt-1 block text-[11px] text-[#667085]">
-                        留空使用系统默认字体，影响 Session / History 和独立 Codex 历史窗口。
-                      </Typography.Text>
-                    </div>
-
+                <SettingsGroup title="Codex">
+                  <SettingsRow description={codexHomeDescription} label="配置目录" wide>
+                    <PathValue value={codexHomeDisplayValue} />
                     <Button
-                      className="!h-[32px] !px-3 !text-[12px]"
+                      disabled={!canOpenCodexHomeDirectory}
+                      icon={<FolderOpenOutlined />}
+                      onClick={() => void handleOpenCodexHomeDirectory()}
+                    >
+                      打开
+                    </Button>
+                  </SettingsRow>
+                  <SettingsRow description="留空使用系统默认，作用于会话历史和独立历史窗口" label="对话字体" wide>
+                    <Input
+                      allowClear
+                      aria-label="Codex 对话字体"
+                      className="min-w-0 flex-1"
+                      disabled={preferenceActionsDisabled}
+                      onBlur={() => void handleSaveCodexHistoryFontFamily()}
+                      onChange={(event) => setCodexHistoryFontFamilyDraft(event.target.value)}
+                      onPressEnter={(event) => event.currentTarget.blur()}
+                      placeholder="系统默认"
+                      value={codexHistoryFontFamilyDraft}
+                    />
+                    <Button
                       disabled={preferenceActionsDisabled || !codexHistoryFontFamily}
                       onClick={() => {
                         setCodexHistoryFontFamilyDraft("");
                         void handleSaveCodexHistoryFontFamily("");
                       }}
-                      size="small"
                     >
                       恢复默认
                     </Button>
-                  </div>
-                </div>
-
-                <div className="rounded-[0] border border-[#eef2f6] bg-white">
-                  <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
-                    <div className="min-w-0">
-                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
-                        Codex 对话字号
-                      </Typography.Text>
-                    </div>
-
-                    <div className="min-w-0">
-                      <Typography.Text className="block text-[11px] text-[#667085]">
-                        默认 12px，可设置 {CODEX_HISTORY_FONT_SIZE_MIN}px 到{" "}
-                        {CODEX_HISTORY_FONT_SIZE_MAX}px。
-                      </Typography.Text>
-                    </div>
-
+                  </SettingsRow>
+                  <SettingsRow
+                    description={`默认 12px，范围 ${CODEX_HISTORY_FONT_SIZE_MIN}–${CODEX_HISTORY_FONT_SIZE_MAX}px`}
+                    label="对话字号"
+                  >
                     <InputNumber
+                      addonAfter="px"
+                      aria-label="Codex 对话字号"
                       className="!w-[120px]"
-                      controls
                       disabled={preferenceActionsDisabled}
                       max={CODEX_HISTORY_FONT_SIZE_MAX}
                       min={CODEX_HISTORY_FONT_SIZE_MIN}
                       onChange={(value) => void handleSaveCodexHistoryFontSize(value)}
                       precision={0}
-                      size="small"
-                      addonAfter="px"
                       value={codexHistoryFontSize}
                     />
-                  </div>
-                </div>
-
-                <div className="rounded-[0] border border-[#eef2f6] bg-white">
-                  <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
-                    <div className="min-w-0">
-                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
-                        Codex Auth 额度刷新间隔
-                      </Typography.Text>
-                    </div>
-
-                    <div className="min-w-0">
-                      <Typography.Text className="block text-[11px] text-[#667085]">
-                        自动按队列刷新全部 Codex Auth 授权额度；默认 60 秒，范围{" "}
-                        {CODEX_AUTH_QUOTA_REFRESH_INTERVAL_MIN} 到{" "}
-                        {CODEX_AUTH_QUOTA_REFRESH_INTERVAL_MAX} 秒。
-                      </Typography.Text>
-                    </div>
-
+                  </SettingsRow>
+                  <SettingsRow
+                    description={`自动轮询全部授权额度，默认 60 秒，范围 ${CODEX_AUTH_QUOTA_REFRESH_INTERVAL_MIN}–${CODEX_AUTH_QUOTA_REFRESH_INTERVAL_MAX} 秒`}
+                    label="额度刷新间隔"
+                  >
                     <InputNumber
-                      className="!w-[132px]"
-                      controls
+                      addonAfter="秒"
+                      aria-label="额度刷新间隔"
+                      className="!w-[120px]"
                       disabled={preferenceActionsDisabled}
                       max={CODEX_AUTH_QUOTA_REFRESH_INTERVAL_MAX}
                       min={CODEX_AUTH_QUOTA_REFRESH_INTERVAL_MIN}
-                      onChange={(value) =>
-                        void handleSaveCodexAuthQuotaRefreshInterval(value)
-                      }
+                      onChange={(value) => void handleSaveCodexAuthQuotaRefreshInterval(value)}
                       precision={0}
-                      size="small"
-                      addonAfter="秒"
                       value={codexAuthQuotaRefreshIntervalSeconds}
                     />
-                  </div>
-                </div>
-
-                <div className="rounded-[0] border border-[#eef2f6] bg-white">
-                  <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
-                    <div className="min-w-0">
-                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
-                        Codex Auth 额度代理
-                      </Typography.Text>
-                    </div>
-
-                    <div className="min-w-0">
-                      <Typography.Text className="block text-[11px] text-[#667085]">
-                        只影响 Codex Auth 额度查询请求。系统代理读取 Windows 当前代理设置。
-                      </Typography.Text>
-                    </div>
-
+                  </SettingsRow>
+                  <SettingsRow description="只影响额度查询；系统代理读取 Windows 当前设置" label="额度查询代理">
                     <Select<CodexAuthProxyMode>
-                      className="!w-[132px]"
+                      aria-label="额度查询代理"
+                      className="!w-[140px]"
                       disabled={preferenceActionsDisabled}
                       onChange={(value) => void handleSaveCodexAuthProxyMode(value)}
                       options={CODEX_AUTH_PROXY_OPTIONS}
-                      size="small"
                       value={codexAuthProxyMode}
                     />
-                  </div>
-
-                  <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 border-t border-[#eef2f6] px-4 py-4">
-                    <div className="min-w-0">
-                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
-                        手动代理地址
-                      </Typography.Text>
-                    </div>
-
+                  </SettingsRow>
+                  <SettingsRow label="手动代理地址" wide>
                     <Input
                       allowClear
-                      className="min-w-0"
+                      aria-label="手动代理地址"
+                      className="min-w-0 flex-1"
                       disabled={preferenceActionsDisabled}
                       maxLength={CODEX_AUTH_MANUAL_PROXY_URL_MAX_LENGTH}
                       onBlur={() => void handleSaveCodexAuthManualProxyUrl()}
-                      onChange={(event) =>
-                        setCodexAuthManualProxyUrlDraft(event.currentTarget.value)
-                      }
-                      onPressEnter={(event) =>
-                        void handleSaveCodexAuthManualProxyUrl(
-                          event.currentTarget.value,
-                        )
-                      }
+                      onChange={(event) => setCodexAuthManualProxyUrlDraft(event.currentTarget.value)}
+                      onPressEnter={(event) => void handleSaveCodexAuthManualProxyUrl(event.currentTarget.value)}
                       placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:7890"
-                      size="small"
                       value={codexAuthManualProxyUrlDraft}
                     />
-
                     <Button
                       disabled={
                         preferenceActionsDisabled ||
                         codexAuthManualProxyUrlDraft.trim() === codexAuthManualProxyUrl
                       }
                       onClick={() => void handleSaveCodexAuthManualProxyUrl()}
-                      size="small"
                     >
-                      保存代理
+                      保存
                     </Button>
-                  </div>
-                </div>
+                  </SettingsRow>
+                </SettingsGroup>
               </div>
             )}
           </>
@@ -1736,8 +1497,8 @@ export default function SettingsPage() {
           <>
             {hotkeyInlineError || hotkeyRecorderError ? (
               <Alert
-                className="mb-4"
                 closable
+                description={hotkeyRecorderError ?? hotkeyInlineError}
                 message="热键设置失败"
                 onClose={() => {
                   setHotkeyInlineError(null);
@@ -1748,22 +1509,16 @@ export default function SettingsPage() {
                 }}
                 showIcon
                 type="error"
-                description={hotkeyRecorderError ?? hotkeyInlineError}
               />
             ) : null}
 
             {hotkeyHealthQuery.data?.status === "degraded" ? (
               <Alert
                 action={
-                  <Button
-                    loading={retryHotkeyMutation.isPending}
-                    onClick={() => retryHotkeyMutation.mutate()}
-                    size="small"
-                  >
+                  <Button loading={retryHotkeyMutation.isPending} onClick={() => retryHotkeyMutation.mutate()} size="small">
                     重试注册
                   </Button>
                 }
-                className="mb-4"
                 description={
                   hotkeyHealthQuery.data.lastError?.message ??
                   "当前持久化快捷键未能注册，可能与其他程序或系统热键冲突。"
@@ -1775,15 +1530,10 @@ export default function SettingsPage() {
             ) : hotkeyHealthQuery.isError ? (
               <Alert
                 action={
-                  <Button
-                    loading={hotkeyHealthQuery.isFetching}
-                    onClick={() => void hotkeyHealthQuery.refetch()}
-                    size="small"
-                  >
+                  <Button loading={hotkeyHealthQuery.isFetching} onClick={() => void hotkeyHealthQuery.refetch()} size="small">
                     重新检测
                   </Button>
                 }
-                className="mb-4"
                 description={getErrorSummary(hotkeyHealthQuery.error).message}
                 message="无法读取全局热键状态"
                 showIcon
@@ -1796,104 +1546,76 @@ export default function SettingsPage() {
                 <Spin size="small" />
               </div>
             ) : (
-              <div className="flex flex-col gap-0">
-                <div className="rounded-[0] border border-[#eef2f6] bg-white">
-                  <div className="grid grid-cols-[180px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-4">
-                    <div className="min-w-0">
-                      <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
-                        截图热键
-                      </Typography.Text>
-                    </div>
-
-                    <div className="min-w-0">
-                      <div
-                        className="flex h-[32px] items-center overflow-hidden rounded-[8px] border border-[#d8e1eb] bg-[#f8fafc] px-3 font-mono text-[12px] text-[#475467]"
-                        title={screenshotCaptureHotkey}
-                      >
-                        <span className="truncate">{screenshotCaptureHotkey}</span>
-                      </div>
-                      <Typography.Text className="mt-1 block text-[11px] text-[#667085]">
-                        {hotkeyRecorderStatus === "recording"
-                          ? hotkeyRecorderPreview
-                            ? `录制中：${hotkeyRecorderPreview}（松开按键后保存）`
-                            : "录制中：请按下新的组合键，按 Esc 取消。"
-                          : `默认 ${DEFAULT_SCREENSHOT_CAPTURE_HOTKEY}，保存后立即生效。截图热键必须包含一个非修饰键，支持左右修饰键组合。`}
-                      </Typography.Text>
-                      {hotkeyHealthQuery.data?.status === "ready" ? (
-                        <Typography.Text className="mt-1 block text-[11px] text-[#16845b]">
-                          运行状态：已注册 {hotkeyHealthQuery.data.registeredBindings.length} 个全局热键
-                        </Typography.Text>
-                      ) : null}
-                    </div>
-
-                    <div className="flex flex-wrap justify-end gap-2">
-                      <Button
-                        className="!h-[32px] !px-3 !text-[12px]"
-                        disabled={
-                          hotkeyActionsDisabled ||
-                          hotkeyRecorderStatus === "saving"
-                        }
-                        loading={hotkeyRecorderStatus === "saving"}
-                        onClick={
-                          hotkeyRecorderStatus === "recording"
-                            ? cancelScreenshotHotkeyRecording
-                            : beginScreenshotHotkeyRecording
-                        }
-                        size="small"
-                        type={hotkeyRecorderStatus === "recording" ? "primary" : "default"}
-                      >
-                        {hotkeyRecorderStatus === "recording" ? "取消录制" : "录制热键"}
-                      </Button>
-                      <Button
-                        className="!h-[32px] !px-3 !text-[12px]"
-                        disabled={
-                          hotkeyActionsDisabled ||
-                          hotkeyRecorderStatus === "saving" ||
-                          screenshotCaptureHotkey === DEFAULT_SCREENSHOT_CAPTURE_HOTKEY
-                        }
-                        onClick={() => void resetScreenshotHotkeyToDefault()}
-                        size="small"
-                      >
-                        恢复默认
-                      </Button>
-                    </div>
-                  </div>
-
+              <div className="flex flex-col gap-5">
+                <SettingsGroup title="截图">
+                  <SettingsRow
+                    description={
+                      hotkeyRecorderStatus === "recording"
+                        ? hotkeyRecorderPreview
+                          ? `录制中：${hotkeyRecorderPreview}（松开按键后保存）`
+                          : "录制中：请按下新的组合键，Esc 取消"
+                        : (
+                          <Tooltip title="必须包含一个非修饰键，支持左右修饰键组合；保存后立即生效。">
+                            <span>
+                              默认 {DEFAULT_SCREENSHOT_CAPTURE_HOTKEY}
+                              {hotkeyHealthQuery.data?.status === "ready" ? (
+                                <span className="ml-2 text-success">
+                                  已注册 {hotkeyHealthQuery.data.registeredBindings.length} 个全局热键
+                                </span>
+                              ) : null}
+                            </span>
+                          </Tooltip>
+                        )
+                    }
+                    label="截图热键"
+                  >
+                    <kbd className="rounded border border-line bg-surface-2 px-2 py-0.5 font-mono text-[12px] text-fg" title={screenshotCaptureHotkey}>
+                      {screenshotCaptureHotkey}
+                    </kbd>
+                    <Button
+                      disabled={hotkeyActionsDisabled || hotkeyRecorderStatus === "saving"}
+                      loading={hotkeyRecorderStatus === "saving"}
+                      onClick={
+                        hotkeyRecorderStatus === "recording"
+                          ? cancelScreenshotHotkeyRecording
+                          : beginScreenshotHotkeyRecording
+                      }
+                      type={hotkeyRecorderStatus === "recording" ? "primary" : "default"}
+                    >
+                      {hotkeyRecorderStatus === "recording" ? "取消录制" : "录制"}
+                    </Button>
+                    <Button
+                      disabled={
+                        hotkeyActionsDisabled ||
+                        hotkeyRecorderStatus === "saving" ||
+                        screenshotCaptureHotkey === DEFAULT_SCREENSHOT_CAPTURE_HOTKEY
+                      }
+                      onClick={() => void resetScreenshotHotkeyToDefault()}
+                    >
+                      恢复默认
+                    </Button>
+                  </SettingsRow>
                   {screenshotHotkeyUsesCtrlAlt ? (
-                    <div className="border-t border-[#eef2f6] px-4 py-3">
+                    <div className="px-3 py-2">
                       <Alert
+                        description={`Windows 下这类组合容易与输入法或系统热键冲突，建议改用默认 ${DEFAULT_SCREENSHOT_CAPTURE_HOTKEY} 或不含 Alt 的组合。`}
+                        message="当前截图热键使用了 Ctrl+Alt 组合"
                         showIcon
                         type="warning"
-                        message="当前截图热键使用了 Ctrl+Alt 组合"
-                        description={`Windows 下这类组合更容易与输入法或系统热键环境冲突，建议改用默认 ${DEFAULT_SCREENSHOT_CAPTURE_HOTKEY} 或其他不含 Alt 的组合。`}
                       />
                     </div>
                   ) : null}
-                </div>
+                </SettingsGroup>
 
                 <PromptQuickPasteSettings
                   disabled={hotkeyActionsDisabled}
                   loadingPrompts={promptsQuery.isLoading || promptsQuery.isFetching}
                   onSave={handleSavePromptQuickPasteSlots}
-                  promptLoadError={
-                    promptsQuery.isError
-                      ? getErrorSummary(promptsQuery.error).message
-                      : null
-                  }
+                  promptLoadError={promptsQuery.isError ? getErrorSummary(promptsQuery.error).message : null}
                   prompts={promptsQuery.data ?? []}
                   registeredCount={registeredPromptQuickPasteCount}
                   slots={promptQuickPasteSlots}
                 />
-
-                <div className="shrink-0 rounded-[0] border border-[#eef2f6] bg-white px-4 py-4">
-                  <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
-                    语音输入热键（预留）
-                  </Typography.Text>
-                  <Typography.Text className="mt-1 block text-[11px] text-[#667085]">
-                    当前阶段已在后端预留 `voiceInputToggle / voiceInputHold` 接口字段，后续合并
-                    voiceType 语音输入能力时可直接接入。
-                  </Typography.Text>
-                </div>
               </div>
             )}
           </>
@@ -1911,7 +1633,7 @@ export default function SettingsPage() {
         <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-4 pt-1">
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <Typography.Text className="text-[12px] font-semibold text-[#1f2937]">
+              <Typography.Text className="text-[12px] font-semibold text-fg">
                 已保存模板
               </Typography.Text>
               <Button
@@ -1950,7 +1672,7 @@ export default function SettingsPage() {
                 })}
               </Reorder.Group>
             ) : (
-              <div className="flex min-h-[220px] items-center justify-center rounded-[12px] border border-dashed border-[#e6edf5] bg-[#fbfcfe]">
+              <div className="flex min-h-[220px] items-center justify-center rounded-[12px] border border-dashed border-line bg-surface-2">
                 <Empty
                   description="还没有终端模板，先点右上角“新建”。"
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
@@ -1959,7 +1681,7 @@ export default function SettingsPage() {
             )}
           </div>
 
-          <div className="flex min-h-[420px] flex-col rounded-[12px] border border-[#eef2f6] bg-[#fbfcfe] p-4">
+          <div className="flex min-h-[420px] flex-col rounded-[12px] border border-line bg-surface-2 p-4">
             {templateInlineError ? (
               <Alert
                 className="mb-4"
@@ -1973,7 +1695,7 @@ export default function SettingsPage() {
             ) : null}
 
             <div className="space-y-1">
-              <Typography.Text className="text-[12px] font-medium text-[#1f2937]">
+              <Typography.Text className="text-[12px] font-medium text-fg">
                 模板名称
               </Typography.Text>
               <Controller
@@ -1991,14 +1713,14 @@ export default function SettingsPage() {
                 )}
               />
               {templateForm.formState.errors.name ? (
-                <Typography.Text className="block text-[11px] text-[#cf5a4a]">
+                <Typography.Text className="block text-[11px] text-danger">
                   {templateForm.formState.errors.name.message}
                 </Typography.Text>
               ) : null}
             </div>
 
             <div className="mt-4 space-y-1">
-              <Typography.Text className="text-[12px] font-medium text-[#1f2937]">
+              <Typography.Text className="text-[12px] font-medium text-fg">
                 终端命令
               </Typography.Text>
               <Controller
@@ -2016,16 +1738,16 @@ export default function SettingsPage() {
                 )}
               />
               {templateForm.formState.errors.commandLine ? (
-                <Typography.Text className="block text-[11px] text-[#cf5a4a]">
+                <Typography.Text className="block text-[11px] text-danger">
                   {templateForm.formState.errors.commandLine.message}
                 </Typography.Text>
               ) : null}
-              <Typography.Text className="block text-[11px] text-[#98a2b3]">
+              <Typography.Text className="block text-[11px] text-fg-3">
                 模板会同步出现在首页“新增命令”的模板下拉里。
               </Typography.Text>
             </div>
 
-            <div className="mt-auto flex items-center justify-end gap-2 border-t border-[#e6edf5] pt-4">
+            <div className="mt-auto flex items-center justify-end gap-2 border-t border-line pt-4">
               {hasPersistedSelectedTemplate && selectedOrderedTemplate ? (
                 <Popconfirm
                   description="删除后首页模板下拉会同步移除这条模板。"
@@ -2082,17 +1804,17 @@ export default function SettingsPage() {
             />
           ) : null}
 
-          <div className="rounded-[12px] border border-[#eef2f6] bg-[#fbfcfe] p-4">
+          <div className="rounded-[12px] border border-line bg-surface-2 p-4">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
+                <Typography.Text className="block text-[12px] font-medium text-fg">
                   PATH 自动检测
                 </Typography.Text>
-                <Typography.Text className="mt-1 block text-[11px] text-[#667085]">
+                <Typography.Text className="mt-1 block text-[11px] text-fg-2">
                   点击后会从系统变量 PATH 探测 VS Code / JetBrains 并自动写回当前设置。
                 </Typography.Text>
                 {editorDetectionResult ? (
-                  <Typography.Text className="mt-1 block text-[11px] text-[#98a2b3]">
+                  <Typography.Text className="mt-1 block text-[11px] text-fg-3">
                     最近检测时间：{editorDetectionResult.checkedAt}
                   </Typography.Text>
                 ) : null}
@@ -2142,13 +1864,13 @@ export default function SettingsPage() {
             onSavePath={() => void handleSaveEditorPath("jetbrains")}
           />
 
-          <div className="rounded-[12px] border border-[#eef2f6] bg-[#fbfcfe] p-4">
+          <div className="rounded-[12px] border border-line bg-surface-2 p-4">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
+                <Typography.Text className="block text-[12px] font-medium text-fg">
                   自定义编辑器列表
                 </Typography.Text>
-                <Typography.Text className="mt-1 block text-[11px] text-[#667085]">
+                <Typography.Text className="mt-1 block text-[11px] text-fg-2">
                   支持手动新增任意编辑器命令（例如：asstudio64），并可增删改后统一保存。
                 </Typography.Text>
               </div>
@@ -2168,7 +1890,7 @@ export default function SettingsPage() {
               {customEditorsDraft.length ? (
                 customEditorsDraft.map((editor) => (
                   <div
-                    className="rounded-[10px] border border-[#e6edf5] bg-white p-3"
+                    className="rounded-[10px] border border-line bg-surface p-3"
                     key={editor.id}
                   >
                     <div className="grid grid-cols-[minmax(0,220px)_minmax(0,1fr)_auto] items-center gap-2">
@@ -2232,15 +1954,15 @@ export default function SettingsPage() {
                   </div>
                 ))
               ) : (
-                <div className="rounded-[10px] border border-dashed border-[#d8e1eb] bg-white px-3 py-5 text-center">
-                  <Typography.Text className="text-[12px] text-[#98a2b3]">
+                <div className="rounded-[10px] border border-dashed border-line-strong bg-surface px-3 py-5 text-center">
+                  <Typography.Text className="text-[12px] text-fg-3">
                     暂无自定义编辑器，点击右上角“新增编辑器”开始添加。
                   </Typography.Text>
                 </div>
               )}
             </div>
 
-            <div className="mt-3 flex justify-end border-t border-[#e6edf5] pt-3">
+            <div className="mt-3 flex justify-end border-t border-line pt-3">
               <Button
                 className="!h-[30px] !px-3 !text-[12px]"
                 disabled={!desktopRuntimeAvailable || preferencesQuery.isError}
@@ -2254,7 +1976,7 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          <div className="flex justify-end border-t border-[#e6edf5] pt-3">
+          <div className="flex justify-end border-t border-line pt-3">
             <Button onClick={closeEditorManager} size="small" type="default">
               关闭
             </Button>
@@ -2290,9 +2012,9 @@ function TemplateReorderItem({
       className={cn(
         "w-full rounded-[12px] border px-3 py-3 text-left transition-[border-color,background-color,opacity] duration-150",
         active
-          ? "border-[#8fd4ec] bg-[#f4fbfe]"
-          : "border-[#e6edf5] bg-[#fbfcfe] hover:border-[#d9e2ec] hover:bg-[#f8fafc]",
-        dragging && "border-[#1697c5] bg-[#eef9fe] opacity-95",
+          ? "border-primary bg-selected"
+          : "border-line bg-surface-2 hover:border-line hover:bg-hover",
+        dragging && "border-primary bg-selected opacity-95",
       )}
       dragControls={dragControls}
       dragListener={false}
@@ -2310,7 +2032,7 @@ function TemplateReorderItem({
       <div className="flex items-start gap-3">
         <div
           aria-label={`拖动排序 ${template.name}`}
-          className="mt-0.5 flex h-6 w-6 cursor-grab touch-none items-center justify-center rounded-[6px] border border-[#d8e1eb] bg-white text-[#667085] active:cursor-grabbing"
+          className="mt-0.5 flex h-6 w-6 cursor-grab touch-none items-center justify-center rounded-[6px] border border-line-strong bg-surface text-fg-2 active:cursor-grabbing"
           onPointerDown={(event) => dragControls.start(event)}
           role="button"
           tabIndex={-1}
@@ -2325,14 +2047,14 @@ function TemplateReorderItem({
           type="button"
         >
           <div className="flex items-center gap-2">
-            <Typography.Text className="block text-[12px] font-medium text-[#1f2937]">
+            <Typography.Text className="block text-[12px] font-medium text-fg">
               {template.name}
             </Typography.Text>
-            <Typography.Text className="text-[10px] text-[#98a2b3]">
+            <Typography.Text className="text-[10px] text-fg-3">
               #{template.sortOrder + 1}
             </Typography.Text>
           </div>
-          <Typography.Text className="mt-1 block truncate font-mono text-[11px] text-[#667085]">
+          <Typography.Text className="mt-1 block truncate font-mono text-[11px] text-fg-2">
             {template.commandLine}
           </Typography.Text>
         </button>
@@ -2375,15 +2097,15 @@ function EditorDetectionCard({
     : "未检测";
   const statusClassName = detection
     ? detection.available
-      ? "border-[#b7ebc0] bg-[#effcf2] text-[#1f7a34]"
-      : "border-[#f2d9d5] bg-[#fff6f5] text-[#b5473b]"
-    : "border-[#d8e1eb] bg-[#f8fafc] text-[#667085]";
+      ? "border-success/40 bg-success-soft text-success"
+      : "border-danger/40 bg-danger-soft text-danger"
+    : "border-line-strong bg-surface-2 text-fg-2";
   const detectedPath = detection?.executablePath?.trim() ?? "";
 
   return (
-    <div className="rounded-[12px] border border-[#eef2f6] bg-[#fbfcfe] p-4">
+    <div className="rounded-[12px] border border-line bg-surface-2 p-4">
       <div className="flex items-center justify-between gap-3">
-        <Typography.Text className="text-[12px] font-medium text-[#1f2937]">
+        <Typography.Text className="text-[12px] font-medium text-fg">
           {label}
         </Typography.Text>
         <span
@@ -2398,11 +2120,11 @@ function EditorDetectionCard({
 
       <div className="mt-3 space-y-2">
         <div>
-          <Typography.Text className="mb-1 block text-[11px] text-[#667085]">
+          <Typography.Text className="mb-1 block text-[11px] text-fg-2">
             当前配置路径
           </Typography.Text>
           <div
-            className="flex h-[32px] items-center overflow-hidden rounded-[8px] border border-[#d8e1eb] bg-white px-3 font-mono text-[12px] text-[#475467]"
+            className="flex h-[32px] items-center overflow-hidden rounded-[8px] border border-line-strong bg-surface px-3 font-mono text-[12px] text-fg-2"
             title={configuredPath || "未配置"}
           >
             <span className="truncate">{configuredPath || "未配置"}</span>
@@ -2410,11 +2132,11 @@ function EditorDetectionCard({
         </div>
 
         <div>
-          <Typography.Text className="mb-1 block text-[11px] text-[#667085]">
+          <Typography.Text className="mb-1 block text-[11px] text-fg-2">
             最近检测路径
           </Typography.Text>
           <div
-            className="flex h-[32px] items-center overflow-hidden rounded-[8px] border border-[#d8e1eb] bg-white px-3 font-mono text-[12px] text-[#475467]"
+            className="flex h-[32px] items-center overflow-hidden rounded-[8px] border border-line-strong bg-surface px-3 font-mono text-[12px] text-fg-2"
             title={detectedPath || "未检测到可执行路径"}
           >
             <span className="truncate">{detectedPath || "未检测到可执行路径"}</span>
@@ -2422,8 +2144,8 @@ function EditorDetectionCard({
         </div>
       </div>
 
-      <div className="mt-3 space-y-2 border-t border-[#e6edf5] pt-3">
-        <Typography.Text className="block text-[11px] text-[#667085]">
+      <div className="mt-3 space-y-2 border-t border-line pt-3">
+        <Typography.Text className="block text-[11px] text-fg-2">
           手动配置路径
         </Typography.Text>
         <Input
@@ -2474,7 +2196,7 @@ function EditorDetectionCard({
       </div>
 
       {detection ? (
-        <Typography.Text className="mt-2 block text-[11px] text-[#667085]">
+        <Typography.Text className="mt-2 block text-[11px] text-fg-2">
           {`来源：${detection.source} · ${detection.message}`}
         </Typography.Text>
       ) : null}

@@ -6,7 +6,7 @@ import {
   SearchOutlined,
   UploadOutlined,
 } from "@ant-design/icons";
-import { Alert, Button, Dropdown, Empty, Input, Spin, Tooltip, Typography } from "antd";
+import { Alert, Button, Dropdown, Empty, Input, Spin, Tooltip } from "antd";
 import { motion, Reorder } from "motion/react";
 import {
   useCallback,
@@ -28,10 +28,9 @@ import {
   orderPromptsByIds,
 } from "@/features/prompts/prompt-model";
 import { usePointerReorder } from "@/lib/use-pointer-reorder";
-import { useShellStore } from "@/stores/shell-store";
 import type { PromptRecord } from "@/types/backend";
 
-const PROMPT_ROW_HEIGHT = 99;
+const PROMPT_ROW_HEIGHT = 56;
 const PROMPT_VIRTUALIZATION_THRESHOLD = 80;
 const PROMPT_LIST_OVERSCAN = 5;
 
@@ -78,7 +77,6 @@ export function PromptSidebar({
   const [orderedPrompts, setOrderedPrompts] = useState(prompts);
   const [motionDraggingId, setMotionDraggingId] = useState<string | null>(null);
   const deferredQuery = useDeferredValue(query);
-  const themeMode = useShellStore((state) => state.themeMode);
   const listRef = useRef<HTMLDivElement | null>(null);
   const latestPromptsRef = useRef(prompts);
   const latestOrderedPromptsRef = useRef(prompts);
@@ -223,15 +221,13 @@ export function PromptSidebar({
     : filteredPrompts;
 
   return (
-    <aside className="flex h-full min-h-0 flex-col overflow-hidden border-r border-[color:var(--border)] bg-panel">
-      <header className="flex h-[70px] shrink-0 items-center justify-between border-b border-[color:var(--border)] px-4">
-        <div className="min-w-0">
-          <Typography.Text className="block text-[13px] font-semibold text-foreground">
-            常用 Prompts
-          </Typography.Text>
-          <Typography.Text className="block text-[11px] text-muted-foreground">
-            {prompts.length.toLocaleString()} 条本地记录
-          </Typography.Text>
+    <aside className="flex h-full min-h-0 flex-col overflow-hidden border-r border-line bg-surface">
+      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-line px-3">
+        <div className="flex min-w-0 flex-1 items-baseline gap-2">
+          <h2 className="m-0 text-[13px] font-semibold text-fg">Prompts</h2>
+          <span className="text-[12px] text-fg-3">
+            {query.trim() ? `${filteredPrompts.length}/${prompts.length}` : prompts.length.toLocaleString()}
+          </span>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <Tooltip title="新增 Prompt">
@@ -240,8 +236,19 @@ export function PromptSidebar({
               disabled={busy}
               icon={<PlusOutlined />}
               onClick={onCreate}
-              shape="circle"
-              type="primary"
+              size="small"
+              type="text"
+            />
+          </Tooltip>
+          <Tooltip title="刷新列表">
+            <Button
+              aria-label="刷新 Prompt 列表"
+              disabled={busy || !desktopRuntimeAvailable}
+              icon={<ReloadOutlined />}
+              loading={refreshing}
+              onClick={() => void onRefresh()}
+              size="small"
+              type="text"
             />
           </Tooltip>
           <Dropdown
@@ -275,7 +282,7 @@ export function PromptSidebar({
                 aria-label="打开 Prompt 导入导出菜单"
                 icon={<MoreOutlined />}
                 loading={transferBusy}
-                shape="circle"
+                size="small"
                 type="text"
               />
             </Tooltip>
@@ -283,7 +290,7 @@ export function PromptSidebar({
         </div>
       </header>
 
-      <div className="shrink-0 border-b border-[color:var(--border)] p-3">
+      <div className="shrink-0 border-b border-line px-2 py-2">
         <Input
           allowClear
           aria-label="搜索 Prompts"
@@ -296,26 +303,9 @@ export function PromptSidebar({
             }
           }}
           placeholder="搜索标题或内容"
-          prefix={<SearchOutlined className="text-muted-foreground" />}
+          prefix={<SearchOutlined className="text-fg-3" />}
           value={query}
         />
-        <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
-          <span>{filteredPrompts.length} / {prompts.length}</span>
-          <div className="flex items-center gap-1">
-            {query.trim() ? <span>清空搜索后可排序</span> : <span>拖拽或方向键排序</span>}
-            <Tooltip title="刷新列表">
-              <Button
-                aria-label="刷新 Prompt 列表"
-                disabled={busy || !desktopRuntimeAvailable}
-                icon={<ReloadOutlined />}
-                loading={refreshing}
-                onClick={() => void onRefresh()}
-                size="small"
-                type="text"
-              />
-            </Tooltip>
-          </div>
-        </div>
       </div>
 
       {errorMessage ? (
@@ -337,7 +327,7 @@ export function PromptSidebar({
       ) : null}
 
       <motion.div
-        className="min-h-0 flex-1 overflow-y-auto px-2 py-2"
+        className="min-h-0 flex-1 overflow-y-auto p-1"
         layoutScroll
         onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
         ref={listRef}
@@ -352,7 +342,7 @@ export function PromptSidebar({
             <Reorder.Group
               as="div"
               axis="y"
-              className="flex flex-col gap-[5px]"
+              className="flex flex-col"
               onReorder={handlePreviewMotionReorder}
               values={orderedPrompts.map((prompt) => prompt.id)}
             >
@@ -374,7 +364,6 @@ export function PromptSidebar({
                   reorderTooltip={reorderTooltip}
                   selected={selectedId === prompt.id}
                   sortingDisabled={sortingDisabled}
-                  themeMode={themeMode}
                 />
               ))}
             </Reorder.Group>
@@ -410,14 +399,13 @@ export function PromptSidebar({
                       reorderTooltip={reorderTooltip}
                       selected={selectedId === prompt.id}
                       sortingDisabled={sortingDisabled}
-                      themeMode={themeMode}
                     />
                   </div>
                 );
               })}
             </div>
           ) : (
-            <div className="flex flex-col gap-[5px]">
+            <div className="flex flex-col">
               {renderedPrompts.map((prompt) => (
                 <PromptListItem
                   busy={busy}
@@ -436,7 +424,6 @@ export function PromptSidebar({
                   reorderTooltip={reorderTooltip}
                   selected={selectedId === prompt.id}
                   sortingDisabled={sortingDisabled}
-                  themeMode={themeMode}
                 />
               ))}
             </div>

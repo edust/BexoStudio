@@ -4,6 +4,8 @@ mod desktop_duplication_capture;
 mod hotkey_service;
 #[cfg(target_os = "windows")]
 mod native_interaction_backend_windows;
+#[cfg(target_os = "windows")]
+mod native_selection_renderer_windows;
 mod native_interaction_service;
 #[cfg(target_os = "windows")]
 mod native_preview_backend_windows;
@@ -20,6 +22,7 @@ mod prompt_transfer_service;
 mod resource_browser_service;
 mod restore_service;
 mod screenshot_service;
+mod screenshot_export_image;
 mod wgc_capture;
 mod windows_hook_hotkey;
 mod workspace_service;

@@ -254,6 +254,7 @@ pub fn run() {
             commands::workspace::upsert_workspace,
             commands::workspace::update_workspace_description,
             commands::workspace::reorder_workspaces,
+            commands::workspace::set_workspaces_archived,
             commands::workspace::delete_workspace,
             commands::workspace::register_workspace_folder,
             commands::workspace::remove_workspace_registration,

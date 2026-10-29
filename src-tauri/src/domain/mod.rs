@@ -136,7 +136,8 @@ pub use validation::{
 };
 pub use workspace::{
     normalize_workspace_description, validate_workspace_id, DeleteResult, ReorderWorkspacesInput,
-    UpdateWorkspaceDescriptionInput, UpsertWorkspaceInput, WorkspaceRecord,
+    SetWorkspacesArchivedInput, SetWorkspacesArchivedResult, UpdateWorkspaceDescriptionInput,
+    UpsertWorkspaceInput, WorkspaceRecord,
 };
 pub use workspace_transfer::{
     validate_workspace_transfer_document, ApplyWorkspaceListImportInput, ExportWorkspaceListInput,

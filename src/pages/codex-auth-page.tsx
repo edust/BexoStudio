@@ -5,13 +5,15 @@ import {
   PlusOutlined,
   ReloadOutlined,
   SaveOutlined,
+  SearchOutlined,
   SwapOutlined,
 } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Empty, Input, Popconfirm, Spin, Tag, Tooltip, Typography } from "antd";
+import { Alert, Button, Empty, Input, Popconfirm, Spin, Tooltip } from "antd";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import { PaneHeader } from "@/components/shell/pane-header";
 import { cn } from "@/lib/cn";
 import { defaultAppPreferences } from "@/lib/app-preferences";
 import { getCodexHomeDirectory, getErrorSummary, hasDesktopRuntime } from "@/lib/command-client";
@@ -28,7 +30,6 @@ import {
   upsertCodexAuthProfile,
 } from "@/queries/codex-auth";
 import { appPreferencesQueryKey, getAppPreferences } from "@/queries/preferences";
-import { useShellStore } from "@/stores/shell-store";
 import type {
   CodexAuthProfileDetail,
   CodexAuthProfileSummary,
@@ -58,8 +59,6 @@ type AutoRefreshStatus = {
 
 export default function CodexAuthPage() {
   const desktopRuntimeAvailable = hasDesktopRuntime();
-  const themeMode = useShellStore((state) => state.themeMode);
-  const isDark = themeMode === "dark";
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<DraftState>(() => buildEmptyDraft(""));
@@ -364,274 +363,240 @@ export default function CodexAuthPage() {
     profileDetailQuery.isFetching;
 
   return (
-    <div className="flex h-full max-h-full min-h-0 flex-col overflow-hidden bg-panel">
-      <header
-        className={cn(
-          "flex min-h-[76px] shrink-0 items-center justify-between border-b px-5",
-          isDark ? "border-[#353535]" : "border-[#e6edf5]",
-        )}
-      >
-        <div className="min-w-0">
-          <Typography.Title className="!mb-1 !text-[22px]" level={2}>
-            Codex Auth
-          </Typography.Title>
-          <Typography.Paragraph className="!mb-0 !text-[12px] !text-[#6f7f93]">
-            只管理 Codex 的 auth.json 与 config.toml；不包含其他 AI CLI 或 ChatGPT 登录托管。
-          </Typography.Paragraph>
-        </div>
-        <div className="flex items-center gap-2">
-          <AutoRefreshStatusTag
-            intervalSeconds={autoRefreshIntervalSeconds}
-            status={autoRefreshStatus}
+    <div className="grid h-full max-h-full min-h-0 grid-cols-[300px_minmax(0,1fr)] overflow-hidden bg-surface">
+      <aside aria-label="Codex 授权列表" className="flex min-h-0 flex-col overflow-hidden border-r border-line">
+        <PaneHeader
+          actions={
+            <>
+              <Tooltip title="导入当前正在使用的 Codex 授权">
+                <Button
+                  aria-label="导入当前授权"
+                  disabled={busy}
+                  icon={<ImportOutlined />}
+                  loading={importMutation.isPending}
+                  onClick={() => {
+                    setInlineError(null);
+                    importMutation.mutate();
+                  }}
+                  size="small"
+                  type="text"
+                />
+              </Tooltip>
+              <Tooltip title="新增授权">
+                <Button aria-label="新增授权" disabled={busy} icon={<PlusOutlined />} onClick={handleNewProfile} size="small" type="text" />
+              </Tooltip>
+            </>
+          }
+          meta={profiles.length ? filteredProfiles.length === profiles.length ? profiles.length : `${filteredProfiles.length}/${profiles.length}` : null}
+          title="Codex 授权"
+        />
+        <div className="flex shrink-0 items-center gap-1 border-b border-line px-2 py-2">
+          <Input
+            allowClear
+            aria-label="搜索授权"
+            onChange={(event) => setQueryText(event.target.value)}
+            placeholder="搜索名称或目录"
+            prefix={<SearchOutlined className="text-fg-3" />}
+            value={queryText}
           />
-          <Button
-            disabled={busy}
-            icon={<ImportOutlined />}
-            loading={importMutation.isPending}
-            onClick={() => {
-              setInlineError(null);
-              importMutation.mutate();
-            }}
-          >
-            导入当前
-          </Button>
-          <Button disabled={busy} icon={<PlusOutlined />} onClick={handleNewProfile}>
-            新增授权
-          </Button>
-        </div>
-      </header>
-
-      <div className="grid min-h-0 flex-1 grid-cols-[390px_minmax(0,1fr)] overflow-hidden">
-        <aside
-          className={cn(
-            "flex min-h-0 flex-col overflow-hidden border-r",
-            isDark ? "border-[#353535]" : "border-[#e6edf5]",
-          )}
-        >
-          <div className="shrink-0 border-b border-[color:var(--border)] p-4">
-            <Input
-              allowClear
-              placeholder="搜索授权名称或目录"
-              size="middle"
-              value={queryText}
-              onChange={(event) => setQueryText(event.target.value)}
+          <Tooltip title="刷新列表">
+            <Button
+              aria-label="刷新授权列表"
+              disabled={busy}
+              icon={<ReloadOutlined />}
+              loading={profilesQuery.isFetching}
+              onClick={() => void profilesQuery.refetch()}
+              type="text"
             />
-            <div className="mt-3 flex items-center justify-between text-[12px] text-muted-foreground">
-              <span>{filteredProfiles.length} / {profiles.length}</span>
-              <div className="flex items-center gap-1">
-                <Tooltip title="当前使用优先；其余按 5 小时和 7 天剩余额度冗余排序">
-                  <Tag className="m-0" color="blue">
-                    可用优先
-                  </Tag>
-                </Tooltip>
-                <Tooltip title="刷新列表">
+          </Tooltip>
+        </div>
+        <div className="flex h-7 shrink-0 items-center justify-between px-3 text-[12px] text-fg-3">
+          <Tooltip title="当前使用优先，其余按 5 小时与 7 天剩余额度排序">
+            <span>按可用额度排序</span>
+          </Tooltip>
+          <AutoRefreshStatusTag intervalSeconds={autoRefreshIntervalSeconds} status={autoRefreshStatus} />
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-1">
+          {!desktopRuntimeAvailable ? (
+            <Empty description="请在桌面应用中管理 Codex 授权" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          ) : profilesQuery.isLoading ? (
+            <div className="flex h-full items-center justify-center">
+              <Spin size="small" />
+            </div>
+          ) : filteredProfiles.length ? (
+            filteredProfiles.map((profile) => (
+              <button
+                aria-current={selectedId === profile.id ? "true" : undefined}
+                className={cn(
+                  "flex w-full flex-col gap-0.5 rounded-md px-2.5 py-2 text-left transition-colors disabled:cursor-not-allowed",
+                  selectedId === profile.id ? "bg-selected" : "hover:bg-hover",
+                )}
+                disabled={busy}
+                key={profile.id}
+                onClick={() => setSelectedId(profile.id)}
+                title={profile.codexHome}
+                type="button"
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-fg">{profile.name}</span>
+                  {profile.isActive ? (
+                    <span className="shrink-0 rounded bg-primary px-1.5 text-[11px] leading-[18px] text-white">当前</span>
+                  ) : null}
+                </span>
+                <QuotaInlineSummary profile={profile} />
+              </button>
+            ))
+          ) : (
+            <Empty
+              description={queryText.trim() ? "没有匹配的授权" : "还没有 Codex 授权"}
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+            />
+          )}
+        </div>
+      </aside>
+
+      <main className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+        <PaneHeader
+          actions={
+            <>
+              {draft.id ? (
+                <>
+                  <Button
+                    disabled={busy || autoRefreshing}
+                    icon={<ReloadOutlined />}
+                    loading={quotaMutation.isPending}
+                    onClick={() => {
+                      setInlineError(null);
+                      quotaMutation.mutate(draft.id!);
+                    }}
+                    size="small"
+                  >
+                    查询额度
+                  </Button>
                   <Button
                     disabled={busy}
-                    icon={<ReloadOutlined />}
-                    loading={profilesQuery.isFetching}
+                    icon={<SwapOutlined />}
+                    loading={switchMutation.isPending}
+                    onClick={() => {
+                      setInlineError(null);
+                      switchMutation.mutate(draft.id!);
+                    }}
                     size="small"
-                    type="text"
-                    onClick={() => void profilesQuery.refetch()}
-                  />
-                </Tooltip>
-              </div>
-            </div>
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-2">
-            {!desktopRuntimeAvailable ? (
-              <Alert message="需要在桌面应用中管理 Codex 授权" showIcon type="warning" />
-            ) : profilesQuery.isLoading ? (
-              <div className="flex h-full items-center justify-center">
-                <Spin />
-              </div>
-            ) : filteredProfiles.length ? (
-              <div className="space-y-2">
-                {filteredProfiles.map((profile) => (
-                  <button
-                    className={cn(
-                      "w-full rounded-[10px] border px-3 py-3 text-left transition-colors",
-                      selectedId === profile.id
-                        ? "border-[#087fc5] bg-[#0b76b7]/20"
-                        : isDark
-                          ? "border-[#353535] bg-[#252526] hover:bg-[#2d2d30]"
-                          : "border-[#e3eaf2] bg-white hover:bg-[#f7fafc]",
-                    )}
-                    key={profile.id}
-                    disabled={busy}
-                    onClick={() => setSelectedId(profile.id)}
-                    type="button"
+                    type="primary"
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="truncate text-[14px] font-semibold">{profile.name}</span>
-                      {profile.isActive ? <Tag color="blue">当前</Tag> : null}
-                    </div>
-                    <div className="mt-1 line-clamp-2 text-[12px] text-muted-foreground">
-                      {profile.description || "未填写说明"}
-                    </div>
-                    <div className="mt-2 truncate font-mono text-[11px] text-[#8aa0bd]">
-                      {profile.codexHome}
-                    </div>
-                    <QuotaInlineSummary profile={profile} />
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <Empty description="没有 Codex 授权记录" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-            )}
-          </div>
-        </aside>
-
-        <main className="flex min-h-0 min-w-0 flex-col overflow-hidden">
-          {inlineError ? (
-            <Alert
-              className="mx-4 mt-4 shrink-0"
-              closable
-              description={inlineError}
-              message="Codex Auth 操作失败"
-              showIcon
-              type="error"
-              onClose={() => setInlineError(null)}
-            />
-          ) : null}
-
-          <section
-            className={cn(
-              "flex min-h-0 flex-1 flex-col overflow-hidden",
-              isDark ? "bg-[#242424]" : "bg-white",
-            )}
-          >
-            <div className="flex shrink-0 items-center justify-between border-b border-[color:var(--border)] px-4 py-3">
-              <div className="min-w-0">
-                <Typography.Title className="!mb-0 !text-[16px]" level={3}>
-                  {draft.id ? "编辑授权" : "新增授权"}
-                </Typography.Title>
-                <Typography.Text className="text-[12px] text-muted-foreground">
-                  保存后才会进入列表；点击“切换使用”才会写入 Codex 真实配置目录。
-                </Typography.Text>
-              </div>
-              <div className="flex items-center gap-2">
-                {draft.id ? (
-                  <>
-                    <Button
-                      icon={<ReloadOutlined />}
-                      disabled={busy || autoRefreshing}
-                      loading={quotaMutation.isPending}
-                      onClick={() => {
-                        setInlineError(null);
-                        quotaMutation.mutate(draft.id!);
-                      }}
-                    >
-                      查询额度
-                    </Button>
-                    <Button
-                      disabled={busy}
-                      icon={<SwapOutlined />}
-                      loading={switchMutation.isPending}
-                      type="primary"
-                      onClick={() => {
-                        setInlineError(null);
-                        switchMutation.mutate(draft.id!);
-                      }}
-                    >
-                      切换使用
-                    </Button>
-                  </>
-                ) : null}
+                    切换使用
+                  </Button>
+                </>
+              ) : null}
+              <Tooltip title="保存到 Bexo Studio；切换使用后才会写入 Codex 配置目录">
                 <Button
                   disabled={busy}
                   icon={<SaveOutlined />}
                   loading={saveMutation.isPending}
                   onClick={handleSave}
+                  size="small"
+                  type={draft.id ? "default" : "primary"}
                 >
                   保存
                 </Button>
-                {draft.id ? (
-                  <Popconfirm
-                    title="删除这条 Codex 授权记录？"
-                    description="只删除 Bexo Studio 中的记录，不删除磁盘上的 auth.json 或 config.toml。"
-                    okText="删除"
-                    cancelText="取消"
-                    onConfirm={() => {
-                      setInlineError(null);
-                      deleteMutation.mutate(draft.id!);
-                    }}
-                  >
+              </Tooltip>
+              {draft.id ? (
+                <Popconfirm
+                  cancelText="取消"
+                  description="只删除 Bexo Studio 中的记录，不删除磁盘上的 auth.json 或 config.toml。"
+                  okButtonProps={{ danger: true }}
+                  okText="删除"
+                  onConfirm={() => {
+                    setInlineError(null);
+                    deleteMutation.mutate(draft.id!);
+                  }}
+                  title="删除这条授权记录？"
+                >
+                  <Tooltip title="删除">
                     <Button
+                      aria-label="删除授权"
                       danger
                       disabled={busy}
                       icon={<DeleteOutlined />}
                       loading={deleteMutation.isPending}
-                    >
-                      删除
-                    </Button>
-                  </Popconfirm>
-                ) : null}
-              </div>
-            </div>
+                      size="small"
+                      type="text"
+                    />
+                  </Tooltip>
+                </Popconfirm>
+              ) : null}
+            </>
+          }
+          meta={draft.id ? null : "未保存"}
+          title={draft.id ? draft.name || "未命名授权" : "新增授权"}
+        />
 
-            <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden p-4">
-              {selectedQuota ? <QuotaPanel quota={selectedQuota} /> : null}
+        {inlineError ? (
+          <Alert
+            banner
+            closable
+            description={inlineError}
+            message="操作失败"
+            onClose={() => setInlineError(null)}
+            showIcon
+            type="error"
+          />
+        ) : null}
 
-              <div className="grid shrink-0 grid-cols-[220px_minmax(0,1fr)] gap-3">
-                <FieldLabel title="名称" />
-                <Input
-                  disabled={busy}
-                  value={draft.name}
-                  onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
-                />
-                <FieldLabel title="说明" />
-                <Input
-                  disabled={busy}
-                  value={draft.description}
-                  onChange={(event) =>
-                    setDraft((current) => ({ ...current, description: event.target.value }))
-                  }
-                />
-                <FieldLabel title="Codex 配置目录" />
-                <Input
-                  className="font-mono"
-                  disabled={busy}
-                  value={draft.codexHome}
-                  onChange={(event) =>
-                    setDraft((current) => ({ ...current, codexHome: event.target.value }))
-                  }
-                />
-              </div>
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-3">
+          {selectedQuota ? <QuotaPanel quota={selectedQuota} /> : null}
 
-              <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 xl:grid-cols-2">
-                <ConfigEditor
-                  disabled={busy}
-                  label="auth.json"
-                  value={draft.authJson}
-                  onChange={(value) => setDraft((current) => ({ ...current, authJson: value }))}
-                />
-                <ConfigEditor
-                  disabled={busy}
-                  label="config.toml"
-                  value={draft.configToml}
-                  onChange={(value) => setDraft((current) => ({ ...current, configToml: value }))}
-                />
-              </div>
-            </div>
-          </section>
+          <div className="grid shrink-0 grid-cols-[72px_minmax(0,1fr)_72px_minmax(0,1fr)] items-center gap-x-3 gap-y-2">
+            <FieldLabel htmlFor="codex-auth-name" title="名称" />
+            <Input
+              disabled={busy}
+              id="codex-auth-name"
+              onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+              value={draft.name}
+            />
+            <FieldLabel htmlFor="codex-auth-description" title="说明" />
+            <Input
+              disabled={busy}
+              id="codex-auth-description"
+              onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))}
+              placeholder="可选"
+              value={draft.description}
+            />
+            <FieldLabel htmlFor="codex-auth-home" title="配置目录" />
+            <Input
+              className="col-span-3 font-mono"
+              disabled={busy}
+              id="codex-auth-home"
+              onChange={(event) => setDraft((current) => ({ ...current, codexHome: event.target.value }))}
+              value={draft.codexHome}
+            />
+          </div>
 
-          {busy ? (
-            <div className="pointer-events-none fixed bottom-4 right-4 rounded-full border border-[color:var(--border)] bg-panel-elevated px-3 py-2 text-[12px] shadow-lg">
-              正在处理 Codex Auth 操作...
-            </div>
-          ) : null}
-        </main>
-      </div>
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 xl:grid-cols-2">
+            <ConfigEditor
+              disabled={busy}
+              label="auth.json"
+              onChange={(value) => setDraft((current) => ({ ...current, authJson: value }))}
+              value={draft.authJson}
+            />
+            <ConfigEditor
+              disabled={busy}
+              label="config.toml"
+              onChange={(value) => setDraft((current) => ({ ...current, configToml: value }))}
+              value={draft.configToml}
+            />
+          </div>
+        </div>
+      </main>
     </div>
   );
 }
 
-function FieldLabel({ title, description }: { title: string; description?: string }) {
+function FieldLabel({ htmlFor, title }: { htmlFor: string; title: string }) {
   return (
-    <div>
-      <div className="text-[13px] font-semibold">{title}</div>
-      {description ? <div className="mt-0.5 text-[12px] text-muted-foreground">{description}</div> : null}
-    </div>
+    <label className="text-[12px] text-fg-2" htmlFor={htmlFor}>
+      {title}
+    </label>
   );
 }
 
@@ -648,17 +613,18 @@ function ConfigEditor({
 }) {
   return (
     <div className="flex min-h-0 flex-col">
-      <div className="mb-2 flex items-center justify-between">
-        <span className="text-[13px] font-semibold">{label}</span>
-        <Tag>{value.length.toLocaleString()} chars</Tag>
+      <div className="mb-1 flex items-center justify-between text-[12px]">
+        <span className="font-mono font-medium text-fg">{label}</span>
+        <span className="text-fg-3">{value.length.toLocaleString()} 字符</span>
       </div>
       <Input.TextArea
+        aria-label={label}
+        autoSize={false}
         className="allow-text-selection !h-full !min-h-0 !resize-none font-mono !text-[12px]"
         disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
         spellCheck={false}
         value={value}
-        autoSize={false}
-        onChange={(event) => onChange(event.target.value)}
       />
     </div>
   );
@@ -672,25 +638,25 @@ function AutoRefreshStatusTag({
   status: AutoRefreshStatus;
 }) {
   if (status.phase === "refreshing") {
-    return <Tag color="processing">自动刷新中</Tag>;
+    return <span className="text-primary">额度刷新中…</span>;
   }
 
   if (status.phase === "idle") {
-    return <Tag>自动刷新 {intervalSeconds}s</Tag>;
+    return <span>每 {intervalSeconds}s 刷新额度</span>;
   }
 
   const title = status.error
     ? `上轮刷新失败：${status.error}`
     : status.lastResult
       ? `上轮完成：成功 ${status.lastResult.refreshed}，失败 ${status.lastResult.failed}，共 ${status.lastResult.total}。完成时间：${formatDateTime(status.lastResult.finishedAt)}`
-      : "等待下一轮 Codex Auth 额度刷新";
+      : "等待下一轮额度刷新";
 
   return (
     <Tooltip title={title}>
-      <Tag color={status.error ? "gold" : "blue"}>
-        {status.error ? "刷新失败，" : "下次刷新 "}
-        {status.countdownSeconds}s
-      </Tag>
+      <span className={status.error ? "text-warning" : undefined}>
+        {status.error ? "刷新失败，" : ""}
+        {status.countdownSeconds}s 后刷新
+      </span>
     </Tooltip>
   );
 }
@@ -698,79 +664,75 @@ function AutoRefreshStatusTag({
 function QuotaInlineSummary({ profile }: { profile: CodexAuthProfileSummary }) {
   const quota = profile.lastQuota;
   if (!quota) {
-    return <div className="mt-2 text-[11px] text-muted-foreground">未查询额度</div>;
+    return <span className="truncate text-[12px] text-fg-3">{profile.description || "未查询额度"}</span>;
   }
   if (!quota.success) {
-    return <div className="mt-2 text-[11px] text-[#d59a35]">额度不可用：{quota.credentialStatus}</div>;
+    return <span className="truncate text-[12px] text-warning">额度不可用：{quota.credentialStatus}</span>;
   }
   const weeklyQuotaExhausted = isWeeklyQuotaExhausted(profile);
   return (
-    <div className="mt-2 flex flex-wrap gap-1">
+    <span className="flex min-w-0 items-center gap-3 text-[12px] text-fg-3">
       {quota.tiers.slice(0, 2).map((tier) => (
-        <Tag color={quotaColor(tier.utilization)} key={tier.name}>
-          {formatTierName(tier.name)} {formatPercent(tier.utilization)}
-        </Tag>
+        <span className="shrink-0" key={tier.name}>
+          {formatTierName(tier.name)}{" "}
+          <span className={quotaTextClassName(tier.utilization)}>{formatPercent(tier.utilization)}</span>
+        </span>
       ))}
-      {weeklyQuotaExhausted ? <Tag color="red">周限额满</Tag> : null}
-    </div>
+      {weeklyQuotaExhausted ? <span className="shrink-0 text-danger">周限额已满</span> : null}
+      {profile.description ? <span className="min-w-0 truncate">{profile.description}</span> : null}
+    </span>
   );
 }
 
 function QuotaPanel({ quota }: { quota: NonNullable<CodexAuthProfileSummary["lastQuota"]> }) {
   return (
-    <div className="rounded-[10px] border border-[color:var(--border)] bg-panel-muted p-3">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          {quota.success ? <CheckCircleOutlined className="text-[#3ca267]" /> : null}
-          <span className="text-[13px] font-semibold">
-            {quota.success ? "Codex 额度" : "额度查询失败"}
-          </span>
-          <Tag>{quota.credentialStatus}</Tag>
-        </div>
-        <span className="text-[12px] text-muted-foreground">{formatDateTime(quota.queriedAt)}</span>
+    <section aria-label="Codex 额度" className="shrink-0 rounded-md border border-line px-3 py-2">
+      <div className="flex items-center gap-2 text-[12px]">
+        {quota.success ? <CheckCircleOutlined className="text-success" /> : null}
+        <span className="font-medium text-fg">{quota.success ? "额度" : "额度查询失败"}</span>
+        <span className="text-fg-3">{quota.credentialStatus}</span>
+        <span className="ml-auto text-fg-3">更新于 {formatDateTime(quota.queriedAt)}</span>
       </div>
       {quota.success ? (
-        <div className="mt-3 grid gap-2">
-          {quota.tiers.length ? (
-            quota.tiers.map((tier) => (
+        quota.tiers.length ? (
+          <div className="mt-2 grid gap-x-6 gap-y-2 md:grid-cols-2">
+            {quota.tiers.map((tier) => (
               <div key={tier.name}>
                 <div className="mb-1 flex justify-between text-[12px]">
-                  <span>{formatTierName(tier.name)}</span>
-                  <span>{formatPercent(tier.utilization)}</span>
+                  <span className="text-fg-2">{formatTierName(tier.name)}</span>
+                  <span className="text-fg">
+                    已用 {formatPercent(tier.utilization)}
+                    {tier.resetsAt ? <span className="ml-2 text-fg-3">{formatDateTime(tier.resetsAt)} 重置</span> : null}
+                  </span>
                 </div>
-                <div className="h-2 overflow-hidden rounded-full bg-black/10">
+                <div className="h-1.5 overflow-hidden rounded-full bg-hover">
                   <div
                     className={cn(
                       "h-full rounded-full",
-                      tier.utilization >= 90
-                        ? "bg-[#c94d4d]"
-                        : tier.utilization >= 70
-                          ? "bg-[#d49a32]"
-                          : "bg-[#3ca267]",
+                      tier.utilization >= 90 ? "bg-danger" : tier.utilization >= 70 ? "bg-warning" : "bg-success",
                     )}
                     style={{ width: `${Math.max(0, Math.min(100, tier.utilization))}%` }}
                   />
                 </div>
-                {tier.resetsAt ? (
-                  <div className="mt-1 text-[11px] text-muted-foreground">
-                    重置：{formatDateTime(tier.resetsAt)}
-                  </div>
-                ) : null}
               </div>
-            ))
-          ) : (
-            <Typography.Text className="text-[12px] text-muted-foreground">
-              API 返回成功，但没有额度窗口。
-            </Typography.Text>
-          )}
-        </div>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-1 text-[12px] text-fg-3">查询成功，但没有返回额度窗口。</div>
+        )
       ) : (
-        <Typography.Paragraph className="!mb-0 !mt-2 !text-[12px] !text-muted-foreground">
+        <div className="mt-1 text-[12px] text-fg-2">
           {quota.credentialMessage ?? quota.error ?? "当前授权无法查询官方 Codex 额度。"}
-        </Typography.Paragraph>
+        </div>
       )}
-    </div>
+    </section>
   );
+}
+
+function quotaTextClassName(utilization: number) {
+  if (utilization >= 90) return "text-danger";
+  if (utilization >= 70) return "text-warning";
+  return "text-fg-2";
 }
 
 type QuotaSortMetrics = {
@@ -923,12 +885,6 @@ function profileToDraft(profile: CodexAuthProfileDetail): DraftState {
     authJson: profile.authJson,
     configToml: profile.configToml,
   };
-}
-
-function quotaColor(value: number) {
-  if (value >= 90) return "red";
-  if (value >= 70) return "gold";
-  return "green";
 }
 
 function formatTierName(value: string) {

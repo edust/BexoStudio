@@ -112,7 +112,17 @@ pub async fn get_screenshot_selection_render(
     selection: ScreenshotSelectionInput,
 ) -> Result<CommandResponse<ScreenshotSelectionRenderView>, AppError> {
     let started_at = Instant::now();
-    match screenshot_service.get_selection_render(&session_id, selection) {
+    let service = screenshot_service.inner().clone();
+    let render_session_id = session_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        service.get_selection_render(&render_session_id, selection)
+    })
+    .await
+    .map_err(|error| {
+        AppError::new("SCREENSHOT_RENDER_WORKER_FAILED", "截图渲染任务失败")
+            .with_detail("reason", error.to_string())
+    })?;
+    match result {
         Ok(data) => {
             log::info!(
                 target: "bexo::command::screenshot",
@@ -147,24 +157,18 @@ pub async fn copy_screenshot_selection(
     selection: ScreenshotSelectionInput,
     rendered_image: Option<ScreenshotRenderedImageInput>,
 ) -> Result<CommandResponse<CopyScreenshotSelectionResult>, AppError> {
-    match screenshot_service.copy_selection(&app_handle, &session_id, selection, rendered_image) {
-        Ok(data) => {
-            if let Err(error) = screenshot_service.hide_and_clear_native_interaction(&app_handle) {
-                log::warn!(
-                    target: "bexo::command::screenshot",
-                    "hide native interaction window after copy failed: {}",
-                    error
-                );
-            }
-            if let Err(error) = screenshot_service.restore_overlay_hot_state(&app_handle) {
-                log::warn!(
-                    target: "bexo::command::screenshot",
-                    "hide overlay window after copy failed: {}",
-                    error
-                );
-            }
-            Ok(CommandResponse::success(data))
-        }
+    let service = screenshot_service.inner().clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let data = service.copy_selection(&app_handle, &session_id, selection, rendered_image)?;
+        Ok(data)
+    })
+    .await
+    .map_err(|error| {
+        AppError::new("SCREENSHOT_COPY_WORKER_FAILED", "截图复制任务失败")
+            .with_detail("reason", error.to_string())
+    })?;
+    match result {
+        Ok(data) => Ok(CommandResponse::success(data)),
         Err(error) => {
             log::error!(
                 target: "bexo::command::screenshot",
@@ -185,30 +189,24 @@ pub async fn save_screenshot_selection(
     file_path: Option<String>,
     rendered_image: Option<ScreenshotRenderedImageInput>,
 ) -> Result<CommandResponse<SaveScreenshotSelectionResult>, AppError> {
-    match screenshot_service.save_selection(
-        &app_handle,
-        &session_id,
-        selection,
-        file_path,
-        rendered_image,
-    ) {
-        Ok(data) => {
-            if let Err(error) = screenshot_service.hide_and_clear_native_interaction(&app_handle) {
-                log::warn!(
-                    target: "bexo::command::screenshot",
-                    "hide native interaction window after save failed: {}",
-                    error
-                );
-            }
-            if let Err(error) = screenshot_service.restore_overlay_hot_state(&app_handle) {
-                log::warn!(
-                    target: "bexo::command::screenshot",
-                    "hide overlay window after save failed: {}",
-                    error
-                );
-            }
-            Ok(CommandResponse::success(data))
-        }
+    let service = screenshot_service.inner().clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let data = service.save_selection(
+            &app_handle,
+            &session_id,
+            selection,
+            file_path,
+            rendered_image,
+        )?;
+        Ok(data)
+    })
+    .await
+    .map_err(|error| {
+        AppError::new("SCREENSHOT_SAVE_WORKER_FAILED", "截图保存任务失败")
+            .with_detail("reason", error.to_string())
+    })?;
+    match result {
+        Ok(data) => Ok(CommandResponse::success(data)),
         Err(error) => {
             log::error!(
                 target: "bexo::command::screenshot",
@@ -226,24 +224,18 @@ pub async fn cancel_screenshot_session(
     screenshot_service: State<'_, ScreenshotService>,
     session_id: String,
 ) -> Result<CommandResponse<CancelScreenshotSessionResult>, AppError> {
-    match screenshot_service.cancel_session(&app_handle, &session_id) {
-        Ok(data) => {
-            if let Err(error) = screenshot_service.hide_and_clear_native_interaction(&app_handle) {
-                log::warn!(
-                    target: "bexo::command::screenshot",
-                    "hide native interaction window after cancel failed: {}",
-                    error
-                );
-            }
-            if let Err(error) = screenshot_service.restore_overlay_hot_state(&app_handle) {
-                log::warn!(
-                    target: "bexo::command::screenshot",
-                    "hide overlay window after cancel failed: {}",
-                    error
-                );
-            }
-            Ok(CommandResponse::success(data))
-        }
+    let service = screenshot_service.inner().clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let data = service.cancel_session(&app_handle, &session_id)?;
+        Ok(data)
+    })
+    .await
+    .map_err(|error| {
+        AppError::new("SCREENSHOT_CANCEL_WORKER_FAILED", "截图取消任务失败")
+            .with_detail("reason", error.to_string())
+    })?;
+    match result {
+        Ok(data) => Ok(CommandResponse::success(data)),
         Err(error) => {
             log::error!(
                 target: "bexo::command::screenshot",

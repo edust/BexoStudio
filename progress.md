@@ -1,5 +1,22 @@
 # progress
 
+## 2026-10-01 OSS 私有下载链接有效期
+- 已完成默认值 86400 秒、实际预签名 URL 参数回归及当前文档同步，不访问真实 OSS。
+- 前端 56/56、Rust check --locked --tests、相关 rustfmt 与 diff 检查通过。隔离生产 Rust 测试首次 12 通过/1 失败；该原有 PUT 样例在 HEAD 基线也失败，排除该已知项后 12/12 通过。
+- 未启动长期服务；本次短期编译/测试进程已退出。真实 OSS 下载、桌面点击与发行包更新 Unverified。
+
+## 2026-10-01 Screenshot Save Latency
+- 已完成日志/源码核对及专项蓝图；保留上轮未提交改动。
+- 完成裁剪/无损编码、spawn_blocking、gate、隐藏优先单次收尾；前端 56/56、隔离生产图像 4/4、文件读回、web build、Rust check --locked --tests 与相关 fmt 通过。
+- 没有启动长期服务/浏览器/桌面程序；本轮短期测试已退出，1420/1437/9227 无监听。真实桌面/安装版验收 Unverified。
+
+## 2026-10-01 Screenshot UI and Performance
+- 已完成原生 GPU 几何渲染、输入唤醒/合帧、前端同步及浅色工具栏。
+- 最终前端 53 项测试与 production build 通过；Rust check --locked 和 --tests 通过。
+- 完整 Tauri Rust 测试宿主启动不返回，已终止；隔离调用生产源的 4 个原生测试全部通过。
+- 实际 toolbar 组件 light/dark/narrow 三种 Chrome fixture 测试通过；未使用 WebView2 实机截图替代验收。
+- 所有 fixture Vite/Chrome 和原生验证进程均已清理。详细证据与剩余人工验收见专项 deliverable。
+
 ## 2026-07-11 UI 缩放与布局回归
 
 - 已初始化 `scripts/work/2026-07-11-ui-scale-layout-regression/`。
@@ -674,6 +691,10 @@
 - 初始化 `scripts/work/2026-03-11-resource-browser-open-terminal/`：`task_plan.md`、`notes.md`、`deliverable.md`。
 - 已完成 `open_workspace_terminal_at_path` 命令链路（Rust service/command + 前端 command-client）。
 - 资源浏览器右键菜单已新增 `在这里打开终端`，支持目录直开与文件父目录回退。
+
+## 2026-10-19 全应用 UI 精简重构
+- 完成全路由精简与 token 化；tsc、web:test 62/62、web:build 通过；浏览器夹具 14 张截图无溢出无异常，临时进程与端口已清理。
+- 待用户在 `npm run desktop:dev` 下实机验收。
 - 编译验证通过：`cargo check --manifest-path src-tauri/Cargo.toml`、`npm run web:build`。
 - 单测执行受宿主问题影响：`cargo test ... open_workspace_terminal_at_path_uses_parent_directory_for_file_target` 返回 `STATUS_ENTRYPOINT_NOT_FOUND`。
 - 修复发布版“打开工作区编辑器（VS Code）时 cmd 窗口闪烁”：在进程适配层对 `cmd.exe` 包装启动启用 `CREATE_NO_WINDOW`。
@@ -2489,3 +2510,15 @@ pm run web:build。
 - 自动验证通过：`web:test` 49/49、`web:build`、Rust fmt/dev check/release check、all-targets no-run、`git diff --check`。
 - Rust 实际测试宿主启动后持续无输出，已中止并确认无残留进程；未把 no-run 编译误报为断言执行成功。
 - 本轮没有启动 Vite/Tauri 长期进程，`src-tauri/target` 无残留测试进程，1420/1421 无监听；真实桌面导入导出和亮暗主题仍需人工验收。
+
+## 2026-10-19 工作区导航
+- 已完成归档恢复、常用分区、紧凑虚拟列表、键盘搜索和关联状态修复。前端 59/59、production build、Rust release check、测试 no-run、变更 Rust 格式检查通过。千项目浏览器回归与明暗截图通过，进程及端口清理完成。Rust 实际断言受 0xc0000139 阻断；真实 Tauri 桌面验收 Unverified。
+
+## 2026-10-19 工作台可读性
+- 实施范围和验证见 scripts/work/2026-10-19-workspace-readability/。
+- 本轮已完成：440px可调宽度、三行条目和黄色星标、命令区窄窗口适配；62项前端测试、production build及整页浏览器模拟验收通过。实际Tauri显示由用户验收；见专项deliverable。
+
+
+## 2026-10-19 恢复拖放动画
+- 工作区拖放动画修复已实现，正在运行前端验证。
+- 验证完成：62/62 前端测试、web:build、浏览器真实指针拖动跟手/相邻让位/松手提交通过；未修改 Rust。

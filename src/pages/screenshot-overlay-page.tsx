@@ -1,4 +1,7 @@
-import { App, Button, Tooltip, Typography } from "antd";
+import { App, Typography } from "antd";
+import { ScreenshotToolbar } from "@/features/screenshot-overlay/screenshot-toolbar";
+import { resolveScreenshotToolbarLayout } from "@/features/screenshot-overlay/toolbar-layout";
+import { FrameDelivery } from "@/features/screenshot-overlay/frame-delivery";
 import { save } from "@tauri-apps/plugin-dialog";
 import {
   ArrowRight,
@@ -109,6 +112,7 @@ import type {
 } from "@/features/screenshot-overlay/overlay-model";
 import {
   areNativeInteractionStatesEqual,
+  isNativeStateCurrent,
   buildNativeInteractionRuntimeRequestKey,
   type NativeInteractionRuntimeRequest,
 } from "@/features/screenshot-overlay/native-runtime-state";
@@ -146,7 +150,6 @@ const TEXT_STYLE_OPTIONS: Array<{ key: TextStyleKind; label: string }> = [
   { key: "background", label: "背景" },
   { key: "highlight", label: "高亮" },
 ];
-const NATIVE_SELECTION_RUNTIME_STABILIZE_MS = 220;
 const TOOL_HOTKEY_MAP = buildToolHotkeyMap();
 
 export default function ScreenshotOverlayPage() {
@@ -172,8 +175,8 @@ export default function ScreenshotOverlayPage() {
   const frozenToolbarRectRef = useRef<SelectionRect | null>(null);
   const selectionRedrawStartedWithSelectionRef = useRef(false);
   const pendingSelectionRedrawOriginRef = useRef<Point | null>(null);
-  const nativeSelectionRuntimeBlockedUntilRef = useRef(0);
-  const previousNativeSelectionDragModeRef = useRef<string | null>(null);
+  const latestNativeStateRef = useRef<NativeInteractionStateView | null>(null);
+  const nativeEventSequenceRef = useRef(0);
   const sessionLoadingSeenAtRef = useRef<Map<string, number>>(new Map());
   const firstPaintSessionIdRef = useRef<string | null>(null);
   const nativeInteractionRuntimeSeqRef = useRef(0);
@@ -188,9 +191,7 @@ export default function ScreenshotOverlayPage() {
   const [dragStart, setDragStart] = useState<Point | null>(null);
   const [dragCurrent, setDragCurrent] = useState<Point | null>(null);
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
-  const [nativeSelectionRuntimeBlockedUntil, setNativeSelectionRuntimeBlockedUntil] =
-    useState(0);
-  const [toolbarMeasuredWidth, setToolbarMeasuredWidth] = useState(480);
+  const [toolbarMeasuredSize, setToolbarMeasuredSize] = useState({ width: 640, height: 96 });
 
   const [tool, setTool] = useState<ToolKind>("select");
   const color = DEFAULT_ANNOTATION_COLOR;
@@ -420,11 +421,7 @@ export default function ScreenshotOverlayPage() {
     (nativeInteractionState?.dragMode === "creating" ||
       nativeInteractionState?.dragMode === "moving" ||
       nativeInteractionState?.dragMode === "resizing");
-  const nativeSelectionRuntimeCoolingDown =
-    nativeInteractionRuntimeMode === "selection" &&
-    nativeSelectionRuntimeBlockedUntil > performance.now();
-  const nativeSelectionInteractionStabilizing =
-    nativeSelectionDragActive || nativeSelectionRuntimeCoolingDown;
+  const nativeSelectionInteractionStabilizing = nativeSelectionDragActive;
 
   const nativeShapeDragActive =
     nativeInteractionState?.dragMode === "shape_moving" ||
@@ -496,8 +493,8 @@ export default function ScreenshotOverlayPage() {
 
   const nativeInteractionVisualsActive =
     nativeBaseSelectionActive || nativeShapeAnnotationActive || nativeSingleShapeEditActive;
-  const nativeInteractionPointerOwned =
-    nativeBaseSelectionEligible || nativeShapeAnnotationEligible || nativeSingleShapeEditEligible;
+  const nativeInteractionPointerOwned = nativeInteractionState?.lifecycleState !== "failed" &&
+    (nativeBaseSelectionEligible || nativeShapeAnnotationEligible || nativeSingleShapeEditEligible);
 
   const nativeManagedShapeIds = useMemo(() => {
     const next = new Set<string>();
@@ -1188,11 +1185,12 @@ export default function ScreenshotOverlayPage() {
   }, []);
 
   const resetSessionInteractionState = useCallback(() => {
+    latestNativeStateRef.current = null;
+    nativeEventSequenceRef.current += 1;
     setSelection(null);
     setDragStart(null);
     setDragCurrent(null);
     setNativeInteractionState(null);
-    nativeSelectionRuntimeBlockedUntilRef.current = 0;
     selectionRedrawStartedWithSelectionRef.current = false;
     pendingSelectionRedrawOriginRef.current = null;
     textClipboardRef.current = null;
@@ -3384,13 +3382,10 @@ export default function ScreenshotOverlayPage() {
     firstPaintSessionIdRef.current = null;
     previewRenderableRef.current = null;
     frozenToolbarRectRef.current = null;
-    previousNativeSelectionDragModeRef.current = null;
     nativeInteractionRuntimeInFlightRef.current = false;
     nativeInteractionRuntimeInFlightKeyRef.current = null;
     nativeInteractionRuntimeAppliedKeyRef.current = null;
     nativeInteractionRuntimeQueuedRequestRef.current = null;
-    nativeSelectionRuntimeBlockedUntilRef.current = 0;
-    setNativeSelectionRuntimeBlockedUntil(0);
     setPreviewSurfaceReady(false);
     setPreviewImageVersion((current) => current + 1);
     setSession(null);
@@ -3409,13 +3404,12 @@ export default function ScreenshotOverlayPage() {
       pendingSessionIdRef.current = value.sessionId;
       if (!isSameSession) {
         frozenToolbarRectRef.current = null;
-        previousNativeSelectionDragModeRef.current = null;
+        latestNativeStateRef.current = null;
+        nativeEventSequenceRef.current += 1;
         nativeInteractionRuntimeInFlightRef.current = false;
         nativeInteractionRuntimeInFlightKeyRef.current = null;
         nativeInteractionRuntimeAppliedKeyRef.current = null;
         nativeInteractionRuntimeQueuedRequestRef.current = null;
-        nativeSelectionRuntimeBlockedUntilRef.current = 0;
-        setNativeSelectionRuntimeBlockedUntil(0);
       }
       if (!sessionLoadingSeenAtRef.current.has(value.sessionId)) {
         sessionLoadingSeenAtRef.current.set(value.sessionId, performance.now());
@@ -3473,12 +3467,14 @@ export default function ScreenshotOverlayPage() {
 
   const flushNativeInteractionRuntimeUpdate = useCallback(
     (request: NativeInteractionRuntimeRequest) => {
+      if (activeSessionIdRef.current !== request.sessionId ||
+          (request.visible && latestNativeStateRef.current?.dragMode)) return;
       const requestKey = buildNativeInteractionRuntimeRequestKey(request);
       if (
         !nativeInteractionRuntimeInFlightRef.current &&
         nativeInteractionRuntimeAppliedKeyRef.current === requestKey
       ) {
-        emitPipelineInfo(
+        emitPipelineDebug(
           `[screenshot][native-interaction] runtime_update_skipped reason=dedup_applied session_id=${request.sessionId} visible=${request.visible} mode=${request.mode}`,
         );
         return;
@@ -3493,14 +3489,14 @@ export default function ScreenshotOverlayPage() {
           nativeInteractionRuntimeInFlightKeyRef.current === requestKey ||
           queuedKey === requestKey
         ) {
-          emitPipelineInfo(
+          emitPipelineDebug(
             `[screenshot][native-interaction] runtime_update_skipped reason=dedup_inflight session_id=${request.sessionId} visible=${request.visible} mode=${request.mode}`,
           );
           return;
         }
 
         nativeInteractionRuntimeQueuedRequestRef.current = request;
-        emitPipelineInfo(
+        emitPipelineDebug(
           `[screenshot][native-interaction] runtime_update_queued session_id=${request.sessionId} visible=${request.visible} mode=${request.mode} replaced=${queuedRequest ? "true" : "false"}`,
         );
         return;
@@ -3508,8 +3504,9 @@ export default function ScreenshotOverlayPage() {
 
       nativeInteractionRuntimeInFlightRef.current = true;
       nativeInteractionRuntimeInFlightKeyRef.current = requestKey;
+      const eventSequenceAtSend = nativeEventSequenceRef.current;
       const runtimeSeq = ++nativeInteractionRuntimeSeqRef.current;
-      emitPipelineInfo(
+      emitPipelineDebug(
         `[screenshot][native-interaction] runtime_update_sent seq=${runtimeSeq} session_id=${request.sessionId} visible=${request.visible} mode=${request.mode} exclusion_rects=${request.exclusionRects.length} selection=${request.selection ? `${request.selection.x.toFixed(1)},${request.selection.y.toFixed(1)},${request.selection.width.toFixed(1)},${request.selection.height.toFixed(1)}` : "none"} active_shape=${request.activeShape?.id ?? "none"} candidates=${request.shapeCandidates.length}`,
       );
       void updateNativeInteractionRuntime(
@@ -3524,10 +3521,10 @@ export default function ScreenshotOverlayPage() {
         request.strokeWidth,
       )
         .then((value) => {
-          emitPipelineInfo(
+          emitPipelineDebug(
             `[screenshot][native-interaction] runtime_update_completed seq=${runtimeSeq} session_id=${request.sessionId} lifecycle_state=${value.lifecycleState} has_active_session=${value.hasActiveSession} drag_mode=${value.dragMode ?? "none"} selection_revision=${value.selectionRevision}`,
           );
-          if (activeSessionIdRef.current === request.sessionId) {
+          if (activeSessionIdRef.current === request.sessionId && nativeEventSequenceRef.current === eventSequenceAtSend) {
             nativeInteractionRuntimeAppliedKeyRef.current = requestKey;
             setNativeInteractionState((current) =>
               areNativeInteractionStatesEqual(current, value) ? current : value,
@@ -3545,9 +3542,9 @@ export default function ScreenshotOverlayPage() {
           }
         })
         .finally(() => {
-          if (nativeInteractionRuntimeInFlightKeyRef.current === requestKey) {
-            nativeInteractionRuntimeInFlightKeyRef.current = null;
-          }
+          // A completed request from a previous session must not unlock its successor.
+          if (nativeInteractionRuntimeInFlightKeyRef.current !== requestKey) return;
+          nativeInteractionRuntimeInFlightKeyRef.current = null;
           nativeInteractionRuntimeInFlightRef.current = false;
           if (activeSessionIdRef.current !== request.sessionId) {
             nativeInteractionRuntimeQueuedRequestRef.current = null;
@@ -3560,7 +3557,7 @@ export default function ScreenshotOverlayPage() {
           }
           const queuedKey = buildNativeInteractionRuntimeRequestKey(queuedRequest);
           if (queuedKey === nativeInteractionRuntimeAppliedKeyRef.current) {
-            emitPipelineInfo(
+            emitPipelineDebug(
               `[screenshot][native-interaction] runtime_update_skipped reason=dedup_queued session_id=${queuedRequest.sessionId} visible=${queuedRequest.visible} mode=${queuedRequest.mode}`,
             );
             return;
@@ -3574,61 +3571,14 @@ export default function ScreenshotOverlayPage() {
   );
 
   useEffect(() => {
-    if (!nativeSelectionRuntimeBlockedUntil) {
-      return;
-    }
-    const remainingMs = nativeSelectionRuntimeBlockedUntil - performance.now();
-    if (remainingMs <= 0) {
-      nativeSelectionRuntimeBlockedUntilRef.current = 0;
-      setNativeSelectionRuntimeBlockedUntil(0);
-      return;
-    }
-    const timeoutId = window.setTimeout(() => {
-      nativeSelectionRuntimeBlockedUntilRef.current = 0;
-      setNativeSelectionRuntimeBlockedUntil(0);
-    }, remainingMs);
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [nativeSelectionRuntimeBlockedUntil]);
-
-  useEffect(() => {
-    const currentDragMode = nativeInteractionState?.dragMode ?? null;
-    const previousDragMode = previousNativeSelectionDragModeRef.current;
-    const wasSelectionDrag =
-      previousDragMode === "creating" ||
-      previousDragMode === "moving" ||
-      previousDragMode === "resizing";
-    const isSelectionDrag =
-      currentDragMode === "creating" ||
-      currentDragMode === "moving" ||
-      currentDragMode === "resizing";
-    if (!isSelectionDrag && wasSelectionDrag) {
-      const blockedUntil = performance.now() + NATIVE_SELECTION_RUNTIME_STABILIZE_MS;
-      nativeSelectionRuntimeBlockedUntilRef.current = blockedUntil;
-      setNativeSelectionRuntimeBlockedUntil(blockedUntil);
-    }
-    previousNativeSelectionDragModeRef.current = currentDragMode;
-  }, [nativeInteractionState?.dragMode]);
-
-  useEffect(() => {
     if (!runtimeAvailable || !session) {
       return;
     }
 
-    if (nativeInteractionState?.dragMode) {
-      emitPipelineInfo(
-        `[screenshot][native-interaction] runtime_update_skipped reason=drag_active session_id=${session.sessionId} drag_mode=${nativeInteractionState.dragMode} tool=${tool} mode=${nativeInteractionRuntimeMode}`,
-      );
-      return;
-    }
-
-    const runtimeBlockedUntil = nativeSelectionRuntimeBlockedUntilRef.current;
-    const runtimeSelectionCoolingDown =
-      nativeInteractionRuntimeMode === "selection" && runtimeBlockedUntil > performance.now();
-    if (runtimeSelectionCoolingDown) {
-      emitPipelineInfo(
-        `[screenshot][native-interaction] runtime_update_skipped reason=selection_cooldown session_id=${session.sessionId} blocked_until=${runtimeBlockedUntil.toFixed(1)} tool=${tool} mode=${nativeInteractionRuntimeMode}`,
+    if (nativeInteractionState?.lifecycleState === "failed") return;
+    if (nativeInteractionState?.dragMode || latestNativeStateRef.current?.dragMode) {
+      emitPipelineDebug(
+        `[screenshot][native-interaction] runtime_update_skipped reason=drag_active session_id=${session.sessionId} drag_mode=${nativeInteractionState?.dragMode ?? latestNativeStateRef.current?.dragMode} tool=${tool} mode=${nativeInteractionRuntimeMode}`,
       );
       return;
     }
@@ -3639,7 +3589,7 @@ export default function ScreenshotOverlayPage() {
       (pendingSessionId && pendingSessionId !== session.sessionId) ||
       (activeSessionId && activeSessionId !== session.sessionId)
     ) {
-      emitPipelineInfo(
+      emitPipelineDebug(
         `[screenshot][native-interaction] runtime_update_skipped reason=session_gate session_id=${session.sessionId} pending_session_id=${pendingSessionId ?? "none"} active_session_id=${activeSessionId ?? "none"} tool=${tool} mode=${nativeInteractionRuntimeMode}`,
       );
       return;
@@ -3660,6 +3610,7 @@ export default function ScreenshotOverlayPage() {
     });
   }, [
     buildNativeInteractionExclusionRects,
+    activeRect,
     busyAction,
     color,
     nativeInteractionActiveShape,
@@ -3668,6 +3619,7 @@ export default function ScreenshotOverlayPage() {
     nativeInteractionRuntimeSelection,
     nativeInteractionRuntimeVisible,
     nativeInteractionState?.dragMode,
+    nativeInteractionState?.lifecycleState,
     session,
     strokeWidth,
     textEditor,
@@ -3686,7 +3638,7 @@ export default function ScreenshotOverlayPage() {
     shapeTransform,
     textDrag,
     flushNativeInteractionRuntimeUpdate,
-    nativeSelectionRuntimeBlockedUntil,
+    toolbarMeasuredSize,
   ]);
 
   useEffect(() => {
@@ -3709,6 +3661,12 @@ export default function ScreenshotOverlayPage() {
       console.warn("detach native interaction listener failed", getErrorSummary(error));
     });
 
+    latestNativeStateRef.current = null;
+    const delivery = new FrameDelivery<NativeInteractionStateView>(
+      (event) => setNativeInteractionState((current) => areNativeInteractionStatesEqual(current, event) ? current : event),
+      (callback) => window.requestAnimationFrame(callback),
+      (frame) => window.cancelAnimationFrame(frame),
+    );
     void (async () => {
       try {
         const stateAttached = await listenerGroup.attach(() =>
@@ -3717,17 +3675,18 @@ export default function ScreenshotOverlayPage() {
               return;
             }
             if (session && event.sessionId && event.sessionId !== session.sessionId) {
-              emitPipelineInfo(
+              emitPipelineDebug(
                 `[screenshot][native-interaction] state_updated_dropped reason=session_mismatch event_session_id=${event.sessionId} current_session_id=${session.sessionId} drag_mode=${event.dragMode ?? "none"} lifecycle_state=${event.lifecycleState}`,
               );
               return;
             }
-            emitPipelineInfo(
-              `[screenshot][native-interaction] state_updated_applied session_id=${event.sessionId ?? "none"} drag_mode=${event.dragMode ?? "none"} lifecycle_state=${event.lifecycleState} interaction_mode=${event.interactionMode} selection_revision=${event.selectionRevision}`,
-            );
-            setNativeInteractionState((current) =>
-              areNativeInteractionStatesEqual(current, event) ? current : event,
-            );
+            if (!isNativeStateCurrent(latestNativeStateRef.current, event)) return;
+            latestNativeStateRef.current = event;
+            nativeEventSequenceRef.current += 1;
+            delivery.push(event, !event.dragMode);
+            if (event.lifecycleState === "failed") {
+              message.error("原生截图绘制失败，已切换为兼容模式。请重启截图后重试。");
+            }
           }),
         );
         if (!stateAttached) {
@@ -3800,9 +3759,10 @@ export default function ScreenshotOverlayPage() {
 
     return () => {
       disposed = true;
+      delivery.dispose();
       listenerGroup.dispose();
     };
-  }, [commitAnnotations, pushAnnotation, runtimeAvailable, selectShapeAnnotation, session]);
+  }, [commitAnnotations, message, pushAnnotation, runtimeAvailable, selectShapeAnnotation, session]);
 
   useEffect(() => {
     if (!nativeInteractionRuntimeVisible) {
@@ -6374,8 +6334,9 @@ export default function ScreenshotOverlayPage() {
     }
 
     const syncWidth = () => {
-      const nextWidth = Math.ceil(node.getBoundingClientRect().width);
-      setToolbarMeasuredWidth((current) => (Math.abs(current - nextWidth) < 1 ? current : nextWidth));
+      const bounds = node.getBoundingClientRect();
+      const next = { width: Math.ceil(bounds.width), height: Math.ceil(bounds.height) };
+      setToolbarMeasuredSize((current) => current.width === next.width && current.height === next.height ? current : next);
     };
 
     syncWidth();
@@ -6804,34 +6765,14 @@ export default function ScreenshotOverlayPage() {
     },
   ];
 
-  const toolbarSections = [
-    toolbarToolActions,
-    toolbarTextStyleActions,
-    toolbarValueActions,
-    toolbarObjectActions,
-    toolbarSessionActions,
-  ].filter((section) => section.length > 0);
-
   const toolbarAnchorRect =
     nativeSelectionInteractionStabilizing && frozenToolbarRectRef.current
       ? frozenToolbarRectRef.current
       : activeRect;
-  const toolbarDisplayWidth = session?.displayWidth ?? 480;
-  const toolbarSafeHalfWidth = Math.min(
-    Math.max(Math.ceil(toolbarMeasuredWidth / 2) + 12, 120),
-    Math.max((toolbarDisplayWidth - 24) / 2, 120),
-  );
-  const toolbarLeft = toolbarAnchorRect
-    ? clamp(
-        toolbarAnchorRect.x + toolbarAnchorRect.width / 2,
-        toolbarSafeHalfWidth,
-        Math.max(toolbarSafeHalfWidth, toolbarDisplayWidth - toolbarSafeHalfWidth),
-      )
-    : toolbarDisplayWidth / 2;
-  const toolbarTop = toolbarAnchorRect
-    ? clamp(toolbarAnchorRect.y + toolbarAnchorRect.height + 16, 24, (session?.displayHeight ?? 180) - 64)
-    : 24;
-  const selectionStatusTop = Math.max(12, toolbarTop - 76);
+  const toolbarLayout = resolveScreenshotToolbarLayout(toolbarAnchorRect, session?.monitors ?? [],
+    { width: session?.displayWidth ?? 640, height: session?.displayHeight ?? 180 }, toolbarMeasuredSize);
+  const toolbarLeft = toolbarLayout.left;
+  const toolbarTop = toolbarLayout.top;
   const textEditorLayout = selection && textEditor ? resolveTextEditorLayout(textEditor, selection) : null;
   const textEditorVisual = textEditor ? resolveTextEditorVisual(textEditor) : null;
 
@@ -6993,32 +6934,15 @@ export default function ScreenshotOverlayPage() {
               />
             </div>
           ) : null}
-          {showSelectionStatusBar && showWebFloatingToolbar ? (
-            <div
-              className="absolute z-40 max-w-[calc(100vw-24px)] -translate-x-1/2"
-              style={{ left: `${toolbarLeft}px`, top: `${selectionStatusTop}px` }}
-              onPointerDown={(event) => event.stopPropagation()}
-            >
-              <SelectionStatusBar model={statusBarModel} />
-            </div>
-          ) : null}
           {showWebFloatingToolbar ? (
-            <div
-              ref={toolbarRef}
-              role="toolbar"
-              aria-label="截图工具栏"
-              className="absolute z-40 flex max-w-[calc(100vw-24px)] -translate-x-1/2 items-center gap-2 overflow-x-auto rounded-xl border border-white/14 bg-black/80 px-2 py-2 shadow-[0_16px_40px_rgba(0,0,0,0.35)] backdrop-blur"
-              style={{ left: `${toolbarLeft}px`, top: `${toolbarTop}px` }}
+            <div ref={toolbarRef} className="screenshot-toolbar"
+              style={{ left: toolbarLeft, top: toolbarTop, maxWidth: toolbarLayout.maxWidth, maxHeight: toolbarLayout.maxHeight }}
               onPointerDown={(event) => event.stopPropagation()}
-            >
-              {toolbarSections.map((section, index) => (
-                <div key={`toolbar-section-${index}`} className="flex shrink-0 items-center gap-1">
-                  {section.map((action) => (
-                    <ToolbarIconButton key={action.key} action={action} />
-                  ))}
-                  {index < toolbarSections.length - 1 ? <ToolbarSectionDivider /> : null}
-                </div>
-              ))}
+              onDoubleClick={(event) => event.stopPropagation()}
+              onContextMenu={(event) => event.preventDefault()}>
+              <ScreenshotToolbar tools={toolbarToolActions} session={toolbarSessionActions}
+                properties={[...toolbarTextStyleActions, ...toolbarValueActions]} objects={toolbarObjectActions}
+                status={showSelectionStatusBar ? <SelectionStatusBar model={statusBarModel} /> : undefined} />
             </div>
           ) : null}
         </>
@@ -7069,30 +6993,6 @@ function getToolbarTextStyleIcon(style: TextStyleKind): ReactNode {
     default:
       return <Type size={15} />;
   }
-}
-
-function ToolbarIconButton({ action }: { action: ToolbarIconAction }) {
-  return (
-    <Tooltip placement="top" title={action.label}>
-      <span className="inline-flex shrink-0">
-        <Button
-          aria-label={action.label}
-          className="!h-8 !w-8 !min-w-8 !shrink-0 !px-0"
-          danger={action.danger}
-          disabled={action.disabled}
-          icon={action.icon}
-          loading={action.loading}
-          size="small"
-          type={action.active ? "primary" : "default"}
-          onClick={action.onClick}
-        />
-      </span>
-    </Tooltip>
-  );
-}
-
-function ToolbarSectionDivider() {
-  return <div className="mx-1 h-5 w-px shrink-0 bg-white/12" aria-hidden="true" />;
 }
 
 function SelectionBorder({ rect }: { rect: SelectionRect }) {
@@ -7387,70 +7287,9 @@ function SelectionGroupOverlay({ rect, items }: { rect: SelectionRect; items: st
 }
 
 function SelectionStatusBar({ model }: { model: SelectionStatusBarModel }) {
-  const palette =
-    model.tone === "preview"
-      ? {
-          border: "rgba(47, 149, 255, 0.42)",
-          background: "rgba(10, 24, 44, 0.78)",
-          title: "#9cd0ff",
-          subtitle: "rgba(230, 242, 255, 0.88)",
-          chipBorder: "rgba(47, 149, 255, 0.3)",
-          chipBackground: "rgba(47, 149, 255, 0.12)",
-          chipText: "#d8ecff",
-        }
-      : model.tone === "selection"
-        ? {
-            border: "rgba(0, 208, 143, 0.34)",
-            background: "rgba(8, 20, 16, 0.78)",
-            title: "#9bf4cf",
-            subtitle: "rgba(224, 248, 239, 0.88)",
-            chipBorder: "rgba(0, 208, 143, 0.26)",
-            chipBackground: "rgba(0, 208, 143, 0.10)",
-            chipText: "#d7ffe9",
-          }
-        : {
-            border: "rgba(255, 255, 255, 0.16)",
-            background: "rgba(18, 18, 18, 0.68)",
-            title: "#f4f4f5",
-            subtitle: "rgba(255, 255, 255, 0.76)",
-            chipBorder: "rgba(255, 255, 255, 0.12)",
-            chipBackground: "rgba(255, 255, 255, 0.06)",
-            chipText: "rgba(255, 255, 255, 0.84)",
-          };
-
-  return (
-    <div
-      className="flex flex-col gap-2 rounded border px-3 py-2"
-      style={{
-        borderColor: palette.border,
-        backgroundColor: palette.background,
-      }}
-    >
-      <div className="flex items-center gap-2">
-        <span className="text-[12px] font-semibold" style={{ color: palette.title }}>
-          {model.title}
-        </span>
-        <span className="text-[11px]" style={{ color: palette.subtitle }}>
-          {model.subtitle}
-        </span>
-      </div>
-      <div className="flex flex-wrap gap-1.5">
-        {model.chips.map((chip) => (
-          <span
-            key={chip}
-            className="rounded px-2 py-0.5 text-[11px]"
-            style={{
-              border: `1px solid ${palette.chipBorder}`,
-              backgroundColor: palette.chipBackground,
-              color: palette.chipText,
-            }}
-          >
-            {chip}
-          </span>
-        ))}
-      </div>
-    </div>
-  );
+  return <div className="screenshot-toolbar-status" title={[model.subtitle, ...model.chips].join(" · ")}>
+    <span>{model.title}</span><span>{model.subtitle}</span>
+  </div>;
 }
 
 function TextSelectionOverlay({
@@ -10104,6 +9943,10 @@ async function writeTauriPipelineLog(level: "info" | "error", message: string) {
   } catch {
     // Logging must never block the screenshot pipeline.
   }
+}
+
+function emitPipelineDebug(message: string) {
+  console.debug(message);
 }
 
 function emitPipelineInfo(message: string) {

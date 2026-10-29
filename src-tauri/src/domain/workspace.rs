@@ -45,6 +45,20 @@ pub struct UpdateWorkspaceDescriptionInput {
     pub description: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetWorkspacesArchivedResult {
+    pub workspaces: Vec<WorkspaceRecord>,
+    pub warning: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetWorkspacesArchivedInput {
+    pub workspace_ids: Vec<String>,
+    pub archived: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReorderWorkspacesInput {

@@ -1,7 +1,6 @@
 use std::{
     borrow::Cow,
     fs,
-    io::Cursor,
     path::PathBuf,
     sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant},
@@ -17,7 +16,7 @@ use screenshots::{
             CompressionType as PngCompressionType, FilterType as PngFilterType, PngEncoder,
         },
         imageops::{self, FilterType},
-        ColorType, DynamicImage, ImageEncoder, ImageOutputFormat, Rgba, RgbaImage,
+        ColorType, ImageEncoder, Rgba, RgbaImage,
     },
     Screen,
 };
@@ -55,6 +54,7 @@ use crate::{
         desktop_duplication_capture,
         native_interaction_service::NativeInteractionSessionSpec,
         native_preview_service::{NativePreviewSessionSpec, NativePreviewSourceKind},
+        screenshot_export_image::{composite_tile, crop_bgra, crop_rgba, encode_png},
         wgc_capture,
         windows_hook_hotkey::WindowsHookHotkeyManager,
     },
@@ -79,6 +79,7 @@ const OVERLAY_TRANSPARENT_BG: Color = Color(0, 0, 0, 0);
 #[derive(Clone)]
 pub struct ScreenshotService {
     state: Arc<Mutex<ScreenshotState>>,
+    session_operation: Arc<Mutex<()>>,
     live_capture: Arc<Mutex<LiveCaptureState>>,
     escape_hook_manager: Arc<WindowsHookHotkeyManager>,
 }
@@ -2082,21 +2083,6 @@ fn prewarm_overlay_window_once<R: Runtime>(
     Ok(())
 }
 
-fn restore_overlay_window_hot_state<R: Runtime>(
-    window: &tauri::WebviewWindow<R>,
-    session: &ActiveScreenshotSession,
-) -> AppResult<()> {
-    set_overlay_window_dormant_state(window)?;
-    let _ = session;
-    if window.is_visible().unwrap_or(false) {
-        window.hide().map_err(|error| {
-            AppError::new("SCREENSHOT_OVERLAY_RESTORE_FAILED", "隐藏截图窗口失败")
-                .with_detail("reason", error.to_string())
-        })?;
-    }
-    Ok(())
-}
-
 fn prepare_overlay_window<R: Runtime>(
     app: &AppHandle<R>,
     session: &ActiveScreenshotSession,
@@ -2703,17 +2689,6 @@ fn session_to_view(session: &ActiveScreenshotSession) -> ScreenshotSessionView {
     }
 }
 
-fn encode_png(image: &RgbaImage) -> AppResult<Vec<u8>> {
-    let mut buffer = Cursor::new(Vec::new());
-    DynamicImage::ImageRgba8(image.clone())
-        .write_to(&mut buffer, ImageOutputFormat::Png)
-        .map_err(|error| {
-            AppError::new("SCREENSHOT_ENCODE_FAILED", "截图编码失败")
-                .with_detail("reason", error.to_string())
-        })?;
-    Ok(buffer.into_inner())
-}
-
 fn encode_preview_png_fast(image: &RgbaImage) -> AppResult<Vec<u8>> {
     let mut buffer = Vec::new();
     let encoder = PngEncoder::new_with_quality(
@@ -3048,12 +3023,7 @@ fn render_selection_base_image(
             }
         };
 
-        imageops::overlay(
-            &mut output,
-            &tile_image,
-            i64::from(output_x),
-            i64::from(output_y),
-        );
+        composite_tile(&mut output, &tile_image, output_x, output_y);
 
         tiles.push(ScreenshotSelectionRenderTile {
             display_id: monitor.display_id,
@@ -3180,8 +3150,24 @@ fn crop_monitor_intersection(
 
     let width = bounded_right.saturating_sub(bounded_left).max(1);
     let height = bounded_bottom.saturating_sub(bounded_top).max(1);
-    let source = monitor.source_image()?;
-    Ok(imageops::crop_imm(source, bounded_left, bounded_top, width, height).to_image())
+    if let Some(source) = monitor.rgba_image.get() {
+        return crop_rgba(source, bounded_left, bounded_top, width, height);
+    }
+    if let Some(bgra) = monitor.bgra_top_down.as_ref() {
+        return crop_bgra(
+            monitor.capture_width,
+            monitor.capture_height,
+            bgra.as_slice(),
+            bounded_left,
+            bounded_top,
+            width,
+            height,
+        );
+    }
+    Err(AppError::new(
+        "SCREENSHOT_CAPTURE_FAILED",
+        "截图原始像素不存在",
+    ))
 }
 
 fn resolve_monitor_scale_factor(
@@ -3336,6 +3322,7 @@ impl ScreenshotService {
     pub fn new() -> Self {
         Self {
             state: Arc::new(Mutex::new(ScreenshotState::default())),
+            session_operation: Arc::new(Mutex::new(())),
             live_capture: Arc::new(Mutex::new(LiveCaptureState::default())),
             escape_hook_manager: Arc::new(WindowsHookHotkeyManager::new()),
         }
@@ -3380,33 +3367,54 @@ impl ScreenshotService {
     }
 
     pub fn restore_overlay_hot_state<R: Runtime>(&self, app: &AppHandle<R>) -> AppResult<()> {
-        let session = build_overlay_prewarm_session(app);
         let started_at = Instant::now();
-        hide_and_clear_native_preview(app)?;
-        hide_and_clear_native_interaction(app)?;
-        self.suppress_overlay_window_events(Duration::from_millis(OVERLAY_EVENT_SUPPRESS_MS))?;
-        let window = prepare_overlay_window(app, &session)?;
-        restore_overlay_window_hot_state(&window, &session)?;
-        self.set_overlay_prewarmed(true)?;
+        let window = app.get_webview_window(SCREENSHOT_OVERLAY_WINDOW_LABEL);
+        // Hide first. Do not rerun prepare's many window setters, or clear native state twice.
+        // Attempt every layer even if one fails: an error must not strand another full-screen window.
+        let mut first_error = None;
+        let mut record = |operation: &str, result: AppResult<()>| {
+            if let Err(error) = result {
+                log::warn!(target: "bexo::service::screenshot",
+                    "overlay_session_close_failed operation={} reason={}", operation, error);
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        };
+        record(
+            "suppress_events",
+            self.suppress_overlay_window_events(Duration::from_millis(OVERLAY_EVENT_SUPPRESS_MS)),
+        );
+        record(
+            "hide_overlay",
+            window
+                .as_ref()
+                .ok_or_else(|| AppError::window_not_found(SCREENSHOT_OVERLAY_WINDOW_LABEL))
+                .and_then(|window| {
+                    window.hide().map_err(|error| {
+                        AppError::new("SCREENSHOT_OVERLAY_RESTORE_FAILED", "隐藏截图窗口失败")
+                            .with_detail("reason", error.to_string())
+                    })
+                }),
+        );
+        let interaction = app.state::<crate::services::NativeInteractionService>();
+        let preview = app.state::<crate::services::NativePreviewService>();
+        record("hide_interaction", interaction.hide());
+        record("hide_preview", preview.hide());
+        let hide_ms = started_at.elapsed().as_millis();
+        record("clear_interaction", interaction.clear());
+        record("clear_preview", preview.clear());
+        if let Some(window) = window.as_ref() {
+            record("dormant_overlay", set_overlay_window_dormant_state(window));
+        }
+        record("prewarm_flag", self.set_overlay_prewarmed(window.is_some()));
 
         log::info!(
             target: "bexo::service::screenshot",
-            "overlay_hidden_after_session total_ms={} geometry={}x{}@{},{}",
-            started_at.elapsed().as_millis(),
-            session.display_width,
-            session.display_height,
-            session.display_x,
-            session.display_y
+            "overlay_hidden_after_session hide_ms={} total_ms={}",
+            hide_ms, started_at.elapsed().as_millis()
         );
-
-        Ok(())
-    }
-
-    pub fn hide_and_clear_native_interaction<R: Runtime>(
-        &self,
-        app: &AppHandle<R>,
-    ) -> AppResult<()> {
-        hide_and_clear_native_interaction(app)
+        first_error.map_or(Ok(()), Err)
     }
 
     #[cfg(target_os = "windows")]
@@ -3551,6 +3559,7 @@ impl ScreenshotService {
         &self,
         app: &AppHandle<R>,
     ) -> AppResult<StartScreenshotSessionResult> {
+        let _operation = self.begin_session_operation()?;
         let started_at = Instant::now();
         self.clear_escape_cancel_hook(app);
         if let Err(error) = hide_and_clear_native_preview(app) {
@@ -4090,6 +4099,7 @@ impl ScreenshotService {
         selection: ScreenshotSelectionInput,
         rendered_image: Option<ScreenshotRenderedImageInput>,
     ) -> AppResult<CopyScreenshotSelectionResult> {
+        let _operation = self.begin_session_operation()?;
         let session = self.require_active_session(Some(session_id))?;
         let cropped = if let Some(rendered_image) = rendered_image {
             decode_rendered_png_to_rgba(&rendered_image)?
@@ -4114,7 +4124,7 @@ impl ScreenshotService {
                     .with_detail("reason", error.to_string())
             })?;
 
-        let _ = self.clear_active_session(app, Some(session_id));
+        self.finish_completed_session(app, session_id);
 
         Ok(CopyScreenshotSelectionResult {
             session_id: session.id,
@@ -4131,6 +4141,8 @@ impl ScreenshotService {
         file_path: Option<String>,
         rendered_image: Option<ScreenshotRenderedImageInput>,
     ) -> AppResult<SaveScreenshotSelectionResult> {
+        let _operation = self.begin_session_operation()?;
+        let started_at = Instant::now();
         let session = self.require_active_session(Some(session_id))?;
         let (width, height, encoded) = if let Some(rendered_image) = rendered_image {
             let bytes = decode_rendered_png_bytes(&rendered_image)?;
@@ -4143,6 +4155,7 @@ impl ScreenshotService {
             let encoded = encode_png(&render.image)?;
             (width, height, encoded)
         };
+        let render_encode_ms = started_at.elapsed().as_millis();
 
         let output_path = resolve_output_path(app, file_path)?;
         if let Some(parent) = output_path.parent() {
@@ -4153,13 +4166,18 @@ impl ScreenshotService {
             })?;
         }
 
+        let write_started_at = Instant::now();
         fs::write(&output_path, encoded).map_err(|error| {
             AppError::new("SCREENSHOT_SAVE_FAILED", "保存截图失败")
                 .with_detail("path", output_path.display().to_string())
                 .with_detail("reason", error.to_string())
         })?;
+        let write_ms = write_started_at.elapsed().as_millis();
 
-        let _ = self.clear_active_session(app, Some(session_id));
+        self.finish_completed_session(app, session_id);
+        log::info!(target: "bexo::service::screenshot",
+            "selection_save_completed session_id={} width={} height={} render_encode_ms={} write_ms={} total_ms={}",
+            session_id, width, height, render_encode_ms, write_ms, started_at.elapsed().as_millis());
 
         Ok(SaveScreenshotSelectionResult {
             session_id: session.id,
@@ -4174,7 +4192,14 @@ impl ScreenshotService {
         app: &AppHandle<R>,
         session_id: &str,
     ) -> AppResult<CancelScreenshotSessionResult> {
+        let _operation = self.begin_session_operation()?;
         let cancelled = self.clear_active_session(app, Some(session_id))?;
+        if cancelled {
+            if let Err(error) = self.restore_overlay_hot_state(app) {
+                log::warn!(target: "bexo::service::screenshot",
+                    "cancelled_screenshot_close_failed session_id={} reason={}", session_id, error);
+            }
+        }
         Ok(CancelScreenshotSessionResult {
             session_id: session_id.to_string(),
             cancelled,
@@ -4185,6 +4210,7 @@ impl ScreenshotService {
         &self,
         app: &AppHandle<R>,
     ) -> AppResult<Option<String>> {
+        let _operation = self.begin_session_operation()?;
         let Some(session) = self.get_active_session_optional()? else {
             return Ok(None);
         };
@@ -4193,22 +4219,6 @@ impl ScreenshotService {
             return Ok(None);
         }
 
-        if let Err(error) = hide_and_clear_native_preview(app) {
-            log::warn!(
-                target: "bexo::service::screenshot",
-                "hide native preview after escape cancel failed session_id={} reason={}",
-                session_id,
-                error
-            );
-        }
-        if let Err(error) = hide_and_clear_native_interaction(app) {
-            log::warn!(
-                target: "bexo::service::screenshot",
-                "hide native interaction after escape cancel failed session_id={} reason={}",
-                session_id,
-                error
-            );
-        }
         if let Err(error) = self.restore_overlay_hot_state(app) {
             log::warn!(
                 target: "bexo::service::screenshot",
@@ -4224,6 +4234,31 @@ impl ScreenshotService {
             session_id
         );
         Ok(Some(session_id))
+    }
+
+    fn begin_session_operation(&self) -> AppResult<std::sync::MutexGuard<'_, ()>> {
+        self.session_operation
+            .try_lock()
+            .map_err(|error| match error {
+                std::sync::TryLockError::WouldBlock => {
+                    AppError::new("SCREENSHOT_SESSION_BUSY", "截图正在处理，请稍候再操作")
+                }
+                std::sync::TryLockError::Poisoned(_) => {
+                    AppError::new("SCREENSHOT_SESSION_LOCK_FAILED", "截图操作状态不可用")
+                }
+            })
+    }
+
+    fn finish_completed_session<R: Runtime>(&self, app: &AppHandle<R>, session_id: &str) {
+        // The write/clipboard operation succeeded. Preserve that result even if cleanup fails.
+        if let Err(error) = self.restore_overlay_hot_state(app) {
+            log::warn!(target: "bexo::service::screenshot",
+                "completed_screenshot_close_failed session_id={} reason={}", session_id, error);
+        }
+        if let Err(error) = self.clear_active_session(app, Some(session_id)) {
+            log::warn!(target: "bexo::service::screenshot",
+                "completed_screenshot_session_cleanup_failed session_id={} reason={}", session_id, error);
+        }
     }
 
     pub fn clear_active_session<R: Runtime>(

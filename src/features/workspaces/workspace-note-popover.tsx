@@ -110,10 +110,10 @@ export function WorkspaceNotePopover({
   const editor = (
     <div className="w-[280px] space-y-2.5">
       <div>
-        <Typography.Text className="block text-[12px] font-semibold text-[#1f2937]">
+        <Typography.Text className="block text-[12px] font-semibold text-fg">
           项目备注
         </Typography.Text>
-        <Typography.Text className="mt-0.5 block text-[11px] leading-4 text-[#667085]">
+        <Typography.Text className="mt-0.5 block text-[11px] leading-4 text-fg-2">
           写一句话说明它是做什么的，方便以后找回工作上下文。
         </Typography.Text>
       </div>
@@ -142,8 +142,8 @@ export function WorkspaceNotePopover({
         <Typography.Text
           className={
             characterCount > MAX_WORKSPACE_DESCRIPTION_CHARS
-              ? "text-[11px] text-[#cf5a4a]"
-              : "text-[11px] text-[#98a2b3]"
+              ? "text-[11px] text-danger"
+              : "text-[11px] text-fg-3"
           }
         >
           {characterCount}/{MAX_WORKSPACE_DESCRIPTION_CHARS}
@@ -183,7 +183,7 @@ export function WorkspaceNotePopover({
         {trigger ?? (
           <Button
             aria-label={normalizedValue ? "编辑项目备注" : "添加项目备注"}
-            className={normalizedValue ? "!text-[#1283ab]" : ""}
+            className={normalizedValue ? "!text-primary" : ""}
             icon={normalizedValue ? <FileTextOutlined /> : <EditOutlined />}
             size="small"
             type="text"

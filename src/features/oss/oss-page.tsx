@@ -11,16 +11,18 @@ import {
   MoreOutlined,
   PlusOutlined,
   ReloadOutlined,
+  SearchOutlined,
   UploadOutlined,
 } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
-import { Button, Dropdown, Empty, Input, Modal, Spin, Tag, Tooltip, Typography } from "antd";
+import { Button, Dropdown, Empty, Input, Modal, Spin, Tooltip, Typography } from "antd";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { toast } from "sonner";
 
 import { OssTargetDialog } from "@/features/oss/oss-target-dialog";
+import { PaneHeader } from "@/components/shell/pane-header";
 import { cn } from "@/lib/cn";
 import { copyTextToClipboard, getClipboardErrorMessage } from "@/lib/clipboard";
 import {
@@ -54,7 +56,7 @@ import { OssTransferQueue } from "./oss-transfer-queue";
 import { buildOssCopyTargetKey } from "./oss-copy-model";
 import { enqueueOssUploadPaths, type OssUploadStartInput } from "./oss-upload-model";
 
-const ROW_HEIGHT = 46;
+const ROW_HEIGHT = 36;
 
 export default function OssPage() {
   const desktop = hasDesktopRuntime();
@@ -304,26 +306,6 @@ export default function OssPage() {
 
   return (
     <div className="oss-surface flex h-full min-h-0 flex-col">
-      <header className="oss-border flex shrink-0 items-center justify-between border-b px-5 py-3">
-        <div>
-          <Typography.Text className="oss-text-primary block text-[13px] font-semibold">OSS 文件管理</Typography.Text>
-          <Typography.Text className="oss-text-tertiary mt-0.5 block text-[11px]">
-            多账号、Bucket 绑定、目录浏览与可恢复传输
-          </Typography.Text>
-        </div>
-        <Button
-          disabled={!accountId}
-          icon={<PlusOutlined />}
-          onClick={() => {
-            setEditingTarget(null);
-            setTargetDialogOpen(true);
-          }}
-          size="small"
-        >
-          添加 Bucket
-        </Button>
-      </header>
-
       {!accountId ? (
         <div className="flex min-h-0 flex-1 items-center justify-center">
           <Empty description="请先在左侧添加或选择 OSS 账号" />
@@ -561,31 +543,32 @@ function TargetPane({
   onTest: (target: OssTargetRecord) => void;
 }) {
   return (
-    <aside className="oss-surface-muted oss-border flex w-[236px] shrink-0 flex-col border-r">
-      <div className="oss-border flex items-center justify-between border-b px-3 py-3">
-        <div>
-          <Typography.Text className="oss-text-tertiary block text-[11px] font-semibold uppercase tracking-[0.16em]">TARGETS</Typography.Text>
-          <Typography.Text className="oss-text-primary mt-0.5 block text-[12px] font-medium">Bucket 绑定</Typography.Text>
-        </div>
-        <Button aria-label="添加 Bucket 绑定" className="!h-7 !w-7 !min-w-7 !p-0" icon={<PlusOutlined />} onClick={onAdd} size="small" type="text" />
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-2">
+    <aside className="flex w-[220px] shrink-0 flex-col border-r border-line bg-surface">
+      <PaneHeader
+        actions={
+          <Tooltip title="添加 Bucket 绑定">
+            <Button aria-label="添加 Bucket 绑定" icon={<PlusOutlined />} onClick={onAdd} size="small" type="text" />
+          </Tooltip>
+        }
+        meta={targets.length || null}
+        title="Bucket"
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto p-1">
         {loading ? (
           <div className="flex min-h-[180px] items-center justify-center"><Spin size="small" /></div>
         ) : targets.length ? (
-          <div className="space-y-1">
+          <div>
             {targets.map((item) => (
               <div
                 className={cn(
-                  "group oss-focusable cursor-pointer rounded-[10px] border px-3 py-2.5",
-                  item.id === selectedId
-                    ? "oss-border-selected oss-surface-selected"
-                    : "oss-card-hover border-transparent bg-transparent",
+                  "group oss-focusable cursor-pointer rounded-md px-2.5 py-2 transition-colors",
+                  item.id === selectedId ? "bg-selected" : "hover:bg-hover",
                 )}
                 key={item.id}
                 onClick={() => onSelect(item)}
                 role="button"
                 tabIndex={0}
+                title={`${item.bucket} · ${item.region}${item.prefix ? ` · ${item.prefix}` : ""}`}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault();
@@ -593,11 +576,15 @@ function TargetPane({
                   }
                 }}
               >
-                <div className="flex items-start justify-between gap-2">
+                <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
-                    <Typography.Text className="oss-text-primary block truncate text-[12px] font-medium">{item.displayName}</Typography.Text>
-                    <Typography.Text className="oss-text-tertiary mt-0.5 block truncate font-mono text-[10px]">{item.bucket}</Typography.Text>
-                    <Typography.Text className="oss-text-tertiary mt-1 block truncate text-[10px]">{item.prefix || "根目录"}</Typography.Text>
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <span className="truncate text-[13px] font-medium text-fg">{item.displayName}</span>
+                      {item.isDefault ? <span className="shrink-0 text-[11px] text-primary">默认</span> : null}
+                    </div>
+                    <div className="truncate font-mono text-[12px] text-fg-3">
+                      {item.bucket}{item.prefix ? `/${item.prefix}` : ""}
+                    </div>
                   </div>
                   <Dropdown
                     menu={{
@@ -617,7 +604,7 @@ function TargetPane({
                   >
                     <Button
                       aria-label={"操作 " + item.displayName}
-                      className="!h-6 !w-6 !min-w-6 !p-0 opacity-0 group-hover:opacity-100"
+                      className="reveal-on-hover"
                       disabled={deleting || Boolean(testingId)}
                       icon={<MoreOutlined />}
                       onClick={(event) => event.stopPropagation()}
@@ -626,7 +613,6 @@ function TargetPane({
                     />
                   </Dropdown>
                 </div>
-                {item.isDefault ? <Tag className="!m-0 mt-1 text-[10px]" color="blue">默认</Tag> : null}
               </div>
             ))}
           </div>
@@ -754,12 +740,12 @@ function ObjectBrowser({
           </div>
         </div>
       ) : null}
-      <div className="oss-border flex shrink-0 items-center gap-2 border-b px-4 py-3">
-        <Button aria-label="返回上一级目录" className="!h-7 !w-7 !min-w-7 !p-0" disabled={!currentPrefix} icon={<ArrowLeftOutlined />} onClick={onBack} size="small" type="text" />
-        <Typography.Text className="oss-text-primary min-w-0 flex-1 truncate font-mono text-[12px] font-medium">{currentPrefix || "/"}</Typography.Text>
-        <Input allowClear className="!w-[180px]" onChange={(event) => onSearch(event.target.value)} placeholder="筛选当前页..." value={objectSearch} />
+      <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-line px-3">
+        <Button aria-label="返回上一级目录" disabled={!currentPrefix} icon={<ArrowLeftOutlined />} onClick={onBack} size="small" type="text" />
+        <Typography.Text className="oss-text-primary min-w-0 flex-1 truncate font-mono text-[12px]" title={currentPrefix || "/"}>{currentPrefix || "/"}</Typography.Text>
+        <Input allowClear className="!w-[180px]" onChange={(event) => onSearch(event.target.value)} prefix={<SearchOutlined className="text-fg-3" />} placeholder="筛选当前页" value={objectSearch} />
         <Tooltip title="刷新目录">
-          <Button aria-label="刷新目录" className="!h-7 !w-7 !min-w-7 !p-0" icon={<ReloadOutlined spin={objectsQuery.isFetching} />} onClick={onRefresh} size="small" type="text" />
+          <Button aria-label="刷新目录" icon={<ReloadOutlined spin={objectsQuery.isFetching} />} onClick={onRefresh} size="small" type="text" />
         </Tooltip>
         <Button disabled={uploading} icon={<FolderAddOutlined />} loading={creatingFolder} onClick={onCreateFolder} size="small">新建文件夹</Button>
         <Button icon={<UploadOutlined />} loading={uploading} onClick={onUpload} size="small" type="primary">上传文件</Button>
@@ -771,11 +757,11 @@ function ObjectBrowser({
         ) : rows.length ? (
           <div style={virtual ? { height: rows.length * ROW_HEIGHT } : undefined}>
             <div style={virtual ? { transform: "translateY(" + start * ROW_HEIGHT + "px)" } : undefined}>
-              <div className="oss-border grid grid-cols-[minmax(0,1fr)_110px_180px_92px] border-b px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.12em] oss-text-tertiary"><span>名称</span><span>大小</span><span>修改时间</span><span className="text-right">操作</span></div>
+              <div className="sticky top-0 z-[1] grid h-8 grid-cols-[minmax(0,1fr)_110px_180px_92px] items-center border-b border-line bg-surface px-4 text-[12px] text-fg-3"><span>名称</span><span>大小</span><span>修改时间</span><span className="text-right">操作</span></div>
               {visible.map((row) =>
                 row.kind === "folder" ? (
-                  <button className="oss-object-row cursor-pointer grid h-[46px] w-full grid-cols-[minmax(0,1fr)_110px_180px_92px] items-center border-b oss-border-subtle px-4 text-left" key={row.key} onClick={() => onFolderOpen(row.prefix)} type="button">
-                    <span className="flex min-w-0 items-center gap-2"><FolderOpenOutlined className="oss-text-folder" /><span className="oss-text-primary truncate text-[12px] font-medium">{row.label}</span></span><span className="oss-text-tertiary text-[11px]">目录</span><span className="oss-text-tertiary text-[11px]">—</span><span />
+                  <button className="oss-object-row cursor-pointer grid h-[36px] w-full grid-cols-[minmax(0,1fr)_110px_180px_92px] items-center border-b oss-border-subtle px-4 text-left" key={row.key} onClick={() => onFolderOpen(row.prefix)} type="button">
+                    <span className="flex min-w-0 items-center gap-2"><FolderOpenOutlined className="oss-text-folder" /><span className="oss-text-primary truncate text-[13px]">{row.label}</span></span><span className="oss-text-tertiary text-[12px]">文件夹</span><span className="oss-text-tertiary text-[12px]">—</span><span />
                   </button>
                 ) : <ObjectRow downloadLoading={downloadLoading} key={row.key} label={row.label} object={row.object} onCopy={onCopy} onCopyDownloadUrl={onCopyDownloadUrl} onDelete={onDelete} onDownload={onDownload} onRename={onRename} />,
               )}
@@ -830,10 +816,10 @@ function ObjectRow({
       }}
       trigger={["contextMenu"]}
     >
-      <div className="oss-object-row grid h-[46px] grid-cols-[minmax(0,1fr)_110px_180px_92px] items-center border-b oss-border-subtle px-4">
-        <span className="flex min-w-0 items-center gap-2"><FileOutlined className="oss-text-accent" /><span className="oss-text-primary truncate font-mono text-[12px]" title={object.key}>{label}</span></span>
-        <span className="oss-text-secondary text-[11px]">{formatBytes(object.size)}</span>
-        <span className="oss-text-tertiary truncate text-[11px]">{formatDate(object.lastModified)}</span>
+      <div className="oss-object-row group grid h-[36px] grid-cols-[minmax(0,1fr)_110px_180px_92px] items-center border-b oss-border-subtle px-4">
+        <span className="flex min-w-0 items-center gap-2"><FileOutlined className="oss-text-accent" /><span className="oss-text-primary truncate text-[13px]" title={object.key}>{label}</span></span>
+        <span className="oss-text-secondary text-[12px]">{formatBytes(object.size)}</span>
+        <span className="oss-text-tertiary truncate text-[12px]">{formatDate(object.lastModified)}</span>
         <Dropdown
           menu={{
             items: [

@@ -231,31 +231,31 @@ export function getStatusToneClass(
 ) {
   if (status === "modified") {
     return target === "badge"
-      ? "text-[#b8860b]"
+      ? "text-warning"
       : target === "icon"
-        ? "text-[#c99600]"
-        : "text-[#c99600]";
+        ? "text-warning"
+        : "text-warning";
   }
   if (status === "renamed") {
     return target === "badge"
-      ? "text-[#c2410c]"
+      ? "text-warning"
       : target === "icon"
-        ? "text-[#c2410c]"
-        : "text-[#b45309]";
+        ? "text-warning"
+        : "text-warning";
   }
   if (status === "untracked") {
     return target === "badge"
-      ? "text-[#22c55e]"
+      ? "text-success"
       : target === "icon"
-        ? "text-[#22c55e]"
-        : "text-[#22c55e]";
+        ? "text-success"
+        : "text-success";
   }
   if (status === "ignored") {
     return target === "badge"
-      ? "text-[#6b7280]"
+      ? "text-fg-2"
       : target === "icon"
-        ? "text-[#9ca3af]"
-        : "text-[#98a2b3]";
+        ? "text-fg-3"
+        : "text-fg-3";
   }
   return "";
 }

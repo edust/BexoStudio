@@ -4,13 +4,13 @@ import {
   EditOutlined,
   PlusOutlined,
   ReloadOutlined,
-  SafetyCertificateOutlined,
 } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Empty, Input, Popconfirm, Spin, Tag, Tooltip, Typography } from "antd";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
+import { PaneHeader } from "@/components/shell/pane-header";
 import { cn } from "@/lib/cn";
 import {
   deleteOssAccount,
@@ -105,7 +105,7 @@ export function OssAccountSidebar() {
 
   if (!desktopRuntimeAvailable) {
     return (
-      <aside className="bexo-shell-surface flex h-full min-h-0 flex-col overflow-hidden rounded-[16px]">
+      <aside className="flex h-full min-h-0 flex-col overflow-hidden bg-surface">
         <SidebarHeader onAdd={openCreateDialog} />
         <div className="flex min-h-0 flex-1 items-center px-5">
           <Alert
@@ -128,23 +128,23 @@ export function OssAccountSidebar() {
   }
 
   return (
-    <aside className="bexo-shell-surface flex h-full min-h-0 flex-col overflow-hidden rounded-[16px]">
+    <aside className="flex h-full min-h-0 flex-col overflow-hidden bg-surface">
       <SidebarHeader
         loading={accountsQuery.isFetching}
         onAdd={openCreateDialog}
         onRefresh={() => void accountsQuery.refetch()}
       />
-      <div className="oss-border border-b px-3 pb-3">
+      <div className="shrink-0 border-b border-line px-2 py-2">
         <Input
           allowClear
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="搜索 OSS 账号..."
+          placeholder="搜索账号"
           prefix={<CloudOutlined className="oss-text-tertiary" />}
           value={query}
         />
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+      <div className="min-h-0 flex-1 overflow-y-auto p-1">
         {accountsQuery.error ? (
           <Alert
             action={
@@ -186,14 +186,6 @@ export function OssAccountSidebar() {
         )}
       </div>
 
-      <div className="oss-border border-t px-3 py-3">
-        <div className="oss-surface-muted flex items-start gap-2 rounded-[10px] px-2.5 py-2">
-          <SafetyCertificateOutlined className="oss-text-accent mt-0.5" />
-          <Typography.Text className="oss-text-secondary text-[11px] leading-4">
-            Secret 使用 Windows Credential Manager 保存。这里仅管理账号引用和 Bucket 绑定。
-          </Typography.Text>
-        </div>
-      </div>
 
       <OssAccountDialog
         account={editingAccount}
@@ -219,21 +211,13 @@ function SidebarHeader({
   onRefresh?: () => void;
 }) {
   return (
-    <div className="flex items-center justify-between px-4 py-3">
-      <div>
-        <Typography.Text className="oss-text-tertiary block text-[11px] font-semibold uppercase tracking-[0.2em]">
-          OSS FILES
-        </Typography.Text>
-        <Typography.Text className="oss-text-primary mt-1 block text-[14px] font-semibold">
-          账号
-        </Typography.Text>
-      </div>
-      <div className="flex items-center gap-1">
+    <PaneHeader
+      actions={
+      <>
         {onRefresh ? (
           <Tooltip title="刷新账号">
             <Button
               aria-label="刷新 OSS 账号"
-              className="!h-7 !w-7 !min-w-7 !p-0"
               icon={<ReloadOutlined spin={loading} />}
               onClick={onRefresh}
               size="small"
@@ -241,18 +225,19 @@ function SidebarHeader({
             />
           </Tooltip>
         ) : null}
-        <Tooltip title="添加 RAM AccessKey">
+        <Tooltip title="添加 RAM AccessKey（Secret 保存在 Windows 凭据管理器）">
           <Button
             aria-label="添加 OSS 账号"
-            className="!h-7 !w-7 !min-w-7 !p-0"
             icon={<PlusOutlined />}
             onClick={onAdd}
             size="small"
             type="text"
           />
         </Tooltip>
-      </div>
-    </div>
+      </>
+      }
+      title="OSS 账号"
+    />
   );
 }
 
@@ -280,10 +265,8 @@ function AccountItem({
   return (
     <div
       className={cn(
-        "group oss-focusable cursor-pointer rounded-[10px] border px-3 py-2.5 transition-colors",
-        selected
-          ? "oss-border-selected oss-surface-selected"
-          : "oss-card-hover border-transparent bg-transparent",
+        "group oss-focusable cursor-pointer rounded-md px-2.5 py-2 transition-colors",
+        selected ? "bg-selected" : "hover:bg-hover",
       )}
       onClick={onSelect}
       role="button"
@@ -304,11 +287,11 @@ function AccountItem({
           <Typography.Text className="oss-text-primary block truncate text-[13px] font-medium">
             {account.displayName}
           </Typography.Text>
-          <Typography.Text className="oss-text-tertiary mt-0.5 block truncate font-mono text-[11px]">
+          <Typography.Text className="oss-text-tertiary block truncate font-mono text-[12px]">
             {account.accessKeyIdHint}
           </Typography.Text>
         </div>
-        <div className="flex shrink-0 items-center gap-0 opacity-0 transition-opacity group-hover:opacity-100">
+        <div className="reveal-on-hover flex shrink-0 items-center gap-0">
           <Button
             aria-label={"编辑 " + account.displayName}
             className="!h-6 !w-6 !min-w-6 !p-0"
@@ -346,7 +329,7 @@ function AccountItem({
         </div>
       </div>
       {account.lastProbeStatus === "failed" && account.lastProbeError ? (
-        <Typography.Text className="oss-text-danger mt-1 block truncate text-[10px]">
+        <Typography.Text className="oss-text-danger mt-0.5 block truncate text-[12px]">
           {account.lastProbeError}
         </Typography.Text>
       ) : null}

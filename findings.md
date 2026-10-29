@@ -1,5 +1,23 @@
 # findings
 
+## 2026-10-01 OSS 私有下载链接有效期
+- 右键复制不传显式时长，统一使用 Rust 默认 900 秒；改为 86400 秒即可覆盖现有入口，UI 已按后端 expiresAt 提示。
+- 保持私有访问、V4 签名、60 秒至 7 天边界；已生成旧 URL 不会自动延长，不需要改权限或数据库。
+- 隔离运行生产 OSS domain/signer 单元测试：1 天 URL 参数和边界断言通过。原 PUT 官方样例断言失败；将 HEAD 的 oss.rs/v4_signer.rs 从 stdin 编译后复测，同一断言仍失败，确认并非本次修改引入，暂未修复该无关问题。
+
+## 2026-10-01 Screenshot Save Latency
+- 实际日志：1796×992 标注底图 compose=1074ms、encode=1589ms；窗口收尾=59ms。PNG 默认编码和逐像素裁剪/alpha 合成是确认的主要慢点。
+- 保存/复制 command 重复 interaction 清理，restore 再准备已存在窗口；修复保持保存失败可重试，不做先隐藏后假成功。
+- 最终本地 debug 同输入基准（1796×992）：旧合成+编码 1841-2224ms，新 491-528ms；逐像素/通道一致。Fast/Sub PNG 可较默认大，不降画质。
+- session operation try_lock 使并发终态/再次启动不交错；窗口不在时仍清理原生层，不重新创建窗口。
+
+## 2026-10-01 Screenshot UI and Performance
+- 旧原生选区每次鼠标移动执行全屏 CPU 绘制/复制及 UpdateLayeredWindow，旧 metrics 未包括 CPU raster。
+- 已替换为 GPU 几何绘制和双缓冲合成，松手坐标先更新再提交；原生渲染不持有输入 mutex。
+- 去除 220ms 前端冷却；消息驱动 owner 与 RAF latest-only delivery 各司其职，晚到 RPC 不覆盖新事件。
+- Toolbar 局部浅色 ConfigProvider 与专用 CSS，主应用亮/暗主题均保持白底深色图标；复制/保存固定可见。
+- 隔离原生测试覆盖八方向缩放、DPI、快速反向及重复拖动、最后坐标与四类标注创建；4K renderer benchmark 是隐藏窗口 CPU 提交/Present 数据，非端到端可见延迟。
+
 ## 2026-07-11 UI 缩放与布局回归
 
 - 用户截图显示异常跨 WORKBENCH、资源浏览器、终端命令组和 Prompts，初始分类为全局/共享层回归，尚未确认根因。
@@ -260,6 +278,12 @@
 - 仓库缺少 `docs/*` 文档与根级计划文件，已按当前任务补齐最小工作记录。
 - 现有命令仅支持按 workspace 根路径打开终端，不支持资源路径定向打开。
 - 新命令实现中，`targetPath` 若指向文件会自动回退到父目录，符合“在这里打开终端”预期。
+
+## 2026-10-19 全应用 UI 精简重构
+- 臃肿来自重复信息（工作区路径 4 处）、88px 多控件行、装饰性大写标签与说明副标题，以及按 isDark 分叉的硬编码 hex + 全局 hex 覆盖层。
+- antd compactAlgorithm + componentSize=small 让小号控件文字约 10–11px；改为默认算法 + fontSizeSM=12。
+- antd 全局链接色会覆盖 Link 上的 text-* 类，导航链接需 `!text-*`。
+- 现状 UI 基础是 Ant Design（非 shadcn），本次未迁移组件库。
 - 为避免路径逃逸，后端对 `targetPath` 做了绝对路径、存在性、canonicalize 后工作区边界校验。
 - 本机 `cargo test` 仍存在 `STATUS_ENTRYPOINT_NOT_FOUND`，当前可通过 `cargo check` + 前端构建完成编译级验证。
 - VS Code 在部分环境会解析为 `code.cmd`，通过 `cmd.exe /C` 启动时会出现控制台闪窗；对 `cmd.exe` 启动加 `CREATE_NO_WINDOW` 可消除闪窗。
@@ -913,3 +937,14 @@ ativeToolbarActive（native 已确认 visible 且 session 有效）时，才隐�
 - 应用阶段在一个 `Database::write` 事务内重新分类全部项目；状态变化、数量超限或任一写入失败都会整体回滚。
 - 同一 create/update 请求若因响应丢失而重放，目标 UUID 已达到完全相同内容时归一为成功跳过，避免重复写和伪失败。
 - 预检正文仅返回 180 字符预览，最多 1000 项固定行虚拟化；状态同时使用图标和文字，不能只依赖颜色。
+
+## 2026-10-19 工作区导航
+- 复用 is_archived 与 pinnedWorkspaceIds；最后运行来自恢复记录，不作为最近访问。发现并修复初始派生列表为空时误清置顶；源数据范围控制归档、勾选和当前内容。虚拟行外编辑备注避免滚动丢草稿。
+
+## 2026-10-19 工作台可读性
+- 实施范围和验证见 scripts/work/2026-10-19-workspace-readability/。
+- 本轮已完成：440px可调宽度、三行条目和黄色星标、命令区窄窗口适配；62项前端测试、production build及整页浏览器模拟验收通过。实际Tauri显示由用户验收；见专项deliverable。
+
+
+## 2026-10-19 恢复拖放动画
+- 确认原虚拟列表只有透明度反馈，没有移动预览；恢复拖动位移、让位过渡及边缘滚动期间源行保留。

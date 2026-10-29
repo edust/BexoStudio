@@ -107,20 +107,14 @@ export function PromptQuickPasteSettings({
   }
 
   return (
-    <section className="mt-3 shrink-0 overflow-hidden rounded-[0] border border-[#eef2f6] bg-white">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[#eef2f6] px-4 py-3">
-        <div className="min-w-0">
-          <Typography.Text className="block text-[12px] font-semibold text-[#1f2937]">
-            Prompt 快速粘贴
-          </Typography.Text>
-          <Typography.Text className="mt-0.5 block text-[11px] text-[#667085]">
-            绑定后可在 Bexo Studio 后台或托盘状态下，把 Prompt 正文发送到当前光标处。
-          </Typography.Text>
-        </div>
-        <span className="shrink-0 rounded-full border border-[#d8e1eb] bg-[#f8fafc] px-2 py-0.5 text-[10px] text-[#667085]">
-          已注册 {registeredCount}
-        </span>
+    <section aria-label="Prompt 快速粘贴" className="shrink-0 space-y-1.5">
+      <header className="flex items-center gap-2 px-1">
+        <Tooltip title="绑定后可在 Bexo Studio 后台或托盘状态下，把 Prompt 正文发送到当前光标处。">
+          <h3 className="m-0 text-[12px] font-medium text-fg-3">Prompt 快速粘贴</h3>
+        </Tooltip>
+        <span className="text-[12px] text-fg-3">· 已注册 {registeredCount}</span>
       </header>
+      <div className="overflow-hidden rounded-md border border-line bg-surface">
 
       {promptLoadError ? (
         <Alert
@@ -153,7 +147,7 @@ export function PromptQuickPasteSettings({
 
         return (
           <div
-            className="grid grid-cols-1 items-center gap-3 border-b border-[#eef2f6] px-4 py-3 last:border-b-0 lg:grid-cols-[92px_minmax(0,1fr)] xl:grid-cols-[92px_minmax(0,1fr)_auto]"
+            className="grid grid-cols-1 items-center gap-x-3 gap-y-2 border-b border-line px-3 py-2 last:border-b-0 lg:grid-cols-[92px_minmax(0,1fr)] xl:grid-cols-[92px_minmax(0,1fr)_auto]"
             key={slot.slot}
           >
             <div className="flex items-center gap-2">
@@ -171,7 +165,7 @@ export function PromptQuickPasteSettings({
                 }
                 size="small"
               />
-              <Typography.Text className="text-[12px] font-medium text-[#1f2937]">
+              <Typography.Text className="text-[13px] text-fg">
                 槽位 {slot.slot}
               </Typography.Text>
             </div>
@@ -198,24 +192,23 @@ export function PromptQuickPasteSettings({
                 options={options}
                 placeholder="选择 Prompt"
                 showSearch
-                size="small"
                 status={missingPrompt ? "error" : undefined}
                 value={slot.promptId ?? undefined}
               />
               <Tooltip title={recording ? "按 Esc 取消录制" : slot.shortcut}>
                 <div
-                  className={`flex h-[32px] min-w-0 items-center overflow-hidden rounded-[8px] border px-3 font-mono text-[11px] ${
+                  className={`flex h-[30px] min-w-0 items-center overflow-hidden rounded-md border px-2.5 font-mono text-[12px] ${
                     recording
-                      ? "border-[#1697c5] bg-[#f0fbff] text-[#0b6f95]"
-                      : "border-[#d8e1eb] bg-[#f8fafc] text-[#475467]"
+                      ? "border-primary bg-selected text-primary"
+                      : "border-line bg-surface-2 text-fg-2"
                   }`}
                 >
                   <span className="truncate">{displayShortcut}</span>
                 </div>
               </Tooltip>
-              <Typography.Text
-                className={`block text-[10px] xl:col-span-2 ${
-                  missingPrompt ? "text-[#cf5a4a]" : "text-[#667085]"
+              <span
+                className={`block text-[12px] xl:col-span-2 ${
+                  missingPrompt ? "text-danger" : "text-fg-3"
                 }`}
               >
                 {missingPrompt
@@ -223,12 +216,11 @@ export function PromptQuickPasteSettings({
                   : selectedPrompt
                     ? `已绑定：${selectedPrompt.title}`
                     : `默认 ${defaultPromptQuickPasteShortcut(slot.slot)}，选择 Prompt 后自动启用。`}
-              </Typography.Text>
+              </span>
             </div>
 
             <div className="flex justify-start gap-2 lg:col-start-2 xl:col-start-auto xl:justify-end">
               <Button
-                className="!h-[30px] !px-2.5 !text-[11px]"
                 disabled={disabled || saving || (recordingSlot !== null && !recording)}
                 onClick={() => {
                   if (recording) {
@@ -239,13 +231,11 @@ export function PromptQuickPasteSettings({
                   setRecorderPreview("");
                   setRecordingSlot(slot.slot);
                 }}
-                size="small"
                 type={recording ? "primary" : "default"}
               >
                 {recording ? "取消录制" : "录制热键"}
               </Button>
               <Button
-                className="!h-[30px] !px-2.5 !text-[11px]"
                 disabled={
                   disabled ||
                   saving ||
@@ -259,7 +249,6 @@ export function PromptQuickPasteSettings({
                     `槽位 ${slot.slot} 已恢复默认热键`,
                   )
                 }
-                size="small"
               >
                 恢复默认
               </Button>
@@ -277,6 +266,7 @@ export function PromptQuickPasteSettings({
           type="error"
         />
       ) : null}
+      </div>
     </section>
   );
 }
