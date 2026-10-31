@@ -2236,3 +2236,15 @@ ativeToolbarActive 时才隐藏 WebView 主行，避免多次截图后工具整�
 双平台实现、65 项前端/124 项 Rust 检查与 macOS 调试打包完成；系统授权及 Windows 验收待完成，详见专项 deliverable.md。
 
 授权续验：辅助功能和录屏已开启；日志启动修复的独立 4 项测试通过。完整构建受待处理的 macOS 系统通知阻塞，已清理进程；等待本机处理提示后继续。当前安装包尚未包含该修复。
+
+## 2026-10-31 继续验收：构建入口与签名修复
+- 本轮基线 1b098587e582a2737780e8097eb95b03cfb852e1；Mac Rust 125 passed / 1 ignored，日志修复已重新打包且正常 LaunchServices 启动通过。
+- Windows CI 41205789777：编译完成，测试 exe 在加载阶段退出 0xc0000139。已安装 tauri-winres 使用 embed_resource::compile，只向 bin 链接资源；按 Tauri #13419 维护者方案将同一 Common Controls v6 清单显式链接到所有 Windows MSVC 目标，避免遗漏测试 harness。原应用清单内容保持一致，无新增业务拒绝。
+- Mac Terminal 后续标签返回 1002，刷新辅助功能并重启仍复现；codesign 实测只有 linker-signed 签名、Info.plist 未绑定、Identifier 为构建文件名。补齐应用包 ad-hoc 签名与 Apple Events entitlement；不需要钥匙串凭据，不修改 TCC 数据库。重新打包并验证签名、权限和真实命令输出。
+- 依据：https://github.com/tauri-apps/tauri/issues/13419 、https://v2.tauri.app/distribute/sign/macos/ 、https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.automation.apple-events 。
+- Windows 修复需新的 runner 复验；提交/推送仍需用户明确授权。Keychain 集成测试按用户反馈不再运行。
+
+## 2026-10-31 本轮验收收尾
+Windows 141 项 Rust 测试、65 项前端测试和 NSIS 构建通过；Mac 最终 125 项 Rust 测试、签名 app/dmg、工作区/文件监听/批量 Terminal 通过。Phase 4 保持进行中：真实截图/快捷粘贴入口待用户确认，Keychain 不再重跑，Windows GUI/登录启动/多显示器仍 Unverified。详情与本轮文件清单见 scripts/work/2026-10-31-dual-platform/deliverable.md 顶部最新结果。
+
+2026-10-31 打包便捷入口：新增根目录 build_macos_arm64.sh / build_win64.bat，复用 release:build，自动定位项目和按需安装现有锁定依赖；不改变版本或平台构建契约。Mac bash 语法及模拟 npm 的首次安装、已有依赖、失败退出、含空格路径检查通过；Windows BAT 已静态检查，未在 Windows 执行。此次未重新打包，未启动长期进程。

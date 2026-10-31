@@ -89,9 +89,30 @@ impl MacTerminalAdapter {
                     .join(" "),
             );
         }
-        // Terminal's dictionary exposes do script, but creating a tab requires its menu shortcut.
+        // Terminal's dictionary exposes do script but no tab constructor. Invoke its menu action
+        // through AX, then identify the new tab by its TTY (native tabs can have separate window IDs).
+        // Match the menu shortcut attributes rather than localized menu/profile titles.
         // Group identity lives in the first tab's custom title; never send commands into an existing busy tab.
-        let script = r#"on run argv
+        let script = r#"on clickNewTab(theMenu, remainingDepth)
+tell application "System Events"
+ repeat with candidate in menu items of theMenu
+  if enabled of candidate then
+   if (exists attribute "AXMenuItemCmdChar" of candidate) and (exists attribute "AXMenuItemCmdModifiers" of candidate) then
+    if (value of attribute "AXMenuItemCmdChar" of candidate is "t") and (value of attribute "AXMenuItemCmdModifiers" of candidate is 0) then
+     click candidate
+     return true
+    end if
+   end if
+   if remainingDepth > 0 and (exists menu 1 of candidate) then
+    if my clickNewTab(menu 1 of candidate, remainingDepth - 1) then return true
+   end if
+  end if
+ end repeat
+end tell
+return false
+end clickNewTab
+
+on run argv
 try
 set commandText to item 1 of argv
 set groupName to item 2 of argv
@@ -103,7 +124,7 @@ with timeout of 15 seconds
   if groupName is not "" then
    repeat with w in windows
     if custom title of tab 1 of w is groupName then
-     set targetWindow to w
+     set targetWindow to window id (id of w)
      exit repeat
     end if
    end repeat
@@ -116,20 +137,45 @@ with timeout of 15 seconds
     set custom title of newTab to tabTitle
    end if
   else
-   set index of targetWindow to 1
-   set previousCount to count of tabs of targetWindow
+   set frontmost of targetWindow to true
+   repeat 100 times
+    if frontmost and (frontmost of targetWindow) then exit repeat
+    delay 0.05
+   end repeat
+   if not (frontmost and (frontmost of targetWindow)) then error "Terminal 窗口未能进入前台" number -2701
+   set previousTtys to {}
+   repeat with existingWindow in windows
+    repeat with existingTab in tabs of existingWindow
+     set end of previousTtys to tty of existingTab
+    end repeat
+   end repeat
    tell application "System Events"
     tell process "Terminal"
      set frontmost to true
-     keystroke "t" using command down
+     set openedTab to false
+     repeat with topMenu in menu bar items of menu bar 1
+      if exists menu 1 of topMenu then
+       if my clickNewTab(menu 1 of topMenu, 1) then
+        set openedTab to true
+        exit repeat
+       end if
+      end if
+     end repeat
+     if not openedTab then error "未找到 Terminal 新建标签页菜单" number -2702
     end tell
    end tell
+   set newTab to missing value
    repeat 100 times
-    if (count of tabs of targetWindow) > previousCount then exit repeat
+    set candidateWindow to window id (id of front window)
+    set candidateTab to selected tab of candidateWindow
+    set candidateTty to tty of candidateTab
+    if candidateTty is not "" and candidateTty is not in previousTtys then
+     set newTab to candidateTab
+     exit repeat
+    end if
     delay 0.05
    end repeat
-   if (count of tabs of targetWindow) ≤ previousCount then error "无法创建 Terminal 标签页，请检查辅助功能权限"
-   set newTab to selected tab of targetWindow
+   if newTab is missing value then error "无法识别新建的 Terminal 标签页" number -2700
    do script commandText in newTab
    set custom title of newTab to tabTitle
   end if

@@ -2532,3 +2532,8 @@ pm run web:build。
 2026-10-31 续验：用户已授权 Bexo Studio 自动化/辅助功能/录屏并在本机解锁系统设置；已从设置 UI 确认辅助功能和录屏开启。LaunchServices 启动 PID 90067 卡在 tauri-plugin-log RotatingFile::open_file，系统日志文件已打开，仓库 runtime-logs 未打开。修复 Mac 应用包不添加仓库日志目标（仍保留系统日志），直接开发二进制及 Windows 行为不变，无新增拒绝。
 
 授权续验尚未完成：已开启辅助功能/录屏；独立日志回归 4 项通过；完整 Cargo/Tauri 重建与 Keychain 测试被系统认证阻塞并已终止。旧包不含最新日志修复。详见专项 deliverable.md 授权后续验。
+
+## 2026-10-31 继续验收完成的工作
+Windows CI 41208497258 / job 124558383981：前端 65、Rust 141 全通过，x64 NSIS 上传成功。Mac 本机最终 Rust 125 通过 / 1 ignored，签名 app+dmg、正常启动、工作区、文件监听、批量终端真实命令通过；日志启动修复已包含。用户分别授权的 Windows 提交 b83a2a9、30ffbff 已推送 codex/windows-test-manifest；Mac 修复和文档未提交，无部署、无锁文件变更。用户另行授权后已移除临时 Prompt 和工作区，快捷槽位 5 恢复为空/关闭；Bexo、TextEdit、测试 shell、构建进程均已关闭，1420/1421 无监听。截图/快捷粘贴真实键盘验收待澄清，Keychain 因缺少钥匙串密码未重跑。完整文件清单与产物见专项 deliverable.md 顶部。
+
+2026-10-31 打包便捷入口：新增根目录 build_macos_arm64.sh / build_win64.bat，复用 release:build，自动定位项目和按需安装现有锁定依赖；不改变版本或平台构建契约。Mac bash 语法及模拟 npm 的首次安装、已有依赖、失败退出、含空格路径检查通过；Windows BAT 已静态检查，未在 Windows 执行。此次未重新打包，未启动长期进程。

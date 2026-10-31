@@ -38,6 +38,8 @@ macOS 截图使用不透明的全屏底图窗口，因此无需 Tauri 的 macos-
 
 ## 构建与运行
 
+项目根目录提供打包入口：macOS arm64 执行 `./build_macos_arm64.sh`，Windows x64 双击或执行 `build_win64.bat`。脚本自动定位项目目录，缺少 Tauri CLI 时执行 `npm ci`，然后调用 `npm run release:build`；失败时返回非零退出码。Mac 脚本优先使用 PATH 中的工具，并兼容本机验收时准备的临时工具链；工具链不存在时需要自行安装。Windows 脚本结束时暂停以便查看结果。
+
 共同前提：Node.js 24、npm、Rust stable。Windows 需要 MSVC Build Tools 和 WebView2；macOS 需要 Xcode Command Line Tools。
 
 在仓库根目录：
@@ -59,6 +61,10 @@ npm run release:build
 发行脚本按宿主选择上述目标，以仓库版本构建，**不自动递增版本或改写锁文件**。产物在 `src-tauri/target/<target>/release/bundle/`：Windows `nsis/*.exe`，macOS `macos/*.app` 与 `dmg/*.dmg`。安装 `.app` 到 Applications 后再进行登录启动验收；开发路径不能作为稳定发行安装路径。
 
 `.github/workflows/desktop.yml` 提供两平台测试和安装包构建，不自动发布。macOS 签名、公证和公开分发需要正式 Apple Developer 凭据；本次不调用发布服务。
+
+macOS 本地包默认使用 `bundle.macOS.signingIdentity: "-"` 做应用包 ad-hoc 签名，使签名绑定 `studio.bexo.desktop` 和 Info.plist；无需证书或钥匙串密码。这不等于 Developer ID 签名或公证。`Entitlements.plist` 声明已有 Terminal 自动化功能所需的 Apple Events 能力，实际访问仍由系统提示授权。重新构建可能改变签名，若系统授权失效，需在系统设置重新添加当前应用并重启；普通 `desktop:dev` 二进制不能替代打包应用的权限验收。正式发行时按 Tauri 文档配置真实签名身份和公证凭据。
+
+Windows MSVC 构建显式把与 Tauri 默认内容一致的 Common Controls v6 清单嵌入应用和测试程序，避免 `cargo test` 的库测试 harness 因缺少清单而在加载时退出 `STATUS_ENTRYPOINT_NOT_FOUND`。对应上游问题：[Tauri #13419](https://github.com/tauri-apps/tauri/issues/13419)。
 
 ## 验收状态
 

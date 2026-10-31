@@ -1,5 +1,100 @@
 # 双平台实现交付与剩余验收
 
+## 2026-10-31 本轮最新结果（覆盖下方历史状态）
+
+基线为 `1b098587e582a2737780e8097eb95b03cfb852e1`。Windows 构建与测试已通过，macOS 本机签名、启动、工作区、文件监听和批量 Terminal 已通过。**截图与快捷粘贴的真实全局热键验收尚未完成；钥匙串按用户要求不再测试。不能据此宣称全部桌面功能验收完成。**
+
+### 修复与边界
+
+- Windows：Tauri 默认只给应用 bin 链接 Common Controls v6 清单，库测试程序启动时报 `0xc0000139`。按上游维护者方案给 Windows MSVC 目标显式嵌入同一清单；原业务逻辑不变。
+- Windows 测试：runner 的 `RUNNER~1` 短目录名与系统返回的长目录名指向同一目录。三处测试改为比较 canonical 目录，未放宽或收紧生产输入规则。
+- macOS：应用包补齐 ad-hoc 签名，绑定 `studio.bexo.desktop`、Info.plist 和 Apple Events entitlement；不需要证书或钥匙串密码，不等于正式签名或公证。
+- macOS Terminal：用户现场确认同窗已有两个标签，但旧脚本窗口的 `tabs` 数未增加。改为菜单创建标签后用新 TTY 识别目标；保留窗口 ID、前台等待、串行化、15/20 秒超时及脱敏错误。菜单按 AX 快捷键属性定位，适用于本机中文菜单。
+- 本轮未改依赖清单、锁文件、真实 OSS 服务或用户凭据，未部署、合并 main 或公开发布安装包。
+
+### 已执行验证
+
+| 项目 | 实际结果 |
+| --- | --- |
+| Windows CI 前端测试 | 65 passed / 0 failed |
+| Windows Rust `--target x86_64-pc-windows-msvc --lib` | 141 passed / 0 failed / 0 ignored |
+| Windows NSIS | `Bexo Studio_0.1.19_x64-setup.exe` 构建并上传成功 |
+| 最终 macOS Rust `--all-targets` | 125 passed / 0 failed / 1 ignored（Keychain 集成） |
+| 最终 macOS TypeScript/Vite、debug app+dmg | 成功 |
+| AppleScript 编译、修改的适配器 rustfmt、plist | 通过 |
+| `.app` codesign 严格验证 | valid on disk；Identifier=studio.bexo.desktop，Info.plist 已绑定 |
+| DMG `hdiutil verify` | VALID |
+| macOS 正常 LaunchServices 启动 | 主窗口、设置与工作区正常；此前日志启动修复已包含在包内 |
+| 批量 Terminal | 清空旧输出后从 UI 运行整组，两条命令均产生精确预期输出，无批量错误；工作目录、中文和 `$literal` 保留 |
+| 工作区文件监听 | 在临时工作区创建 `verified-watch.txt` 后自动出现在 UI |
+
+Windows job：[41208497258 / 124558383981](https://github.com/edust/BexoStudio/actions/runs/41208497258/job/124558383981)，对应提交 `30ffbfff1f2c32870647b8ca4baaabf29915dde5`。该 run 的 macOS job 被外部取消；此前主分支 `1b09858` 的 [macOS CI](https://github.com/edust/BexoStudio/actions/runs/41205789777) 已成功。最终 Mac 未提交修复由本机实际构建与验收覆盖，不冒称已进入远端 CI。
+
+### 产物与部署
+
+- 本机 app：`/Users/mac/Desktop/BexoStudio/src-tauri/target/debug/bundle/macos/Bexo Studio.app`。
+- 本机 DMG：`/Users/mac/Desktop/BexoStudio/src-tauri/target/debug/bundle/dmg/Bexo Studio_0.1.19_aarch64.dmg`。
+- DMG SHA256：`445c3bf359e9165bd4bed47a171518b33bb8e625107b4ec21f77419ac4e911d7`。
+- Windows 产物保存在上述 CI 的 `bexo-x86_64-pc-windows-msvc` artifact，ID `13046260130`，8054971 字节；ZIP SHA256 `a57375925f97646109c58aea83f7dce9f77fcdaa584510aadfb4fded00ddbae0`。没有在本机执行 Windows 安装器。
+- Mac CI 主分支旧包 artifact ID `13043759330` 不包含本轮 ad-hoc/TTY 修复，人工验收应使用上述本机最终包。
+- 未部署。无需数据库迁移。正式发行构建使用 `npm run release:build`；Mac Developer ID 签名、公证和安装后登录启动为 Unverified。
+
+### 未完成的系统验收
+
+1. 截图：用户回复已出现截图界面，但 Bexo 日志未收到热键，工具仍可操作主窗口。正在确认界面所属应用及键盘是否通过远程桌面发送，**不记为截图通过**。选区、标注、保存与多显示器仍 Unverified。
+2. 快捷粘贴：临时 Prompt 和槽位 5 注册成功；CUA 定向按键没有触发全局回调。实际向外部应用注入 Command+V 的流程仍 Unverified。
+3. Keychain：用户没有登录钥匙串密码，本轮未重跑凭据集成测试；之前虚拟测试项的写入与清理结果仍未确认。不要求用户发送密码，不重置钥匙串。
+4. Windows 安装后的真实终端/IDE/截图等 GUI 验收、macOS 登录启动和多显示器仍 Unverified；CI 编译与 shim 测试不等同于桌面实机验收。
+
+### Git 与本轮文件
+
+用户分别明确授权了两次 Windows 提交：`b83a2a9`（清单）和 `30ffbff`（三个路径断言），已通过 GitHub 连接器推送到 `codex/windows-test-manifest`，本地同名分支已跟踪并快进到远端。CLI 推送因无凭据失败，连接器完成后已核对提交树。没有合并 main。最初同内容的本地提交保存在 `codex/windows-test-manifest-local`，未改写历史。
+
+以下清单只包含本轮相对上述基线的改动，排除此前迁移实现：
+
+| 完整路径 | 类型 | 用途 |
+| --- | --- | --- |
+| `/Users/mac/Desktop/BexoStudio/src-tauri/build.rs` | 修改，已提交 | 给 Windows 测试及应用嵌入系统控件清单 |
+| `/Users/mac/Desktop/BexoStudio/src-tauri/windows-app-manifest.xml` | 新增，已提交 | 与 Tauri 默认一致的 Common Controls v6 清单 |
+| `/Users/mac/Desktop/BexoStudio/src-tauri/src/services/workspace_service.rs` | 修改，已提交 | 两个 Windows 终端测试兼容目录别名 |
+| `/Users/mac/Desktop/BexoStudio/src-tauri/src/services/restore_service.rs` | 修改，已提交 | 恢复测试按实际目录核对进程 CWD |
+| `/Users/mac/Desktop/BexoStudio/src-tauri/tauri.macos.conf.json` | 修改，未提交 | 默认 ad-hoc 包签名及 entitlement 路径 |
+| `/Users/mac/Desktop/BexoStudio/src-tauri/Entitlements.plist` | 新增，未提交 | 已授权 Terminal 自动化所需 Apple Events 能力 |
+| `/Users/mac/Desktop/BexoStudio/src-tauri/src/adapters/terminal_macos.rs` | 修改，未提交 | 按新 TTY 识别菜单创建的标签页 |
+| `/Users/mac/Desktop/BexoStudio/src-tauri/src/adapters/process.rs` | 修改，未提交 | 区分标签未就绪、窗口焦点及菜单错误 |
+| `/Users/mac/Desktop/BexoStudio/docs/platform-support.md` | 修改，未提交 | 签名、Windows 测试清单与验收说明 |
+| `/Users/mac/Desktop/BexoStudio/task_plan.md` | 修改，未提交 | 更新总体状态和剩余验收 |
+| `/Users/mac/Desktop/BexoStudio/findings.md` | 修改，未提交 | 记录实际平台缺陷与依据 |
+| `/Users/mac/Desktop/BexoStudio/progress.md` | 修改，未提交 | 记录本轮执行与验证结果 |
+| `/Users/mac/Desktop/BexoStudio/scripts/work/2026-10-31-dual-platform/task_plan.md` | 修改，未提交 | 专项验收状态 |
+| `/Users/mac/Desktop/BexoStudio/scripts/work/2026-10-31-dual-platform/notes.md` | 修改，未提交 | 详细证据与排障记录 |
+| `/Users/mac/Desktop/BexoStudio/scripts/work/2026-10-31-dual-platform/deliverable.md` | 修改，未提交 | 本轮结果、产物、清理与验收边界 |
+
+### 手动启动与测试
+
+本轮临时进程已关闭。Bexo PID 41844、TextEdit PID 43986、测试 zsh PID 41982/41990/42096/42101 已清理；所有本轮 Cargo/Rust/esbuild/打包进程已结束，复查无相关残留，1420/1421 无监听。既有用户 Terminal 和系统设置未强行退出。用户明确确认后已删除临时 Prompt、从列表移除 desktop-fixture 工作区，原两条 Prompt 保留，槽位 5 恢复为空且关闭；磁盘验收输出留在 `/tmp/bexo-build-tools/desktop-fixture`，空白 TextEdit 文稿保存为 `/tmp/bexo-build-tools/clipboard-acceptance.rtf` 后退出。
+
+工作目录：`/Users/mac/Desktop/BexoStudio`。常规工具链为 Node.js 24/npm、Rust stable、Xcode Command Line Tools。
+
+```sh
+cd /Users/mac/Desktop/BexoStudio
+npm run desktop:dev
+```
+
+Tauri 自动启动 Vite，地址 `http://localhost:1420`；在终端用 Ctrl+C 停止。若本机常规 PATH 尚未配置，本轮使用的临时工具链可在当前 shell 中启用（不修改系统环境）：
+
+```sh
+export CARGO_HOME=/tmp/bexo-build-tools/cargo
+export RUSTUP_HOME=/tmp/bexo-build-tools/rustup
+export PATH="/tmp/bexo-build-tools/bin:/tmp/bexo-build-tools/cargo/bin:/Users/mac/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH"
+cd /Users/mac/Desktop/BexoStudio
+npm run desktop:dev
+```
+
+系统权限流程应启动上述已签名 `.app` 验收，源码开发进程不能代替包身份验收。截图热键 `Control+Shift+X`，需确认真实按键到达 Mac。临时 `/tmp` 工具链可能被系统清理。
+
+## 以下为此前回合历史记录
+
 代码适配已落地；**完整平台验收尚未完成**，权限确认及 Windows 执行仍待补齐。原 Windows 业务规则保留，未新增业务拒绝条件；未改依赖清单或锁文件，未提交、推送、部署或调用真实 OSS 服务。
 
 ## 实际验证

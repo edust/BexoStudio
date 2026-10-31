@@ -960,3 +960,15 @@ ativeToolbarActive（native 已确认 visible 且 session 有效）时，才隐�
 - macOS .app/.dmg 调试构建已成功；正式签名、公证、Windows 构建/运行及系统权限验收未执行。没有改动依赖清单/锁文件，没有提交或推送。
 
 TCC 系统日志已核实 DesktopFolder 提示导致日志初始化及后续构建等待。工具禁止操作 UserNotificationCenter，用户需在本机处理。日志路径纯函数独立 4 项测试通过；完整新构建未完成。
+
+## 2026-10-31 继续验收：构建入口与签名修复
+- 本轮基线 1b098587e582a2737780e8097eb95b03cfb852e1；Mac Rust 125 passed / 1 ignored，日志修复已重新打包且正常 LaunchServices 启动通过。
+- Windows CI 41205789777：编译完成，测试 exe 在加载阶段退出 0xc0000139。已安装 tauri-winres 使用 embed_resource::compile，只向 bin 链接资源；按 Tauri #13419 维护者方案将同一 Common Controls v6 清单显式链接到所有 Windows MSVC 目标，避免遗漏测试 harness。原应用清单内容保持一致，无新增业务拒绝。
+- Mac Terminal 后续标签返回 1002，刷新辅助功能并重启仍复现；codesign 实测只有 linker-signed 签名、Info.plist 未绑定、Identifier 为构建文件名。补齐应用包 ad-hoc 签名与 Apple Events entitlement；不需要钥匙串凭据，不修改 TCC 数据库。重新打包并验证签名、权限和真实命令输出。
+- 依据：https://github.com/tauri-apps/tauri/issues/13419 、https://v2.tauri.app/distribute/sign/macos/ 、https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.automation.apple-events 。
+- Windows 修复需新的 runner 复验；提交/推送仍需用户明确授权。Keychain 集成测试按用户反馈不再运行。
+
+## 2026-10-31 验收结论更新
+Windows 缺少测试程序的 Common Controls v6 清单及三处短路径断言已修复，CI 141 项测试和 NSIS 成功。Mac 应用包签名已绑定正确身份；Terminal 可视标签不等同于旧脚本窗口的 tabs 数，用户观察与本机错误共同确认了这一点，改按新 TTY 定位后两条命令真实输出均通过。截图界面来源与本机/远程按键尚待用户确认，不能记录为通过。详细依据、提交和产物见专项 notes.md / deliverable.md。
+
+2026-10-31 打包便捷入口：新增根目录 build_macos_arm64.sh / build_win64.bat，复用 release:build，自动定位项目和按需安装现有锁定依赖；不改变版本或平台构建契约。Mac bash 语法及模拟 npm 的首次安装、已有依赖、失败退出、含空格路径检查通过；Windows BAT 已静态检查，未在 Windows 执行。此次未重新打包，未启动长期进程。

@@ -561,12 +561,25 @@ fn launch_blocking(command: LaunchCommand) -> AppResult<ProcessLaunchResult> {
                         .and_then(|number| number.parse::<i32>().ok());
                     return Err(AppError::new(
                         "TERMINAL_AUTOMATION_FAILED",
-                        format!(
-                            "Terminal 启动失败（系统错误 {}），请检查自动化与辅助功能授权",
-                            os_error
-                                .map(|code| code.to_string())
-                                .unwrap_or_else(|| "unknown".into())
-                        ),
+                        match os_error {
+                            Some(-2700) => {
+                                "无法确认 Terminal 新标签页已就绪，请检查终端窗口后重试".into()
+                            }
+                            Some(-2701) => {
+                                "Terminal 目标窗口未能进入前台，请检查终端窗口或系统对话框后重试"
+                                    .into()
+                            }
+                            Some(-2702) => {
+                                "未找到 Terminal 的 Command+T 新建标签页菜单，请检查终端快捷键设置"
+                                    .into()
+                            }
+                            _ => format!(
+                                "Terminal 启动失败（系统错误 {}），请检查自动化与辅助功能授权",
+                                os_error
+                                    .map(|code| code.to_string())
+                                    .unwrap_or_else(|| "unknown".into())
+                            ),
+                        },
                     )
                     .with_detail("exitCode", status.code().unwrap_or(-1).to_string())
                     .with_detail(

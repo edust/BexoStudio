@@ -36,3 +36,24 @@
 - 第二次 Keychain 虚拟测试项为 `bexo-platform-test-a8f7542a-c8a2-4740-a17e-412fc4c2ca24`，等待系统认证，180 秒 watchdog 终止；读写和清理均未确认成功。
 - 计算机工具拒绝访问 `com.apple.UserNotificationCenter`。已请求用户在本机拒绝旧 Bexo 的桌面访问提示，并处理钥匙串认证；没有改写 TCC 数据库、没有授予完全磁盘访问，也没有绕过工具限制。
 - 本轮测试/构建进程已终止，需用户处理系统提示后重建，再继续 Terminal 标签、截图/粘贴和原生 Keychain 验收。当前 app/dmg 仍是上一版，**不包含本轮日志启动修复**。
+
+## 2026-10-31 继续验收：构建入口与签名修复
+- 本轮基线 1b098587e582a2737780e8097eb95b03cfb852e1；Mac Rust 125 passed / 1 ignored，日志修复已重新打包且正常 LaunchServices 启动通过。
+- Windows CI 41205789777：编译完成，测试 exe 在加载阶段退出 0xc0000139。已安装 tauri-winres 使用 embed_resource::compile，只向 bin 链接资源；按 Tauri #13419 维护者方案将同一 Common Controls v6 清单显式链接到所有 Windows MSVC 目标，避免遗漏测试 harness。原应用清单内容保持一致，无新增业务拒绝。
+- Mac Terminal 后续标签返回 1002，刷新辅助功能并重启仍复现；codesign 实测只有 linker-signed 签名、Info.plist 未绑定、Identifier 为构建文件名。补齐应用包 ad-hoc 签名与 Apple Events entitlement；不需要钥匙串凭据，不修改 TCC 数据库。重新打包并验证签名、权限和真实命令输出。
+- 依据：https://github.com/tauri-apps/tauri/issues/13419 、https://v2.tauri.app/distribute/sign/macos/ 、https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.automation.apple-events 。
+- Windows 修复需新的 runner 复验；提交/推送仍需用户明确授权。Keychain 集成测试按用户反馈不再运行。
+
+### 继续验收进展
+- 用户授权仅提交/推送 Windows 清单修复两个文件；通过 GitHub 连接器创建 b83a2a90f14e36d7e26b2d3fa10e6f8fdb05332b，分支 codex/windows-test-manifest。CI https://github.com/edust/BexoStudio/actions/runs/41207352422 正在验证。Git CLI 无推送凭据；本地已 fetch 并切换到跟踪该远端的分支，原本地同内容提交保存在 codex/windows-test-manifest-local，未改写历史。
+- 新 Mac 包 codesign --verify --strict 通过，Identifier=studio.bexo.desktop、Info.plist 已绑定，Apple Events entitlement=true。移除旧辅助功能记录、重新添加当前包并重启后，1002 消失，批量第二标签仍因数量未增加报 -2700。
+- Terminal.sdef 确认窗口 id 是唯一标识，frontmost 为可写属性。脚本改为按 id 定位窗口并显式设置/有界等待 frontmost；osacompile 语法检查通过，4 项 Mac 终端测试通过，真实标签页复验进行中。
+
+### 最终 TTY 构建与 Windows CI
+- 用户现场确认两个标签确在同一可视窗口，旧脚本窗口的 tabs 计数却未增加。不能把 Terminal 的脚本窗口对象等同于可视窗口；此前将 -2700 归为按键无效的判断不充分。
+- 按本机 Terminal.sdef 的 tty 属性，菜单操作前收集已有 TTY，等待前台选中标签的新 TTY 后再执行命令。仍保留唯一窗口 ID、前台等待、串行化、15/20 秒超时和脱敏错误。菜单按 SDK 定义的 AXMenuItemCmdChar/AXMenuItemCmdModifiers 匹配 Command+T，不依赖菜单语言或 profile 名。
+- 清空两份虚拟输出后，真实 UI“运行全部”成功：verified-first.txt 为 `/private/tmp/bexo-build-tools/desktop-fixture` 加换行，verified-second.txt 为 `中文 $literal` 加换行。两个文件均本轮生成，无批量失败日志。
+- 最终 TTY 构建：Rust all-targets 125 passed / 0 failed / 1 ignored，TypeScript/Vite 与 app+dmg 构建成功，codesign 严格校验和 DMG 校验通过。DMG SHA256：445c3bf359e9165bd4bed47a171518b33bb8e625107b4ec21f77419ac4e911d7。
+- Windows 路径测试经用户另行授权，追加提交 30ffbfff1f2c32870647b8ca4baaabf29915dde5；只改三个测试的目录比较，生产行为不变。CI 41208497258 的 Windows job 成功：141 passed / 0 failed，NSIS 生成并上传 artifact 13046260130。该 run 的 macOS job 被外部取消；此前 main 1b09858 的 macOS job 成功。
+- Windows artifact ZIP SHA256：a57375925f97646109c58aea83f7dce9f77fcdaa584510aadfb4fded00ddbae0，大小 8054971 字节；内含 Bexo Studio_0.1.19_x64-setup.exe。
+- 用户回复截图选区已出现，但本机应用日志没有收到热键，CUA 仍看到主窗口且可切换页面，尚不能确认为 Bexo 截图通过。已询问界面所属应用及是否通过远程桌面发送按键，等待回复。快捷粘贴槽位 5 使用临时 Prompt 试验，原五个槽位均未绑定且关闭；CUA 定向按键未触发全局回调，真实键盘验收仍待进行。
