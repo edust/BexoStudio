@@ -2934,8 +2934,15 @@ mod tests {
 
         let launch_task_payload =
             fs::read_to_string(&launch_task_log).expect("read launch task log");
-        assert!(launch_task_payload.contains("CWD="));
-        assert!(launch_task_payload.contains(&project_dir.display().to_string()));
+        let actual_working_dir = launch_task_payload
+            .lines()
+            .find_map(|line| line.strip_prefix("CWD="))
+            .expect("launch task reports working directory");
+        // Windows runners may expose TEMP through its 8.3 alias while cmd reports the long path.
+        assert_eq!(
+            fs::canonicalize(actual_working_dir).expect("canonical launch task directory"),
+            fs::canonicalize(&project_dir).expect("canonical project directory")
+        );
         assert!(launch_task_payload.contains("--port 3030"));
 
         let log_files = fs::read_dir(temp_root.join("logs"))

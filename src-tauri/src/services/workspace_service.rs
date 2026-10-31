@@ -1198,14 +1198,14 @@ mod tests {
 
         assert_eq!(result.workspace_id, workspace.id);
         assert_eq!(
-            result.workspace_path,
-            workspace_directory.display().to_string()
+            fs::canonicalize(&result.workspace_path).expect("canonical terminal directory"),
+            fs::canonicalize(&workspace_directory).expect("canonical workspace directory")
         );
 
         let terminal_payload = fs::read_to_string(&log_path).expect("read terminal log");
         assert!(terminal_payload.contains("new-tab"));
         assert!(terminal_payload.contains("-d"));
-        assert!(terminal_payload.contains(&workspace_directory.display().to_string()));
+        assert!(terminal_payload.contains(&result.workspace_path));
     }
 
     #[cfg(windows)]
@@ -1274,14 +1274,14 @@ mod tests {
 
         assert_eq!(result.workspace_id, workspace.id);
         assert_eq!(
-            result.workspace_path,
-            nested_directory.display().to_string()
+            fs::canonicalize(&result.workspace_path).expect("canonical terminal directory"),
+            fs::canonicalize(&nested_directory).expect("canonical file parent")
         );
 
         let terminal_payload = fs::read_to_string(&log_path).expect("read terminal log");
         assert!(terminal_payload.contains("new-tab"));
         assert!(terminal_payload.contains("-d"));
-        assert!(terminal_payload.contains(&nested_directory.display().to_string()));
+        assert!(terminal_payload.contains(&result.workspace_path));
     }
 
     #[cfg(windows)]
