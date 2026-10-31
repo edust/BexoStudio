@@ -19,7 +19,7 @@ pub(super) fn ensure_platform_supported() -> AppResult<()> {
     if unsafe { AXIsProcessTrusted() } == 0 {
         return Err(AppError::new(
             "PROMPT_QUICK_PASTE_ACCESSIBILITY_REQUIRED",
-            "请在系统设置 → 隐私与安全性 → 辅助功能中允许 Bexo Studio，然后重试快速粘贴",
+            "当前 Bexo Studio 未获得有效辅助功能授权。请在系统设置 → 隐私与安全性 → 辅助功能中开启权限；若已开启，请退出应用、移除旧条目并重新添加当前 Bexo Studio.app，开启后重启应用",
         ));
     }
     Ok(())

@@ -219,3 +219,24 @@ Tauri 自动先启动 Vite，地址 `http://localhost:1420`，随后启动桌面
 | 文件 | 类型 | 用途 |
 | --- | --- | --- |
 | [src-tauri/src/logging/mod.rs](/Users/mac/Desktop/BexoStudio/src-tauri/src/logging/mod.rs) | 修改 | 避免 macOS 应用包在首次启动时访问受保护的桌面仓库日志，增加回归用例 |
+
+## 最新补充：重新安装后 App 列表不可见回归（2026-10-31）
+
+- 原 ad-hoc 包替换后再次 launch-disabled，CDHash 未变；上次首次打开恢复仅为临时恢复。
+- 用户明确授权复用本机 Flashyc Development Signing（37A46BF2FB293CBDF5B0931DF8931C3B01975BF4）、保存身份、备份并连续两轮替换 /Applications/Bexo Studio.app。未导出私钥或修改系统信任。
+- build_macos_arm64.sh 读取项目根 .macos-signing-identity，APPLE_SIGNING_IDENTITY 优先；无配置维持 ad-hoc。文件已加入 .gitignore。脚本语法及三种身份选择的模拟检查通过。
+- Release 构建成功；codesign --verify --strict 通过，Authority 为上述证书，designated requirement 绑定产品标识与证书叶指纹。DMG hdiutil verify 通过。
+- 第一轮替换后用户打开过，不计为未启动验收。第二轮未启动应用，进程列表为空，LaunchServices 仅 has-display-name、无 launch-disabled；用户确认“没有启动，也能看到图标”。固定签名本机回归通过，未宣称其他 Mac/Developer ID 公证验收。
+- 产物：/Users/mac/Desktop/BexoStudio/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Bexo Studio_0.1.19_aarch64.dmg；SHA256 e9ed75edf0eda25d1096b8cb05297da74dc1a4af8676b20c63283874ca5982a6。
+- 备份目录：/Users/mac/Desktop/BexoStudio/scripts/work/2026-10-31-dual-platform/macos-install-backup-0c4u5r0o/，含 original-adhoc.app、removed-before-round1.app（原安装目录）、fixed-signing-round1.app。
+- 本轮文件：修改 .gitignore、build_macos_arm64.sh、docs/platform-support.md、task_plan.md、findings.md、progress.md、本专项 task_plan.md 与 deliverable.md；新增被忽略的 .macos-signing-identity。Windows、版本和锁文件未改。未提交或推送。
+- 构建 PID/PGID 62117 及子进程已结束，验收 Bexo 已退出，1420/1421 无监听；未启动开发服务器。
+- 后续本机打包：在 /Users/mac/Desktop/BexoStudio 执行 ./build_macos_arm64.sh；安装后从 App 列表启动。本机证书属于本地签名，不替代正式对外发行所需 Developer ID 与公证。
+
+## 最新补充：辅助功能开关已开但快捷粘贴失败
+
+系统 TCC 日志确认旧辅助功能授权的代码签名要求与实际签名不匹配。用户解锁系统设置后，通过正常 UI 移除旧条目、重新添加 /Applications/Bexo Studio.app 并开启权限。重启验收应用后，用户真实按 Control+Option+Shift+1，确认自动粘贴内容正确；因此快捷粘贴实机验收现已通过。
+
+代码仅修改 src-tauri/src/adapters/prompt_paste_macos.rs 的未授权提示，补充开关已开启时移除旧项、重加当前应用并重启的方法；AXIsProcessTrusted 和系统权限约束不变。rustfmt --edition 2021 --check、git diff --check 通过。提示文案未重新打包，下次构建生效；当前安装的功能恢复已实测，不需要靠重装解决此次失配。
+
+本轮修改该 Rust 文件、docs/platform-support.md、task_plan.md、findings.md、progress.md 与本 deliverable.md。其余工作区已有变更未改动。未新增 Prompt、未改槽位、未提交/推送或改锁文件。测试启动的 Bexo 已退出，1420/1421 无监听；用户自行打开的编辑器和系统设置保留。

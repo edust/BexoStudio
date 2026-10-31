@@ -972,3 +972,9 @@ TCC 系统日志已核实 DesktopFolder 提示导致日志初始化及后续构�
 Windows 缺少测试程序的 Common Controls v6 清单及三处短路径断言已修复，CI 141 项测试和 NSIS 成功。Mac 应用包签名已绑定正确身份；Terminal 可视标签不等同于旧脚本窗口的 tabs 数，用户观察与本机错误共同确认了这一点，改按新 TTY 定位后两条命令真实输出均通过。截图界面来源与本机/远程按键尚待用户确认，不能记录为通过。详细依据、提交和产物见专项 notes.md / deliverable.md。
 
 2026-10-31 打包便捷入口：新增根目录 build_macos_arm64.sh / build_win64.bat，复用 release:build，自动定位项目和按需安装现有锁定依赖；不改变版本或平台构建契约。Mac bash 语法及模拟 npm 的首次安装、已有依赖、失败退出、含空格路径检查通过；Windows BAT 已静态检查，未在 Windows 执行。此次未重新打包，未启动长期进程。
+
+2026-10-31 App 列表复发证据：安装包再次 launch-disabled，但 CDHash 仍为 e594f08b8f9876bc1e32c874da86351f2678d3e4，不能归因于哈希变化。Flashyc 使用固定本机证书，Bexo 使用 ad-hoc；差异尚未证明因果。准备可选本机签名身份文件，未使用任何私钥、未改系统信任。
+
+固定签名回归证据：codesign Authority=Flashyc Development Signing，designated requirement 绑定 studio.bexo.desktop 与证书叶指纹；严格校验通过。两轮替换完成，第一轮用户曾打开，不作为首次启动前证据；第二轮进程列表为空、LaunchServices 无 launch-disabled，用户确认“没有启动，也能看到图标”。未修改系统信任或导出私钥。
+
+2026-10-31 快捷粘贴证据：08:06:07 TCC 对 studio.bexo.desktop 的 kTCCServiceAccessibility 报 Failed to match existing code requirement，旧要求 cdhash 091dc3132e34c376da7e914cf8657016722c4413，实际 e594f08b8f9876bc1e32c874da86351f2678d3e4。截图发生于旧签名阶段；当前安装改为固定证书，旧授权仍需更新。重新添加 /Applications/Bexo Studio.app 后，用户确认槽位 1 自动粘贴内容正确。AXIsProcessTrusted 检测保留，未绕过 OS 授权。

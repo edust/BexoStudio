@@ -2537,3 +2537,9 @@ pm run web:build。
 Windows CI 41208497258 / job 124558383981：前端 65、Rust 141 全通过，x64 NSIS 上传成功。Mac 本机最终 Rust 125 通过 / 1 ignored，签名 app+dmg、正常启动、工作区、文件监听、批量终端真实命令通过；日志启动修复已包含。用户分别授权的 Windows 提交 b83a2a9、30ffbff 已推送 codex/windows-test-manifest；Mac 修复和文档未提交，无部署、无锁文件变更。用户另行授权后已移除临时 Prompt 和工作区，快捷槽位 5 恢复为空/关闭；Bexo、TextEdit、测试 shell、构建进程均已关闭，1420/1421 无监听。截图/快捷粘贴真实键盘验收待澄清，Keychain 因缺少钥匙串密码未重跑。完整文件清单与产物见专项 deliverable.md 顶部。
 
 2026-10-31 打包便捷入口：新增根目录 build_macos_arm64.sh / build_win64.bat，复用 release:build，自动定位项目和按需安装现有锁定依赖；不改变版本或平台构建契约。Mac bash 语法及模拟 npm 的首次安装、已有依赖、失败退出、含空格路径检查通过；Windows BAT 已静态检查，未在 Windows 执行。此次未重新打包，未启动长期进程。
+
+2026-10-31 准备 App 可发现性复验：build_macos_arm64.sh 可读取被 Git 忽略的 .macos-signing-identity，环境变量优先，无配置保留原行为。待授权使用 Flashyc Development Signing 证书并备份/替换 /Applications/Bexo Studio.app 做两轮验收；尚未进行签名或安装。
+
+App 可发现性复验完成：已获用户明确授权使用 37A46BF2FB293CBDF5B0931DF8931C3B01975BF4 本机证书、保存身份并备份替换。Release 构建成功，DMG 校验通过，第二轮未启动即可见由用户确认。应用与构建进程已退出，1420/1421 无监听。未提交、未推送、未改锁文件。产物/备份详见专项 deliverable.md 最新补充。
+
+2026-10-31 快捷粘贴修复：用户完成系统设置本机验证，移除旧 Bexo 辅助功能条目并重新添加 /Applications 固定签名版本；启动验收后用户确认真实 Control+Option+Shift+1 自动粘贴正确。源码只更新未授权提示，rustfmt 与 diff 检查通过，未为纯文案重复完整构建；当前安装包未包含新提示，但授权恢复及粘贴已实测。验收应用进程已清理，1420/1421 无监听，未修改用户槽位或 Prompt。

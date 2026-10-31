@@ -32,6 +32,18 @@ done
 node -e 'if (process.platform !== "darwin" || process.arch !== "arm64") { console.error("请使用 macOS arm64 版 Node.js 运行此脚本。"); process.exit(1); }'
 xcode-select -p >/dev/null
 
+# 可选的本机签名身份；环境变量优先，未配置时沿用 Tauri 的临时签名。
+# 文件只保存证书名称或指纹，不保存私钥或密码，也不提交到仓库。
+if [[ -z "${APPLE_SIGNING_IDENTITY:-}" && -f .macos-signing-identity ]]; then
+  APPLE_SIGNING_IDENTITY="$(cat .macos-signing-identity)"
+  if [[ -z "$APPLE_SIGNING_IDENTITY" ]]; then
+    echo ".macos-signing-identity 为空，请填写签名证书名称或指纹。" >&2
+    exit 1
+  fi
+  export APPLE_SIGNING_IDENTITY
+fi
+printf 'macOS 签名身份：%s\n' "${APPLE_SIGNING_IDENTITY:-- (ad-hoc)}"
+
 if [[ ! -f node_modules/@tauri-apps/cli/tauri.js ]]; then
   npm ci
 fi
