@@ -19,3 +19,12 @@ test("Windows command parsing keeps existing paths and arguments", () => {
     command: "python", args: ["D:\\My App\\main.py", "--port", "3000"],
   });
 });
+
+test("resource browser preserves POSIX root and finds its parent correctly", async () => {
+  const { normalizePath, resolveParentPath, isSameOrChildPath } = await import("../../src/features/resource-browser/resource-browser-utils.ts");
+  assert.equal(normalizePath("/"), "/");
+  assert.equal(resolveParentPath("/Applications"), "/");
+  assert.equal(isSameOrChildPath("/Applications/Example.app", "/"), true);
+  assert.equal(isSameOrChildPath("/tmp/Project/a", "/tmp/project"), false);
+  assert.equal(isSameOrChildPath("C:/PROJECT/a", "c:/project"), true);
+});

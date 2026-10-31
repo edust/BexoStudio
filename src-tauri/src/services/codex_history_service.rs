@@ -1441,7 +1441,7 @@ mod tests {
     fn session_page_query_matches_metadata_without_client_side_filtering() {
         let session = sample_session();
         assert!(session_matches_query(&session, "release"));
-        assert!(session_matches_query(&session, "SESSION-123"));
+        assert!(session_matches_query(&session, &super::normalize_session_query(Some("SESSION-123".into()))));
         assert!(session_matches_query(&session, "release-tool"));
         assert!(!session_matches_query(&session, "does-not-exist"));
         assert!(session_matches_query(&session, ""));

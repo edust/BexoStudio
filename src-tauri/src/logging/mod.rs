@@ -53,6 +53,16 @@ fn resolve_development_log_dir() -> Option<PathBuf> {
 
 #[cfg(any(debug_assertions, test))]
 fn resolve_development_log_dir_from_executable(executable: &Path) -> Option<PathBuf> {
+    // A macOS bundle starts independently of the terminal's file permissions.
+    // Opening a repository log on Desktop during plugin initialization can block
+    // the main thread before the application can present its first window.
+    #[cfg(target_os = "macos")]
+    if executable
+        .ancestors()
+        .any(|path| path.extension().is_some_and(|ext| ext == "app"))
+    {
+        return None;
+    }
     let target_dir = executable
         .ancestors()
         .find(|path| path_file_name_eq(path, DEVELOPMENT_TARGET_DIR_NAME))?;
@@ -111,6 +121,15 @@ mod tests {
             .join("release")
             .join("bexo-studio.exe");
 
+        assert_eq!(
+            resolve_development_log_dir_from_executable(&executable),
+            None
+        );
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bundled_debug_app_uses_system_logs_without_accessing_the_repository() {
+        let executable = PathBuf::from("/Users/test/Desktop/repository/src-tauri/target/debug/bundle/macos/Bexo Studio.app/Contents/MacOS/bexo-studio");
         assert_eq!(
             resolve_development_log_dir_from_executable(&executable),
             None

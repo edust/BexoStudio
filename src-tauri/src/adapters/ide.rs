@@ -249,6 +249,23 @@ impl IdeAdapter for VSCodeAdapter {
         executable_path: &str,
         project_path: &str,
     ) -> AppResult<LaunchCommand> {
+        #[cfg(target_os = "macos")]
+        if Path::new(executable_path)
+            .extension()
+            .is_some_and(|ext| ext == "app")
+        {
+            for name in ["code", "code-insiders", "codium"] {
+                let cli = Path::new(executable_path)
+                    .join("Contents/Resources/app/bin")
+                    .join(name);
+                if cli.is_file() {
+                    return build_ide_launch_command(
+                        &cli.to_string_lossy(),
+                        vec!["-n".to_string(), project_path.to_string()],
+                    );
+                }
+            }
+        }
         build_ide_launch_command(
             executable_path,
             vec!["-n".to_string(), project_path.to_string()],
@@ -577,7 +594,7 @@ fn build_ide_launch_command(executable_path: &str, args: Vec<String>) -> AppResu
             args: [
                 vec!["-a".into(), executable_path.into()],
                 args.into_iter()
-                    .filter(|arg| arg != "--new-window")
+                    .filter(|arg| arg != "--new-window" && arg != "-n")
                     .collect(),
             ]
             .concat(),
@@ -609,4 +626,35 @@ fn find_macos_app(names: &[&str]) -> Option<PathBuf> {
         .iter()
         .flat_map(|root| names.iter().map(move |name| root.join(name)))
         .find(|path| path.is_dir())
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_tests {
+    use super::*;
+    #[test]
+    fn app_bundle_opens_project_without_spawning_another_app_instance() {
+        let plan = build_ide_launch_command(
+            "/nonexistent/Example.app",
+            vec!["-n".into(), "/tmp/a b".into()],
+        )
+        .unwrap();
+        assert_eq!(plan.executable_path, PathBuf::from("/usr/bin/open"));
+        assert_eq!(
+            plan.args,
+            vec!["-a", "/nonexistent/Example.app", "/tmp/a b"]
+        );
+    }
+    #[test]
+    fn vscode_bundle_uses_cli_to_preserve_new_window_semantics() {
+        let root = std::env::temp_dir().join(format!("bexo-ide-{}", uuid::Uuid::new_v4()));
+        let bundle = root.join("Editor.app");
+        let cli = bundle.join("Contents/Resources/app/bin/code");
+        std::fs::create_dir_all(cli.parent().unwrap()).unwrap();
+        std::fs::write(&cli, b"fixture").unwrap();
+        let result = VSCodeAdapter.build_launch_plan(&bundle.to_string_lossy(), "/tmp/a b");
+        std::fs::remove_dir_all(&root).unwrap();
+        let plan = result.unwrap();
+        assert_eq!(plan.executable_path, cli);
+        assert_eq!(plan.args, vec!["-n", "/tmp/a b"]);
+    }
 }

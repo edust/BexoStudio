@@ -10,9 +10,13 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
 - 管理多个 `CODEX_HOME` / 账号 / 配置上下文
 - 支持最小化到托盘、后台常驻和快速恢复
 
+## 双平台支持
+
+目标为 Windows x64 与 macOS Apple Silicon arm64。平台适配、系统授权、构建方式与验收边界见 [双平台说明](docs/platform-support.md)。本轮实际验证结果见 [交付记录](scripts/work/2026-10-31-dual-platform/deliverable.md)，尚未验证的桌面流程不视为通过。
+
 ## Current Status
 
-当前版本：`0.1.15`。
+当前版本：`0.1.19`。
 
 当前仓库已从框架搭建阶段进入 Windows-first 的功能完善与生产可靠性阶段，当前重点是：
 
@@ -274,7 +278,7 @@ Bexo Studio 是一个以 `Rust + Tauri v2` 为核心的桌面型 vibe coding 工
 
 ## Local Development
 
-前置环境：Node.js/npm、Rust stable、Windows MSVC Build Tools 与 Microsoft Edge WebView2 Runtime。
+前置环境：Node.js 24/npm、Rust stable。Windows 使用 MSVC Build Tools 与 Microsoft Edge WebView2 Runtime；macOS arm64 使用 Xcode Command Line Tools。
 
 安装前端依赖：
 
@@ -313,13 +317,9 @@ npm run release:build
 
 说明：
 
-- `release:build` 会先把发行版本号按 `patch` 自动 `+1`
-- 会同步更新：
-  - `package.json`
-  - `src-tauri/Cargo.toml`
-  - `src-tauri/tauri.conf.json`
-- 然后执行 `tauri build --bundles nsis`
-- 最终产出 Windows 安装包 `.exe`
+- `release:build` 使用当前仓库版本，不自动修改版本号或锁文件。
+- Windows x64 执行 NSIS 构建；macOS arm64 构建 `.app` 和 `.dmg`。
+- 使用 `--locked` 保持 Rust 依赖可复现；目标、产物位置和签名边界见双平台说明。
 
 补充说明：
 

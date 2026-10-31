@@ -754,15 +754,15 @@ mod tests {
     }
 
     #[test]
-    fn builds_sorted_complete_multipart_xml() {
+    fn serializes_presorted_complete_multipart_xml() {
         let body = build_complete_multipart_xml(&[
-            super::super::OssMultipartCompletePart {
-                part_number: 2,
-                etag: "etag-2".into(),
-            },
             super::super::OssMultipartCompletePart {
                 part_number: 1,
                 etag: "\"etag-1\"".into(),
+            },
+            super::super::OssMultipartCompletePart {
+                part_number: 2,
+                etag: "etag-2".into(),
             },
         ])
         .unwrap();

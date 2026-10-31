@@ -504,7 +504,9 @@ fn capture_virtual_desktop<R: Runtime>(app: &AppHandle<R>) -> AppResult<Captured
             fn CGPreflightScreenCaptureAccess() -> bool;
             fn CGRequestScreenCaptureAccess() -> bool;
         }
-        if !unsafe { CGPreflightScreenCaptureAccess() } && !unsafe { CGRequestScreenCaptureAccess() } {
+        if !unsafe { CGPreflightScreenCaptureAccess() }
+            && !unsafe { CGRequestScreenCaptureAccess() }
+        {
             return Err(AppError::new("SCREENSHOT_PERMISSION_REQUIRED", "请在系统设置 → 隐私与安全性 → 屏幕与系统音频录制中允许 Bexo Studio，并重新启动应用后重试截图"));
         }
     }
@@ -1328,7 +1330,6 @@ fn capture_bitmap_bgra_bottom_up_windows(
     Ok(buffer)
 }
 
-#[cfg(target_os = "windows")]
 fn rgba_image_from_top_down_bgra(
     width: u32,
     height: u32,
@@ -5038,7 +5039,6 @@ fn build_native_preview_runtime_inputs(
     )))
 }
 
-#[cfg(target_os = "windows")]
 fn top_down_bgra_from_rgba_image(image: &RgbaImage) -> AppResult<Vec<u8>> {
     let rgba = image.as_raw();
     if rgba.len() % 4 != 0 {

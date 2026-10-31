@@ -1273,7 +1273,7 @@ export function ResourceBrowserPane({
 
   const contextMenuItems = useMemo<MenuProps["items"]>(
     () => [
-      { key: "reveal", icon: <EyeOutlined />, label: "在资源管理器中显示" },
+      { key: "reveal", icon: <EyeOutlined />, label: navigator.platform.startsWith("Mac") ? "在 Finder 中显示" : "在资源管理器中显示" },
       { key: "open-terminal", icon: <ConsoleSqlOutlined />, label: "在这里打开终端" },
       { key: "copy", icon: <CopyOutlined />, label: "复制绝对路径" },
     ],
@@ -1403,7 +1403,7 @@ export function ResourceBrowserPane({
                 />
                 <ToolbarButton
                   icon={<FolderOpenOutlined />}
-                  title="在资源管理器中显示（Ctrl+Shift+R）"
+                  title={`${navigator.platform.startsWith("Mac") ? "在 Finder 中显示" : "在资源管理器中显示"}（Ctrl+Shift+R）`}
                   onClick={() => void handleRevealPath()}
                 />
                 <ToolbarButton

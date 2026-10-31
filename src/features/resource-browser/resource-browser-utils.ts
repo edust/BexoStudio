@@ -149,7 +149,12 @@ function stripWindowsVerbatimPrefix(path: string) {
 }
 
 function toComparablePath(path: string) {
-  return normalizePath(path).replace(/\//g, "\\").toLowerCase();
+  const normalized = normalizePath(path);
+  const comparable = normalized.replace(/\//g, "\\");
+  // POSIX volumes can be case-sensitive; Windows paths retain existing comparison semantics.
+  return /^[a-z]:[\\/]/i.test(normalized) || normalized.startsWith("\\\\")
+    ? comparable.toLowerCase()
+    : comparable;
 }
 
 export function resolveParentPath(path: string) {

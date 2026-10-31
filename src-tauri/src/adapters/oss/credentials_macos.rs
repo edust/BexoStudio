@@ -140,3 +140,40 @@ pub(super) fn delete_native_credential(account: &str) -> AppResult<()> {
     check(status)?;
     check(unsafe { SecKeychainItemDelete(item.0) })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "uses an isolated dummy item in the local macOS Keychain"]
+    fn macos_keychain_roundtrip() {
+        struct Fixture(String);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                if let Err(error) = delete_native_credential(&self.0) {
+                    eprintln!("dummy Keychain item cleanup failed: {error}");
+                }
+            }
+        }
+        let fixture = Fixture(format!("bexo-platform-test-{}", uuid::Uuid::new_v4()));
+        eprintln!("Keychain fixture {}: create", fixture.0);
+        write_native_credential(&fixture.0, b"dummy-first-value").expect("create dummy credential");
+        assert_eq!(
+            read_native_credential(&fixture.0).unwrap(),
+            b"dummy-first-value"
+        );
+        write_native_credential(&fixture.0, b"dummy-updated-value")
+            .expect("update dummy credential");
+        assert_eq!(
+            read_native_credential(&fixture.0).unwrap(),
+            b"dummy-updated-value"
+        );
+        delete_native_credential(&fixture.0).expect("delete dummy credential");
+        assert_eq!(
+            read_native_credential(&fixture.0).unwrap_err().code,
+            "OSS_CREDENTIAL_NOT_FOUND"
+        );
+        delete_native_credential(&fixture.0).expect("delete remains idempotent");
+    }
+}

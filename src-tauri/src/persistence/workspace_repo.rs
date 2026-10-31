@@ -548,12 +548,27 @@ pub fn register_workspace_folder_with_description(
              (id, workspace_id, name, path, platform, terminal_type, ide_type, codex_profile_id,
               open_terminal, open_ide, auto_resume_codex, sort_order, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?7, ?8, NULL, NULL, 0, 0, 0, 0, ?5, ?6)",
-            params![project_id, workspace_id, project_label, directory_path, timestamp, timestamp,
-                std::env::consts::OS, if cfg!(target_os = "macos") { "macos_terminal" } else { "windows_terminal" }],
+            params![
+                project_id,
+                workspace_id,
+                project_label,
+                directory_path,
+                timestamp,
+                timestamp,
+                std::env::consts::OS,
+                if cfg!(target_os = "macos") {
+                    "macos_terminal"
+                } else {
+                    "windows_terminal"
+                }
+            ],
         )
         .map_err(|error| {
-            AppError::new("DB_WRITE_FAILED", "failed to save default workspace project")
-                .with_detail("reason", error.to_string())
+            AppError::new(
+                "DB_WRITE_FAILED",
+                "failed to save default workspace project",
+            )
+            .with_detail("reason", error.to_string())
         })?;
 
     transaction.commit().map_err(|error| {
@@ -764,7 +779,7 @@ mod archive_tests {
             connection.execute("INSERT INTO workspaces (id, name, description, sort_order, created_at, updated_at) VALUES (?1, ?2, '备注', ?3, 'before', 'before')", params![id, format!("项目{index}"), index as i64]).unwrap();
         }
         let project = Uuid::new_v4().to_string();
-        connection.execute("INSERT INTO projects (id, workspace_id, name, path, platform, terminal_type, created_at, updated_at) VALUES (?1, ?2, 'project', 'C:/project', 'windows', 'windows_terminal', 'before', 'before')", params![project, first]).unwrap();
+        connection.execute("INSERT INTO projects (id, workspace_id, name, path, platform, terminal_type, created_at, updated_at) VALUES (?1, ?2, 'project', ?3, 'windows', 'windows_terminal', 'before', 'before')", params![project, first, std::env::temp_dir().display().to_string()]).unwrap();
         (connection, first, second)
     }
 
@@ -826,6 +841,7 @@ mod archive_tests {
             &mut target,
             exported
                 .into_iter()
+                .filter(|workspace| workspace.is_archived)
                 .enumerate()
                 .map(|(index, workspace)| WorkspaceImportPlanEntry {
                     workspace_index: index,

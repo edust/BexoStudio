@@ -2232,3 +2232,7 @@ ativeToolbarActive 时才隐藏 WebView 主行，避免多次截图后工具整�
 
 ## 2026-10-31 Windows x64 / macOS arm64
 双平台适配进行中，专项计划：scripts/work/2026-10-31-dual-platform/task_plan.md。
+
+双平台实现、65 项前端/124 项 Rust 检查与 macOS 调试打包完成；系统授权及 Windows 验收待完成，详见专项 deliverable.md。
+
+授权续验：辅助功能和录屏已开启；日志启动修复的独立 4 项测试通过。完整构建受待处理的 macOS 系统通知阻塞，已清理进程；等待本机处理提示后继续。当前安装包尚未包含该修复。

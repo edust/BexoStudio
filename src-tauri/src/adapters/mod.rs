@@ -43,10 +43,23 @@ pub fn file_manager_executable() -> &'static str {
 pub fn build_platform_shell_command_line(command: &str, args: &[String]) -> String {
     #[cfg(target_os = "macos")]
     {
-        if args.is_empty() { return command.trim().to_string(); }
-        return std::iter::once(command).chain(args.iter().map(String::as_str))
-            .map(|arg| if matches!(arg, "&&" | "||" | "|" | ";" | ">" | ">>" | "<" | "2>" | "2>>" | "&") { arg.to_string() } else { terminal_macos::quote_shell(arg) })
-            .collect::<Vec<_>>().join(" ");
+        if args.is_empty() {
+            return command.trim().to_string();
+        }
+        return std::iter::once(command)
+            .chain(args.iter().map(String::as_str))
+            .map(|arg| {
+                if matches!(
+                    arg,
+                    "&&" | "||" | "|" | ";" | ">" | ">>" | "<" | "2>" | "2>>" | "&"
+                ) {
+                    arg.to_string()
+                } else {
+                    terminal_macos::quote_shell(arg)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
     }
     #[cfg(not(target_os = "macos"))]
     build_windows_shell_command_line(command, args)

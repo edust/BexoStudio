@@ -1875,6 +1875,9 @@ fn validate_preferences(input: AppPreferences) -> AppResult<AppPreferences> {
                     "codium.cmd",
                     "codium.exe",
                     "codium.bat",
+                    "code",
+                    "code-insiders",
+                    "codium",
                 ],
                 "VSCODE_PATH_INVALID",
                 "VS Code",
@@ -1923,6 +1926,16 @@ fn validate_preferences(input: AppPreferences) -> AppResult<AppPreferences> {
                     "studio.exe",
                     "studio.cmd",
                     "studio.bat",
+                    "idea",
+                    "goland",
+                    "pycharm",
+                    "webstorm",
+                    "phpstorm",
+                    "clion",
+                    "rider",
+                    "datagrip",
+                    "rustrover",
+                    "studio",
                 ],
                 "JETBRAINS_PATH_INVALID",
                 "JetBrains IDE",
@@ -1940,14 +1953,19 @@ fn validate_preferences(input: AppPreferences) -> AppResult<AppPreferences> {
 }
 
 fn validate_terminal_preferences(input: TerminalPreferences) -> AppResult<TerminalPreferences> {
+    // Preserve imported Windows configuration without applying it to macOS.
+    #[cfg(target_os = "macos")]
+    let windows_terminal_path = input.windows_terminal_path;
+    #[cfg(not(target_os = "macos"))]
+    let windows_terminal_path = validate_tool_path(
+        "terminal.windowsTerminalPath",
+        input.windows_terminal_path,
+        &["wt.exe", "wt.cmd", "wt.bat"],
+        "WINDOWS_TERMINAL_PATH_INVALID",
+        "Windows Terminal",
+    )?;
     Ok(TerminalPreferences {
-        windows_terminal_path: validate_tool_path(
-            "terminal.windowsTerminalPath",
-            input.windows_terminal_path,
-            &["wt.exe", "wt.cmd", "wt.bat"],
-            "WINDOWS_TERMINAL_PATH_INVALID",
-            "Windows Terminal",
-        )?,
+        windows_terminal_path,
         codex_cli_path: validate_tool_path(
             "terminal.codexCliPath",
             input.codex_cli_path,
@@ -2995,6 +3013,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn validate_hotkey_shortcut_rejects_modifier_only_screenshot_shortcut() {
         let error = validate_hotkey_shortcut(
@@ -3014,6 +3033,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn validate_hotkey_shortcut_accepts_ralt_for_voice_toggle() {
         let validated =
@@ -3121,6 +3141,23 @@ mod tests {
         assert_eq!(
             migrated.preferences.hotkey.screenshot_capture,
             DEFAULT_SCREENSHOT_CAPTURE_HOTKEY
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_terminal_preferences_tests {
+    use super::*;
+    #[test]
+    fn imported_windows_terminal_path_does_not_block_macos_settings() {
+        let mut input = TerminalPreferences::default();
+        input.windows_terminal_path = Some(r"C:\Program Files\WindowsApps\wt.exe".into());
+        let expected = input.windows_terminal_path.clone();
+        assert_eq!(
+            validate_terminal_preferences(input)
+                .unwrap()
+                .windows_terminal_path,
+            expected
         );
     }
 }

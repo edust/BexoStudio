@@ -951,3 +951,12 @@ ativeToolbarActive（native 已确认 visible 且 session 有效）时，才隐�
 
 ## 2026-10-31 Windows x64 / macOS arm64
 本机缺少 PATH 工具链；docs/scripts 未进入仓库；详见专项 notes.md。
+
+- 最终自动化：前端 65/65；Rust all-targets 124 passed / 0 failed / 1 ignored。ignored 为显式本机钥匙串集成测试，实际单独运行因系统认证等待被 180 秒 watchdog 终止，不宣称通过。
+- 真实桌面：主窗口/设置/IPC、全局热键注册、测试工作区创建/重启恢复/移除、资源列表、单条 zsh 命令的目录和文件输出已验证。工作区登记已清理，磁盘测试文件留在 /tmp/bexo-build-tools/desktop-fixture。
+- 批量 Terminal 首条命令运行，后续标签 Apple Event 返回 -1712；权限与系统对话框尚待用户确认后复验。增加自动化串行化、前台目标确认、有限超时和脱敏错误码，未绕过系统授权。
+- 原生钥匙串不支持任务取消；macOS 改为等待系统允许/取消结果，避免原有 5 秒超时遗留仍在执行的写操作。Windows 超时行为不变。原生测试未确认写入和清理结果；测试只用随机 bexo-platform-test-* 虚拟项，未读取真实凭据。
+- 补齐配置兼容：Mac 保留而不校验未使用的 Windows Terminal 路径；VS Code .app 优先使用包内 CLI，保留 -n 新窗口语义；通用 .app 使用 open，不误传 -n 为另起应用实例。
+- macOS .app/.dmg 调试构建已成功；正式签名、公证、Windows 构建/运行及系统权限验收未执行。没有改动依赖清单/锁文件，没有提交或推送。
+
+TCC 系统日志已核实 DesktopFolder 提示导致日志初始化及后续构建等待。工具禁止操作 UserNotificationCenter，用户需在本机处理。日志路径纯函数独立 4 项测试通过；完整新构建未完成。

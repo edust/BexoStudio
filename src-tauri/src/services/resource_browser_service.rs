@@ -504,7 +504,7 @@ mod tests {
 
     #[test]
     fn parse_git_status_entries_handles_rename_and_ignored() {
-        let workspace_root = std::env::temp_dir().join("bexo-resource-browser-workspace");
+        let workspace_root = std::fs::canonicalize(std::env::temp_dir()).unwrap().join("bexo-resource-browser-workspace");
         let repository_root = workspace_root.clone();
         std::fs::create_dir_all(workspace_root.join("src")).expect("create workspace tree");
         std::fs::write(workspace_root.join("src").join("new.ts"), "export {};\n")

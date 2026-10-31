@@ -132,7 +132,33 @@ pub fn resolve_configured_executable(
 
 pub async fn run_launch_command(command: LaunchCommand) -> AppResult<ProcessLaunchResult> {
     let timeout = command.timeout;
-    let handle = tauri::async_runtime::spawn_blocking(move || launch_blocking(command));
+    // Terminal tab creation uses foreground UI state. Serialize complete scripts,
+    // including across workspaces, and keep the guard inside the blocking task.
+    #[cfg(target_os = "macos")]
+    let automation_guard = if command.executable_path == Path::new("/usr/bin/osascript") {
+        static AUTOMATION: std::sync::OnceLock<std::sync::Arc<tokio::sync::Mutex<()>>> =
+            std::sync::OnceLock::new();
+        let mutex = AUTOMATION
+            .get_or_init(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
+            .clone();
+        Some(
+            tokio::time::timeout(timeout, mutex.lock_owned())
+                .await
+                .map_err(|_| {
+                    AppError::new(
+                        "TERMINAL_AUTOMATION_BUSY",
+                        "Terminal 正在处理其他启动请求，请稍后重试",
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
+    let handle = tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "macos")]
+        let _automation_guard = automation_guard;
+        launch_blocking(command)
+    });
 
     match tokio::time::timeout(timeout + Duration::from_millis(250), handle).await {
         Ok(joined) => match joined {
@@ -447,6 +473,11 @@ fn launch_blocking(command: LaunchCommand) -> AppResult<ProcessLaunchResult> {
     process.stdin(Stdio::null());
     process.stdout(Stdio::null());
     process.stderr(Stdio::null());
+    #[cfg(target_os = "macos")]
+    if program == Path::new("/usr/bin/osascript") {
+        // The Terminal script redacts errors before they leave AppleScript.
+        process.stderr(Stdio::piped());
+    }
     if let Some(current_dir) = &command.current_dir {
         process.current_dir(current_dir);
     }
@@ -509,8 +540,41 @@ fn launch_blocking(command: LaunchCommand) -> AppResult<ProcessLaunchResult> {
                 }
                 #[cfg(target_os = "macos")]
                 if program == Path::new("/usr/bin/osascript") {
-                    return Err(AppError::new("TERMINAL_AUTOMATION_FAILED", "Terminal 启动失败，请检查系统设置中的自动化授权；批量标签页还需要辅助功能授权")
-                        .with_detail("exitCode", status.code().unwrap_or(-1).to_string()));
+                    use std::io::Read;
+                    let mut output = String::new();
+                    if let Some(stderr) = child.stderr.take() {
+                        stderr
+                            .take(4096)
+                            .read_to_string(&mut output)
+                            .map_err(|error| {
+                                AppError::new(
+                                    "TERMINAL_AUTOMATION_FAILED",
+                                    "读取 Terminal 启动结果失败",
+                                )
+                                .with_detail("reason", error.to_string())
+                            })?;
+                    }
+                    // Keep only the OS error number, never command text or environment values.
+                    let os_error = output
+                        .rsplit_once('(')
+                        .and_then(|(_, tail)| tail.trim().strip_suffix(')'))
+                        .and_then(|number| number.parse::<i32>().ok());
+                    return Err(AppError::new(
+                        "TERMINAL_AUTOMATION_FAILED",
+                        format!(
+                            "Terminal 启动失败（系统错误 {}），请检查自动化与辅助功能授权",
+                            os_error
+                                .map(|code| code.to_string())
+                                .unwrap_or_else(|| "unknown".into())
+                        ),
+                    )
+                    .with_detail("exitCode", status.code().unwrap_or(-1).to_string())
+                    .with_detail(
+                        "osStatus",
+                        os_error
+                            .map(|code| code.to_string())
+                            .unwrap_or_else(|| "unknown".into()),
+                    ));
                 }
                 return Err(AppError::new(
                     "PROCESS_EXITED_WITH_ERROR",
@@ -773,4 +837,29 @@ fn terminate_process_tree(pid: u32) -> AppResult<bool> {
             .with_detail("processId", pid.to_string())
             .with_detail("reason", error.to_string()),
     )
+}
+
+#[cfg(all(test, unix))]
+mod unix_tests {
+    use super::*;
+    use std::os::unix::process::CommandExt;
+    struct ChildGuard(std::process::Child);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            if let Err(error) = terminate_process_tree(self.0.id()) {
+                eprintln!("test process cleanup failed: {error}");
+            }
+            let _ = self.0.wait();
+        }
+    }
+    #[test]
+    fn cancellation_terminates_owned_process_group() {
+        let mut command = Command::new("/bin/sleep");
+        command.arg("30").process_group(0);
+        let mut child = ChildGuard(command.spawn().expect("spawn isolated sleep"));
+        assert!(terminate_process_tree(child.0.id()).unwrap());
+        let status = child.0.wait().unwrap();
+        assert!(!status.success());
+        assert!(!terminate_process_tree(child.0.id()).unwrap());
+    }
 }

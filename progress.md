@@ -2525,3 +2525,10 @@ pm run web:build。
 
 ## 2026-10-31 Windows x64 / macOS arm64
 开始双平台审计，尚未修改应用代码。
+
+## 2026-10-31 双平台实现与验证
+前端 65 通过；Rust 124 通过、1 原生授权测试单列；macOS .app/.dmg 构建成功，真实工作区与单条终端运行通过。系统权限待确认、Windows 未执行；未提交/推送/改锁。详见 scripts/work/2026-10-31-dual-platform/deliverable.md。
+
+2026-10-31 续验：用户已授权 Bexo Studio 自动化/辅助功能/录屏并在本机解锁系统设置；已从设置 UI 确认辅助功能和录屏开启。LaunchServices 启动 PID 90067 卡在 tauri-plugin-log RotatingFile::open_file，系统日志文件已打开，仓库 runtime-logs 未打开。修复 Mac 应用包不添加仓库日志目标（仍保留系统日志），直接开发二进制及 Windows 行为不变，无新增拒绝。
+
+授权续验尚未完成：已开启辅助功能/录屏；独立日志回归 4 项通过；完整 Cargo/Tauri 重建与 Keychain 测试被系统认证阻塞并已终止。旧包不含最新日志修复。详见专项 deliverable.md 授权后续验。

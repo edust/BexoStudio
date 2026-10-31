@@ -92,6 +92,7 @@ impl MacTerminalAdapter {
         // Terminal's dictionary exposes do script, but creating a tab requires its menu shortcut.
         // Group identity lives in the first tab's custom title; never send commands into an existing busy tab.
         let script = r#"on run argv
+try
 set commandText to item 1 of argv
 set groupName to item 2 of argv
 set tabTitle to item 3 of argv
@@ -117,7 +118,12 @@ with timeout of 15 seconds
   else
    set index of targetWindow to 1
    set previousCount to count of tabs of targetWindow
-   tell application "System Events" to tell process "Terminal" to keystroke "t" using command down
+   tell application "System Events"
+    tell process "Terminal"
+     set frontmost to true
+     keystroke "t" using command down
+    end tell
+   end tell
    repeat 100 times
     if (count of tabs of targetWindow) > previousCount then exit repeat
     delay 0.05
@@ -129,6 +135,9 @@ with timeout of 15 seconds
   end if
  end tell
 end timeout
+on error ignoredMessage number errorNumber
+ error "BEXO_TERMINAL_AUTOMATION" number errorNumber
+end try
 end run"#;
         Ok(LaunchCommand {
             executable_path: PathBuf::from("/usr/bin/osascript"),
@@ -173,5 +182,44 @@ mod tests {
             .unwrap();
         assert_eq!(plan.args[2], "cd -- '/tmp/a b'\\''c' && export 'CODEX_HOME=/tmp/profile a' && 'codex' 'resume' '--last'");
         assert!(plan.args[1].contains("on run argv"));
+    }
+}
+
+#[cfg(test)]
+mod macos_execution_tests {
+    use super::*;
+    #[test]
+    fn shell_quoting_round_trips_literal_arguments() {
+        let values = ["a b", "a'b", "$HOME; echo wrong", "", "中文", "line\nbreak"];
+        let script = format!(
+            "printf '%s\\0' {}",
+            values
+                .iter()
+                .map(|value| quote_shell(value))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        let output = std::process::Command::new("/bin/zsh")
+            .args(["-f", "-c", &script])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let expected = values
+            .iter()
+            .flat_map(|value| value.as_bytes().iter().copied().chain(std::iter::once(0)))
+            .collect::<Vec<_>>();
+        assert_eq!(output.stdout, expected);
+    }
+    #[test]
+    fn macos_shell_plan_uses_login_zsh_and_keeps_interactive_terminal_open() {
+        let plan = MacTerminalAdapter
+            .resolve_shell_launch_plan(TerminalCommandShell::Cmd, "printf hello")
+            .unwrap();
+        assert_eq!(plan.executable_path, PathBuf::from("/bin/zsh"));
+        assert_eq!(plan.run_args, ["-lc", "printf hello"]);
+        assert_eq!(
+            plan.startup_args,
+            ["-lic", "printf hello\nexec /bin/zsh -l"]
+        );
     }
 }

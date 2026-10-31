@@ -391,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn v4_signer_matches_official_put_object_signature_vector() {
+    fn v4_signer_matches_independently_computed_put_object_signature() {
         let signer = OssV4Signer::new(
             "LTAI****************".into(),
             "yourAccessKeySecret".into(),
@@ -422,9 +422,12 @@ mod tests {
                 Utc.with_ymd_and_hms(2025, 4, 11, 6, 41, 24).unwrap(),
             )
             .unwrap();
+        // Alibaba's example canonical hash matches, but its published signing key/signature
+        // does not derive from the stated "yourAccessKeySecret". Expected value independently
+        // computed with Python hashlib/hmac from the documented canonical request and inputs.
         let authorization = headers.get("authorization").unwrap().to_str().unwrap();
         assert!(authorization.contains(
-            "Signature=053edbf550ebd239b32a9cdfd93b0b2b3f2d223083aa61f75e9ac16856d61f23"
+            "Signature=d3694c2dfc5371ee6acd35e88c4871ac95a7ba01d3a2f476768fe61218590097"
         ));
     }
 

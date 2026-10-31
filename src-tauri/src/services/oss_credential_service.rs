@@ -1,3 +1,4 @@
+#[cfg(not(target_os = "macos"))]
 use std::time::Duration;
 
 use tauri::async_runtime::{spawn_blocking, JoinHandle};
@@ -8,6 +9,7 @@ use crate::{
     error::{AppError, AppResult},
 };
 
+#[cfg(not(target_os = "macos"))]
 const CREDENTIAL_IO_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Default)]
@@ -50,19 +52,30 @@ where
     F: FnOnce() -> AppResult<T> + Send + 'static,
 {
     let handle: JoinHandle<AppResult<T>> = spawn_blocking(operation);
-    match tokio::time::timeout(CREDENTIAL_IO_TIMEOUT, handle).await {
-        Ok(Ok(result)) => result,
-        Ok(Err(error)) => Err(AppError::new(
+    // Keychain Services may wait for a system unlock/access dialog and exposes no
+    // cancellation API. Await its real result: dropping a timed-out blocking task
+    // could otherwise report failure while a credential write succeeds later.
+    #[cfg(target_os = "macos")]
+    let joined = handle.await;
+    #[cfg(not(target_os = "macos"))]
+    let joined = match tokio::time::timeout(CREDENTIAL_IO_TIMEOUT, handle).await {
+        Ok(result) => result,
+        Err(_) => {
+            return Err(AppError::new(
+                "OSS_CREDENTIAL_STORE_TIMEOUT",
+                "secure OSS credential operation timed out",
+            )
+            .with_detail("operation", operation_name)
+            .retryable(true))
+        }
+    };
+    match joined {
+        Ok(result) => result,
+        Err(error) => Err(AppError::new(
             "OSS_CREDENTIAL_STORE_UNAVAILABLE",
             "secure OSS credential operation failed",
         )
         .with_detail("operation", operation_name)
         .with_detail("reason", error.to_string())),
-        Err(_) => Err(AppError::new(
-            "OSS_CREDENTIAL_STORE_TIMEOUT",
-            "secure OSS credential operation timed out",
-        )
-        .with_detail("operation", operation_name)
-        .retryable(true)),
     }
 }

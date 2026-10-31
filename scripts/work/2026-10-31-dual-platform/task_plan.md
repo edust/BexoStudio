@@ -5,16 +5,16 @@
 
 ## Phases
 ### Phase 1: 审计与工具链
-**Status:** in_progress
+**Status:** complete
 读取现有实现，列出平台依赖、缺失文件及验证条件。
 ### Phase 2: 系统适配
-**Status:** pending
+**Status:** complete
 终端、IDE、Codex、路径、进程取消、凭据、桌面集成、截图与粘贴。
 ### Phase 3: UI 与发行
-**Status:** pending
+**Status:** complete
 按平台展示设置、快捷键与诊断，提供两平台构建配置和说明。
 ### Phase 4: 验证与交付
-**Status:** pending
+**Status:** in_progress
 本机编译/测试/桌面验证；Windows 独立验证，未执行的项目明确标记 Unverified。
 
 ## 原行为 → 新行为
@@ -24,3 +24,7 @@
 
 ## 验证计划
 前端测试和 production build；Rust fmt/check/test；本机桌面启动、工作区/终端/IDE、截图/粘贴/托盘；Windows 构建与运行单独记录。不得调用真实 OSS 或更改用户系统设置进行自动验收。
+
+代码与自动化检查已完成；Phase 4 剩余系统权限确认、macOS 交互验收及 Windows runner 验收，不能标记全部通过。详见 deliverable.md。
+
+授权续验：辅助功能和录屏已开启；日志启动修复的独立 4 项测试通过。完整构建受待处理的 macOS 系统通知阻塞，已清理进程；等待本机处理提示后继续。当前安装包尚未包含该修复。

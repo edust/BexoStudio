@@ -561,7 +561,7 @@ fn resolve_workspace_terminal_adapter(
         let error_message = if error_code == "WINDOWS_TERMINAL_PATH_INVALID" {
             "configured Windows Terminal path is invalid"
         } else {
-            "Windows Terminal is not available on this machine"
+            "System terminal is not available on this machine"
         };
 
         return Err(AppError::new(error_code, error_message)
@@ -574,7 +574,7 @@ fn resolve_workspace_terminal_adapter(
     let executable_path = availability.executable_path.ok_or_else(|| {
         AppError::new(
             "TERMINAL_ADAPTER_UNAVAILABLE",
-            "Windows Terminal executable path is missing",
+            "System terminal executable path is missing",
         )
         .with_detail("adapter", "windows_terminal")
         .with_detail("workspaceId", workspace.id.clone())
@@ -858,7 +858,7 @@ fn resolve_terminal_launch_context(
         let error_message = if error_code == "WINDOWS_TERMINAL_PATH_INVALID" {
             "configured Windows Terminal path is invalid"
         } else {
-            "Windows Terminal is not available on this machine"
+            "System terminal is not available on this machine"
         };
 
         return Err(AppError::new(error_code, error_message)
@@ -872,7 +872,7 @@ fn resolve_terminal_launch_context(
     let executable_path = availability.executable_path.ok_or_else(|| {
         AppError::new(
             "TERMINAL_ADAPTER_UNAVAILABLE",
-            "Windows Terminal executable path is missing",
+            "System terminal executable path is missing",
         )
         .with_detail("adapter", "windows_terminal")
         .with_detail("workspaceId", workspace.id.clone())
@@ -1142,6 +1142,7 @@ mod tests {
         assert_eq!(duplicate_error.code, "WORKSPACE_PATH_ALREADY_REGISTERED");
     }
 
+    #[cfg(windows)]
     #[tokio::test]
     async fn open_workspace_terminal_uses_configured_windows_terminal() {
         let database = crate::persistence::Database::new(unique_db_path("open-workspace-terminal"));
@@ -1207,6 +1208,7 @@ mod tests {
         assert!(terminal_payload.contains(&workspace_directory.display().to_string()));
     }
 
+    #[cfg(windows)]
     #[tokio::test]
     async fn open_workspace_terminal_at_path_uses_parent_directory_for_file_target() {
         let database =
@@ -1282,6 +1284,7 @@ mod tests {
         assert!(terminal_payload.contains(&nested_directory.display().to_string()));
     }
 
+    #[cfg(windows)]
     #[tokio::test]
     async fn open_workspace_in_editor_uses_configured_vscode() {
         let database = crate::persistence::Database::new(unique_db_path("open-workspace-editor"));
@@ -1369,6 +1372,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn terminal_command_line_keeps_legacy_command_args_compatible_with_cmd() {
         let task = crate::domain::LaunchTaskRecord {

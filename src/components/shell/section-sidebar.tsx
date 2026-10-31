@@ -1739,7 +1739,7 @@ function WorkspaceSidebarCard(props: WorkspaceSidebarCardProps) {
       { type: "divider" },
       { key: "history", label: "Codex 会话历史", icon: <HistoryOutlined />, disabled: props.openCodexHistoryDisabled },
       { key: "copy", label: "复制完整路径", icon: <CopyOutlined /> },
-      { key: "folder", label: "在资源管理器中打开", icon: <FolderOpenOutlined /> },
+      { key: "folder", label: navigator.platform.startsWith("Mac") ? "在 Finder 中打开" : "在资源管理器中打开", icon: <FolderOpenOutlined /> },
       { key: "terminal", label: "打开终端", icon: <CodeOutlined />, disabled: props.openTerminalDisabled || archived },
       { key: "editor", label: "默认编辑器", children: editorOptions.map((option) => ({ key: `editor:${option.key}`, label: option.label, disabled: !option.available || props.editorSaving })) },
       { type: "divider" },

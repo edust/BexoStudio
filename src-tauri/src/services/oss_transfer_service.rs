@@ -1729,7 +1729,7 @@ mod tests {
     #[test]
     fn local_transfer_paths_must_be_absolute() {
         assert!(validate_local_path("relative.txt".into(), "localPath").is_err());
-        assert!(validate_local_path(r"D:\downloads\file.txt".into(), "localPath").is_ok());
+        assert!(validate_local_path(std::env::temp_dir().join("file.txt").display().to_string(), "localPath").is_ok());
     }
 
     #[test]

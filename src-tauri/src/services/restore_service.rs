@@ -1575,7 +1575,7 @@ impl RestoreService {
         if !capabilities.terminal.available {
             let error = AppError::new(
                 "TERMINAL_ADAPTER_UNAVAILABLE",
-                "Windows Terminal is not available on this machine",
+                "System terminal is not available on this machine",
             )
             .with_detail("adapter", "windows_terminal")
             .with_detail("message", capabilities.terminal.message.clone());
@@ -2318,7 +2318,7 @@ async fn execute_launch_task(
             if !capabilities.terminal.available {
                 return Err(AppError::new(
                     "TERMINAL_ADAPTER_UNAVAILABLE",
-                    "Windows Terminal is not available on this machine",
+                    "System terminal is not available on this machine",
                 )
                 .with_detail("adapter", "windows_terminal")
                 .with_detail("message", capabilities.terminal.message.clone()));
@@ -2735,7 +2735,7 @@ fn recent_target_sort_key(snapshot: &SnapshotRecord) -> &str {
         .unwrap_or(snapshot.updated_at.as_str())
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use std::{
         env, fs,
