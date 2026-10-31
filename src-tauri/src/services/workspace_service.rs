@@ -5,9 +5,9 @@ use std::{
 
 use crate::{
     adapters::{
-        build_windows_shell_command_line, find_first_executable, run_launch_command, IdeAdapter,
-        JetBrainsAdapter, LaunchCommand, TerminalAdapter, TerminalLaunchInput, VSCodeAdapter,
-        WindowsShellLaunchPlan, WindowsTerminalAdapter, WindowsTerminalTabLaunchInput,
+        build_platform_shell_command_line, find_first_executable, run_launch_command, IdeAdapter,
+        JetBrainsAdapter, LaunchCommand, PlatformTerminalAdapter, TerminalAdapter,
+        TerminalLaunchInput, VSCodeAdapter, WindowsShellLaunchPlan, WindowsTerminalTabLaunchInput,
     },
     domain::{
         ensure_absolute_directory, AdapterAvailability, DeleteResult, LaunchTaskRecord,
@@ -407,7 +407,7 @@ impl WorkspaceService {
 
 #[derive(Debug, Clone)]
 struct TerminalLaunchContext {
-    terminal_adapter: WindowsTerminalAdapter,
+    terminal_adapter: PlatformTerminalAdapter,
     executable_path: String,
     shell_plan: WindowsShellLaunchPlan,
     working_dir: String,
@@ -546,9 +546,9 @@ fn resolve_workspace_terminal_adapter(
     preferences_service: &PreferencesService,
     workspace: &WorkspaceRecord,
     workspace_path: &str,
-) -> AppResult<(WindowsTerminalAdapter, String)> {
+) -> AppResult<(PlatformTerminalAdapter, String)> {
     let preferences = preferences_service.get_preferences()?;
-    let terminal_adapter = WindowsTerminalAdapter;
+    let terminal_adapter = PlatformTerminalAdapter;
     let availability =
         terminal_adapter.detect(preferences.terminal.windows_terminal_path.as_deref());
     if !availability.available {
@@ -844,7 +844,7 @@ fn resolve_terminal_launch_context(
     task: &LaunchTaskRecord,
 ) -> AppResult<TerminalLaunchContext> {
     let preferences = preferences_service.get_preferences()?;
-    let terminal_adapter = WindowsTerminalAdapter;
+    let terminal_adapter = PlatformTerminalAdapter;
     let availability =
         terminal_adapter.detect(preferences.terminal.windows_terminal_path.as_deref());
 
@@ -896,7 +896,7 @@ fn resolve_terminal_launch_context(
 }
 
 fn build_terminal_startup_command(
-    terminal_adapter: &WindowsTerminalAdapter,
+    terminal_adapter: &PlatformTerminalAdapter,
     preferred_shell: crate::domain::TerminalCommandShell,
     command_line: &str,
     workspace_id: &str,
@@ -931,7 +931,7 @@ fn resolve_terminal_working_dir_for_task(
 }
 
 fn build_terminal_command_line(task: &LaunchTaskRecord) -> String {
-    build_windows_shell_command_line(&task.command, &task.args)
+    build_platform_shell_command_line(&task.command, &task.args)
 }
 
 #[cfg(test)]

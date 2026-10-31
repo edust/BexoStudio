@@ -2229,3 +2229,6 @@ ativeToolbarActive 时才隐藏 WebView 主行，避免多次截图后工具整�
 
 ## 2026-10-19 恢复拖放动画
 - 恢复工作区拖放跟手、相邻行让位动画，保留虚拟化和组内提交。
+
+## 2026-10-31 Windows x64 / macOS arm64
+双平台适配进行中，专项计划：scripts/work/2026-10-31-dual-platform/task_plan.md。

@@ -1,3 +1,9 @@
+#[cfg(target_os = "macos")]
+#[path = "credentials_macos.rs"]
+mod macos;
+#[cfg(target_os = "macos")]
+use macos::{delete_native_credential, read_native_credential, write_native_credential};
+
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -172,7 +178,7 @@ fn write_native_credential(credential_ref: &str, payload: &[u8]) -> AppResult<()
     Ok(())
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn write_native_credential(_credential_ref: &str, _payload: &[u8]) -> AppResult<()> {
     Err(AppError::new(
         "OSS_CREDENTIAL_STORE_UNAVAILABLE",
@@ -291,7 +297,7 @@ fn read_native_credential(credential_ref: &str) -> AppResult<Vec<u8>> {
     Ok(payload)
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn read_native_credential(_credential_ref: &str) -> AppResult<Vec<u8>> {
     Err(AppError::new(
         "OSS_CREDENTIAL_STORE_UNAVAILABLE",
@@ -329,7 +335,7 @@ fn delete_native_credential(credential_ref: &str) -> AppResult<()> {
     Ok(())
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn delete_native_credential(_credential_ref: &str) -> AppResult<()> {
     Err(AppError::new(
         "OSS_CREDENTIAL_STORE_UNAVAILABLE",

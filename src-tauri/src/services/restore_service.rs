@@ -13,10 +13,10 @@ use tauri::{AppHandle, Emitter};
 
 use crate::{
     adapters::{
-        build_windows_shell_command_line, run_launch_command, ActionProcessKey,
+        build_platform_shell_command_line, run_launch_command, ActionProcessKey,
         ChildProcessRegistry, CodexAdapter, CodexLaunchInput, DefaultCodexAdapter, IdeAdapter,
-        JetBrainsAdapter, LaunchCommand, ProcessLaunchResult, ProcessTrackingContext,
-        TerminalAdapter, TerminalLaunchInput, VSCodeAdapter, WindowsTerminalAdapter,
+        JetBrainsAdapter, LaunchCommand, PlatformTerminalAdapter, ProcessLaunchResult,
+        ProcessTrackingContext, TerminalAdapter, TerminalLaunchInput, VSCodeAdapter,
     },
     domain::{
         ensure_absolute_directory, AppPreferences, CancelRestoreActionResult,
@@ -1011,7 +1011,7 @@ impl RestoreService {
     pub async fn open_log_directory(&self) -> AppResult<OpenLogDirectoryResult> {
         let log_dir = self.restore_log_store.ensure_log_dir().await?;
         let result = run_launch_command(LaunchCommand {
-            executable_path: PathBuf::from("explorer.exe"),
+            executable_path: PathBuf::from(crate::adapters::file_manager_executable()),
             args: vec![log_dir.display().to_string()],
             current_dir: None,
             envs: Vec::new(),
@@ -1679,7 +1679,7 @@ impl RestoreService {
             return;
         }
 
-        let terminal_adapter = WindowsTerminalAdapter;
+        let terminal_adapter = PlatformTerminalAdapter;
         let launch_command = match terminal_adapter.build_launch_plan(
             capabilities
                 .terminal
@@ -2208,8 +2208,8 @@ async fn execute_launch_task(
         "terminal_command" => {
             let working_dir = resolve_launch_task_working_dir(launch_task, project_directory)?;
             let command_line =
-                build_windows_shell_command_line(&launch_task.command, &launch_task.args);
-            let shell_plan = WindowsTerminalAdapter
+                build_platform_shell_command_line(&launch_task.command, &launch_task.args);
+            let shell_plan = PlatformTerminalAdapter
                 .resolve_shell_launch_plan(preferences.terminal.command_shell, &command_line)
                 .map_err(|error| error.with_detail("launchTaskId", launch_task.id.clone()))?;
             run_launch_command(LaunchCommand {
@@ -2242,7 +2242,7 @@ async fn execute_launch_task(
             }
 
             run_launch_command(LaunchCommand {
-                executable_path: PathBuf::from("explorer.exe"),
+                executable_path: PathBuf::from(crate::adapters::file_manager_executable()),
                 args: vec![launch_task.command.clone()],
                 current_dir: None,
                 envs: Vec::new(),
@@ -2353,7 +2353,7 @@ async fn execute_launch_task(
                     extra_args: &launch_task.args,
                 },
             )?;
-            let terminal_adapter = WindowsTerminalAdapter;
+            let terminal_adapter = PlatformTerminalAdapter;
             let mut command = terminal_adapter.build_launch_plan(
                 capabilities
                     .terminal
@@ -2416,7 +2416,7 @@ fn resolve_codex_launch_task_mode(
 
 fn probe_restore_capabilities(preferences: &AppPreferences) -> RestoreCapabilities {
     let terminal =
-        WindowsTerminalAdapter.detect(preferences.terminal.windows_terminal_path.as_deref());
+        PlatformTerminalAdapter.detect(preferences.terminal.windows_terminal_path.as_deref());
     let vscode = VSCodeAdapter.detect(preferences.ide.vscode_path.as_deref());
     let jetbrains = JetBrainsAdapter.detect(preferences.ide.jetbrains_path.as_deref());
     let codex = DefaultCodexAdapter.detect(preferences.terminal.codex_cli_path.as_deref());

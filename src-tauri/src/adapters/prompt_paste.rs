@@ -1,3 +1,9 @@
+#[cfg(target_os = "macos")]
+#[path = "prompt_paste_macos.rs"]
+mod macos;
+#[cfg(target_os = "macos")]
+use macos::{ensure_platform_supported, send_ctrl_v, wait_for_modifier_release};
+
 use std::{
     sync::{Mutex, TryLockError},
     thread,
@@ -110,7 +116,7 @@ fn ensure_platform_supported() -> AppResult<()> {
     Ok(())
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn ensure_platform_supported() -> AppResult<()> {
     Err(AppError::new(
         "PROMPT_QUICK_PASTE_PLATFORM_UNSUPPORTED",
@@ -148,7 +154,7 @@ fn wait_for_modifier_release() -> AppResult<()> {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn wait_for_modifier_release() -> AppResult<()> {
     Ok(())
 }
@@ -215,7 +221,7 @@ unsafe fn release_paste_keys() -> u32 {
     )
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn send_ctrl_v() -> AppResult<()> {
     Err(AppError::new(
         "PROMPT_QUICK_PASTE_PLATFORM_UNSUPPORTED",

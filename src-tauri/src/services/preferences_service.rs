@@ -1951,7 +1951,7 @@ fn validate_terminal_preferences(input: TerminalPreferences) -> AppResult<Termin
         codex_cli_path: validate_tool_path(
             "terminal.codexCliPath",
             input.codex_cli_path,
-            &["codex.exe", "codex.cmd", "codex.bat"],
+            &["codex.exe", "codex.cmd", "codex.bat", "codex"],
             "CODEX_PATH_INVALID",
             "Codex CLI",
         )?,
@@ -2548,10 +2548,16 @@ fn validate_custom_editor_command(field: &str, value: String) -> AppResult<Strin
                 .with_detail("reason", error.to_string())
         })?;
 
-        if !metadata.is_file() {
-            return Err(AppError::validation("编辑器命令必须指向可执行文件")
-                .with_detail("field", field.to_string())
-                .with_detail("command", trimmed.to_string()));
+        if !metadata.is_file()
+            && !(cfg!(target_os = "macos")
+                && metadata.is_dir()
+                && command_path.extension().is_some_and(|ext| ext == "app"))
+        {
+            return Err(
+                AppError::validation("编辑器命令必须指向可执行文件或 macOS 应用")
+                    .with_detail("field", field.to_string())
+                    .with_detail("command", trimmed.to_string()),
+            );
         }
 
         return Ok(trimmed.to_string());

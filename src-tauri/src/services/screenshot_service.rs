@@ -497,6 +497,17 @@ fn hide_overlay_if_visible<R: Runtime>(app: &AppHandle<R>) {
 }
 
 fn capture_virtual_desktop<R: Runtime>(app: &AppHandle<R>) -> AppResult<CapturedVirtualDesktop> {
+    #[cfg(target_os = "macos")]
+    {
+        #[link(name = "CoreGraphics", kind = "framework")]
+        unsafe extern "C" {
+            fn CGPreflightScreenCaptureAccess() -> bool;
+            fn CGRequestScreenCaptureAccess() -> bool;
+        }
+        if !unsafe { CGPreflightScreenCaptureAccess() } && !unsafe { CGRequestScreenCaptureAccess() } {
+            return Err(AppError::new("SCREENSHOT_PERMISSION_REQUIRED", "请在系统设置 → 隐私与安全性 → 屏幕与系统音频录制中允许 Bexo Studio，并重新启动应用后重试截图"));
+        }
+    }
     let enumerate_started_at = Instant::now();
     let screens = Screen::all().map_err(|error| {
         AppError::new("SCREENSHOT_SCREEN_ENUM_FAILED", "读取显示器信息失败")
@@ -2129,6 +2140,9 @@ fn prepare_overlay_window<R: Runtime>(
     let window_builder =
         window_builder.additional_browser_args(super::WINDOWS_WEBVIEW2_BROWSER_ARGS);
 
+    #[cfg(not(target_os = "macos"))]
+    let window_builder = window_builder.transparent(true);
+
     let window = window_builder
         .title("")
         .inner_size(
@@ -2138,7 +2152,6 @@ fn prepare_overlay_window<R: Runtime>(
         .position(f64::from(session.display_x), f64::from(session.display_y))
         .decorations(false)
         .resizable(false)
-        .transparent(true)
         .background_color(OVERLAY_TRANSPARENT_BG)
         .always_on_top(true)
         .skip_taskbar(true)

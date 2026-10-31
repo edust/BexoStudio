@@ -64,7 +64,7 @@ export function OssAccountDialog({
             仅保存 RAM AccessKey
           </Typography.Text>
           <Typography.Text className="oss-text-secondary mt-1 block text-[11px] leading-5">
-            AccessKey Secret 会写入 Windows Credential Manager，不会进入 SQLite、日志或前端状态。
+            AccessKey Secret 会写入 系统凭据存储（Windows 凭据管理器 / macOS 钥匙串），不会进入 SQLite、日志或前端状态。
           </Typography.Text>
         </div>
 

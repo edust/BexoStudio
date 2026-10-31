@@ -14,6 +14,9 @@ use crate::{
 use super::process::{find_first_executable, resolve_configured_executable, LaunchCommand};
 
 const VSCODE_CONFIG_CANDIDATES: &[&str] = &[
+    "code",
+    "code-insiders",
+    "codium",
     "code.cmd",
     "code.exe",
     "code.bat",
@@ -61,6 +64,16 @@ const JETBRAINS_BINARY_CANDIDATES: &[&str] = &[
 ];
 
 const JETBRAINS_CONFIG_CANDIDATES: &[&str] = &[
+    "idea",
+    "goland",
+    "pycharm",
+    "webstorm",
+    "phpstorm",
+    "clion",
+    "rider",
+    "datagrip",
+    "rustrover",
+    "studio",
     "idea64.exe",
     "idea.exe",
     "idea.cmd",
@@ -329,6 +342,15 @@ fn detect_jetbrains_executable() -> Option<(PathBuf, &'static str)> {
 }
 
 fn find_vscode_in_known_locations() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    if let Some(path) = find_macos_app(&[
+        "Visual Studio Code.app",
+        "Visual Studio Code - Insiders.app",
+        "VSCodium.app",
+    ]) {
+        return Some(path);
+    }
+
     let mut candidates = Vec::new();
 
     if let Some(local_app_data) = env_dir("LOCALAPPDATA") {
@@ -389,6 +411,23 @@ fn find_vscode_in_known_locations() -> Option<PathBuf> {
 }
 
 fn find_jetbrains_in_known_locations() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    if let Some(path) = find_macos_app(&[
+        "IntelliJ IDEA.app",
+        "IntelliJ IDEA CE.app",
+        "GoLand.app",
+        "PyCharm.app",
+        "WebStorm.app",
+        "PhpStorm.app",
+        "CLion.app",
+        "Rider.app",
+        "DataGrip.app",
+        "RustRover.app",
+        "Android Studio.app",
+    ]) {
+        return Some(path);
+    }
+
     if let Some(local_app_data) = env_dir("LOCALAPPDATA") {
         if let Some(path) = find_jetbrains_in_toolbox_apps(
             &local_app_data
@@ -528,6 +567,27 @@ fn build_ide_launch_command(executable_path: &str, args: Vec<String>) -> AppResu
         ));
     }
 
+    #[cfg(target_os = "macos")]
+    if Path::new(executable_path)
+        .extension()
+        .is_some_and(|ext| ext == "app")
+    {
+        return Ok(LaunchCommand {
+            executable_path: PathBuf::from("/usr/bin/open"),
+            args: [
+                vec!["-a".into(), executable_path.into()],
+                args.into_iter()
+                    .filter(|arg| arg != "--new-window")
+                    .collect(),
+            ]
+            .concat(),
+            current_dir: None,
+            envs: vec![],
+            timeout: Duration::from_secs(5),
+            tracking: None,
+            retain_after_timeout: false,
+        });
+    }
     Ok(LaunchCommand {
         executable_path: PathBuf::from(executable_path),
         args,
@@ -537,4 +597,16 @@ fn build_ide_launch_command(executable_path: &str, args: Vec<String>) -> AppResu
         tracking: None,
         retain_after_timeout: false,
     })
+}
+
+#[cfg(target_os = "macos")]
+fn find_macos_app(names: &[&str]) -> Option<PathBuf> {
+    let mut roots = vec![PathBuf::from("/Applications")];
+    if let Some(home) = env::var_os("HOME") {
+        roots.push(PathBuf::from(home).join("Applications"));
+    }
+    roots
+        .iter()
+        .flat_map(|root| names.iter().map(move |name| root.join(name)))
+        .find(|path| path.is_dir())
 }

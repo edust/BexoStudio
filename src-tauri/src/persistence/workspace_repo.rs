@@ -547,8 +547,9 @@ pub fn register_workspace_folder_with_description(
             "INSERT INTO projects
              (id, workspace_id, name, path, platform, terminal_type, ide_type, codex_profile_id,
               open_terminal, open_ide, auto_resume_codex, sort_order, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, 'windows', 'windows_terminal', NULL, NULL, 0, 0, 0, 0, ?5, ?6)",
-            params![project_id, workspace_id, project_label, directory_path, timestamp, timestamp],
+             VALUES (?1, ?2, ?3, ?4, ?7, ?8, NULL, NULL, 0, 0, 0, 0, ?5, ?6)",
+            params![project_id, workspace_id, project_label, directory_path, timestamp, timestamp,
+                std::env::consts::OS, if cfg!(target_os = "macos") { "macos_terminal" } else { "windows_terminal" }],
         )
         .map_err(|error| {
             AppError::new("DB_WRITE_FAILED", "failed to save default workspace project")

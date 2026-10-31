@@ -225,7 +225,7 @@ function SidebarHeader({
             />
           </Tooltip>
         ) : null}
-        <Tooltip title="添加 RAM AccessKey（Secret 保存在 Windows 凭据管理器）">
+        <Tooltip title="添加 RAM AccessKey（Secret 保存在系统凭据存储）">
           <Button
             aria-label="添加 OSS 账号"
             icon={<PlusOutlined />}

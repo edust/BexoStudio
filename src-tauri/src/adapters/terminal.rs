@@ -250,7 +250,7 @@ impl WindowsTerminalAdapter {
         command_line: &str,
     ) -> AppResult<WindowsShellLaunchPlan> {
         match preferred_shell {
-            TerminalCommandShell::PowerShell7 => {
+            TerminalCommandShell::PowerShell7 | TerminalCommandShell::Zsh => {
                 if let Some(executable_path) = self.detect_powershell7_executable() {
                     return Ok(WindowsShellLaunchPlan {
                         shell: TerminalCommandShell::PowerShell7,

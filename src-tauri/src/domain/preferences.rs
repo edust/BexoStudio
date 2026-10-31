@@ -15,7 +15,11 @@ pub const DEFAULT_PROMPT_QUICK_PASTE_HOTKEYS: [&str; PROMPT_QUICK_PASTE_SLOT_COU
 pub const DEFAULT_CODEX_HISTORY_MESSAGE_FONT_SIZE: i32 = 12;
 pub const DEFAULT_CODEX_AUTH_QUOTA_REFRESH_INTERVAL_SECONDS: i32 = 60;
 pub const DEFAULT_CODEX_AUTH_PROXY_MODE: &str = "system";
+#[cfg(not(target_os = "macos"))]
 pub const DEFAULT_TERMINAL_COMMAND_SHELL: TerminalCommandShell = TerminalCommandShell::PowerShell7;
+
+#[cfg(target_os = "macos")]
+pub const DEFAULT_TERMINAL_COMMAND_SHELL: TerminalCommandShell = TerminalCommandShell::Zsh;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
@@ -86,6 +90,8 @@ impl Default for TerminalPreferences {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TerminalCommandShell {
+    #[serde(rename = "zsh")]
+    Zsh,
     #[serde(rename = "powershell7")]
     PowerShell7,
     #[serde(rename = "cmd")]
@@ -110,6 +116,7 @@ where
 {
     let value = Option::<String>::deserialize(deserializer)?;
     Ok(match value.as_deref().map(str::trim) {
+        Some("zsh") => TerminalCommandShell::Zsh,
         Some("cmd") => TerminalCommandShell::Cmd,
         Some("powershell7") => TerminalCommandShell::PowerShell7,
         _ => DEFAULT_TERMINAL_COMMAND_SHELL,

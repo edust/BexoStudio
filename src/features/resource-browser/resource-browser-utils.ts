@@ -104,6 +104,8 @@ export function normalizePath(value: string) {
     return "";
   }
 
+  if (/^\/+$/u.test(trimmed)) return "/";
+
   const withoutVerbatimPrefix = stripWindowsVerbatimPrefix(trimmed);
   const normalized = withoutVerbatimPrefix.replace(/[\\/]+$/, "");
   if (/^[A-Za-z]:$/.test(normalized)) {
@@ -126,7 +128,7 @@ export function isSameOrChildPath(path: string, parentPath: string) {
 
   return (
     normalizedPath === normalizedParentPath ||
-    normalizedPath.startsWith(`${normalizedParentPath}\\`)
+    normalizedPath.startsWith(normalizedParentPath === "\\" ? "\\" : `${normalizedParentPath}\\`)
   );
 }
 
@@ -153,6 +155,7 @@ function toComparablePath(path: string) {
 export function resolveParentPath(path: string) {
   const normalizedPath = normalizePath(path);
   const nextValue = normalizedPath.replace(/[\\/][^\\/]+$/, "");
+  if (!nextValue && normalizedPath.startsWith("/")) return "/";
   return nextValue === normalizedPath ? normalizedPath : normalizePath(nextValue);
 }
 

@@ -1154,7 +1154,7 @@ export function SectionSidebar({ content }: SectionSidebarProps) {
       content: (
         <div className="space-y-1 text-[12px] leading-5 text-fg-2">
           <Typography.Paragraph className="!mb-0 !text-[12px] !leading-5 !text-fg-2">
-            即将按左侧当前顺序运行 {selectedWorkspaces.length} 个工作区，每个工作区都会各开一个 Windows Terminal 窗口。
+            即将按左侧当前顺序运行 {selectedWorkspaces.length} 个工作区，每个工作区都会各开一个系统终端窗口。
           </Typography.Paragraph>
           <Typography.Paragraph className="!mb-0 !text-[12px] !leading-5 !text-fg-2">
             窗口内命令会继续按顺序执行，并保持 10 秒错峰。

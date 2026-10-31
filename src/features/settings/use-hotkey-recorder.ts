@@ -101,6 +101,10 @@ export function useHotkeyRecorder(options: UseHotkeyRecorderOptions) {
 }
 
 function keyboardEventToHotkeyToken(event: KeyboardEvent): string | null {
+  if (typeof navigator !== "undefined" && /Mac/.test(navigator.platform)) {
+    const modifier = { ControlLeft: "Ctrl", ControlRight: "Ctrl", AltLeft: "Alt", AltRight: "Alt", ShiftLeft: "Shift", ShiftRight: "Shift", MetaLeft: "Super", MetaRight: "Super" }[event.code];
+    if (modifier) return modifier;
+  }
   switch (event.code) {
     case "ControlLeft":
       return "LCtrl";

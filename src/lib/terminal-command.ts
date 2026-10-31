@@ -64,7 +64,10 @@ export function createTerminalCommandTemplateId() {
   return `template-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export function parseTerminalCommandLine(commandLine: string): ParsedTerminalCommand {
+export function parseTerminalCommandLine(
+  commandLine: string,
+  platform = typeof navigator === "undefined" ? "" : navigator.platform,
+): ParsedTerminalCommand {
   const normalized = commandLine.trim();
   if (!normalized) {
     throw new Error("命令行不能为空");
@@ -122,6 +125,9 @@ export function parseTerminalCommandLine(commandLine: string): ParsedTerminalCom
   if (!tokens.length) {
     throw new Error("命令行不能为空");
   }
+
+  // POSIX shell quoting, expansion and pipelines must reach zsh without lossy token reconstruction.
+  if (/Mac/.test(platform)) return { command: normalized, args: [] };
 
   return {
     command: tokens[0],

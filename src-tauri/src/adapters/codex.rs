@@ -39,7 +39,7 @@ impl CodexAdapter for DefaultCodexAdapter {
         if let Some(raw_path) = configured_path.filter(|value| !value.trim().is_empty()) {
             return match resolve_configured_executable(
                 raw_path,
-                &["codex.exe", "codex.cmd", "codex.bat"],
+                &["codex.exe", "codex.cmd", "codex.bat", "codex"],
                 "CODEX_PATH_INVALID",
                 "Codex CLI",
             ) {
@@ -107,7 +107,7 @@ impl CodexAdapter for DefaultCodexAdapter {
         let startup_mode = input
             .startup_mode_override
             .unwrap_or(input.profile.startup_mode.as_str());
-        let terminal_command = match startup_mode {
+        let mut terminal_command = match startup_mode {
             "terminal_only" => None,
             "run_codex" => {
                 let mut command = vec![
@@ -138,6 +138,11 @@ impl CodexAdapter for DefaultCodexAdapter {
                 .with_detail("startupMode", other.to_string()))
             }
         };
+
+        #[cfg(target_os = "macos")]
+        if let Some(command) = terminal_command.as_mut() {
+            command.drain(..2);
+        }
 
         Ok(CodexLaunchPlan {
             terminal_command,

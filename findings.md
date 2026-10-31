@@ -948,3 +948,6 @@ ativeToolbarActive（native 已确认 visible 且 session 有效）时，才隐�
 
 ## 2026-10-19 恢复拖放动画
 - 确认原虚拟列表只有透明度反馈，没有移动预览；恢复拖动位移、让位过渡及边缘滚动期间源行保留。
+
+## 2026-10-31 Windows x64 / macOS arm64
+本机缺少 PATH 工具链；docs/scripts 未进入仓库；详见专项 notes.md。

@@ -1,3 +1,4 @@
+const IS_MACOS = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   DeleteOutlined,
@@ -192,7 +193,7 @@ export default function SettingsPage() {
   const launchAtLoginEnabled = resolvedPreferences.startup.launchAtLogin;
   const startSilentlyEnabled = resolvedPreferences.startup.startSilently;
   const windowsTerminalPath = resolvedPreferences.terminal.windowsTerminalPath?.trim() ?? "";
-  const terminalCommandShell =
+  const terminalCommandShell = IS_MACOS ? "zsh" :
     resolvedPreferences.terminal.commandShell ?? defaultAppPreferences.terminal.commandShell;
   const vscodePath = resolvedPreferences.ide.vscodePath?.trim() ?? "";
   const jetbrainsPath = resolvedPreferences.ide.jetbrainsPath?.trim() ?? "";
@@ -411,7 +412,7 @@ export default function SettingsPage() {
         recursive: true,
         title: editorKey === "vscode" ? "选择 VS Code 可执行文件" : "选择 JetBrains 可执行文件",
         defaultPath: editorDraftPaths[editorKey] || undefined,
-        filters: [{ name: "可执行文件", extensions: ["exe", "cmd", "bat"] }],
+        filters: IS_MACOS ? undefined : [{ name: "可执行文件", extensions: ["exe", "cmd", "bat"] }],
       });
 
       if (!selectedExecutable || Array.isArray(selectedExecutable)) {
@@ -562,7 +563,7 @@ export default function SettingsPage() {
         multiple: false,
         recursive: true,
         title: "选择自定义编辑器可执行文件",
-        filters: [{ name: "可执行文件", extensions: ["exe", "cmd", "bat"] }],
+        filters: IS_MACOS ? undefined : [{ name: "可执行文件", extensions: ["exe", "cmd", "bat"] }],
       });
 
       if (!selectedExecutable || Array.isArray(selectedExecutable)) {
@@ -1343,7 +1344,7 @@ export default function SettingsPage() {
                 </SettingsGroup>
 
                 <SettingsGroup title="终端与编辑器">
-                  <SettingsRow label="Windows Terminal 位置" wide>
+                  {IS_MACOS ? <SettingsRow label="终端"><span>系统 Terminal · 首次运行需要自动化授权</span></SettingsRow> : <SettingsRow label="Windows Terminal 位置" wide>
                     <PathValue value={windowsTerminalPath || "未配置"} />
                     <Button
                       disabled={startupSwitchDisabled}
@@ -1353,10 +1354,10 @@ export default function SettingsPage() {
                     >
                       选择目录
                     </Button>
-                  </SettingsRow>
+                  </SettingsRow>}
                   <SettingsRow
                     description={
-                      <Tooltip title="影响工作台启动命令和恢复任务中的 terminal_command；PowerShell 7 不可用时回退到 cmd.exe。">
+                      <Tooltip title={IS_MACOS ? "macOS 使用系统 zsh 登录 Shell；批量标签页需辅助功能权限。" : "影响工作台启动命令和恢复任务中的 terminal_command；PowerShell 7 不可用时回退到 cmd.exe。"}>
                         <span>启动命令使用的 Shell</span>
                       </Tooltip>
                     }
@@ -1367,7 +1368,7 @@ export default function SettingsPage() {
                       className="!w-[140px]"
                       disabled={preferenceActionsDisabled}
                       onChange={(value) => void handleSaveTerminalCommandShell(value)}
-                      options={TERMINAL_COMMAND_SHELL_OPTIONS}
+                      options={IS_MACOS ? [{ label: "zsh", value: "zsh" }] : TERMINAL_COMMAND_SHELL_OPTIONS}
                       value={terminalCommandShell}
                     />
                   </SettingsRow>
@@ -1456,7 +1457,7 @@ export default function SettingsPage() {
                       value={codexAuthQuotaRefreshIntervalSeconds}
                     />
                   </SettingsRow>
-                  <SettingsRow description="只影响额度查询；系统代理读取 Windows 当前设置" label="额度查询代理">
+                  <SettingsRow description="只影响额度查询；系统代理读取当前操作系统设置" label="额度查询代理">
                     <Select<CodexAuthProxyMode>
                       aria-label="额度查询代理"
                       className="!w-[140px]"
@@ -2151,7 +2152,7 @@ function EditorDetectionCard({
         <Input
           disabled={disabled || loading}
           onChange={(event) => onDraftPathChange(event.target.value)}
-          placeholder="输入可执行文件绝对路径，例如 C:\\Tools\\code.cmd"
+          placeholder={IS_MACOS ? "/Applications/Visual Studio Code.app" : "输入可执行文件绝对路径，例如 C:\\Tools\\code.cmd"}
           value={draftPath}
         />
         <div className="flex flex-wrap justify-end gap-2">

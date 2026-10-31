@@ -600,7 +600,7 @@ export type TerminalCommandTemplateRecord = {
   sortOrder: number;
 };
 
-export type TerminalCommandShell = "powershell7" | "cmd";
+export type TerminalCommandShell = "powershell7" | "cmd" | "zsh";
 
 export type TerminalPreferences = {
   windowsTerminalPath?: string | null;

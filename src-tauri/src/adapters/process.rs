@@ -104,6 +104,10 @@ pub fn resolve_configured_executable(
         return Ok(path);
     }
 
+    #[cfg(target_os = "macos")]
+    if metadata.is_dir() && path.extension().is_some_and(|ext| ext == "app") {
+        return Ok(path);
+    }
     if !metadata.is_dir() {
         return Err(AppError::new(
             error_code,
@@ -354,8 +358,18 @@ fn find_executable(candidate: &str) -> Option<PathBuf> {
         return resolve_candidate(candidate_path);
     }
 
-    let path_value = env::var_os("PATH")?;
-    env::split_paths(&path_value)
+    let path_value = env::var_os("PATH").unwrap_or_default();
+    let mut directories: Vec<PathBuf> = env::split_paths(&path_value).collect();
+    #[cfg(target_os = "macos")]
+    {
+        directories
+            .extend(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].map(PathBuf::from));
+        if let Some(home) = env::var_os("HOME") {
+            directories.push(PathBuf::from(home).join(".cargo/bin"));
+        }
+    }
+    directories
+        .into_iter()
         .find_map(|directory| resolve_candidate(&directory.join(candidate)))
 }
 
@@ -440,6 +454,11 @@ fn launch_blocking(command: LaunchCommand) -> AppResult<ProcessLaunchResult> {
         process.env(key, value);
     }
     configure_spawn_window_behavior(&mut process, &program);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        process.process_group(0);
+    }
 
     let mut child = process.spawn().map_err(|error| {
         AppError::new("PROCESS_SPAWN_FAILED", "failed to spawn external command")
@@ -488,6 +507,11 @@ fn launch_blocking(command: LaunchCommand) -> AppResult<ProcessLaunchResult> {
                         duration_ms: launched_at.elapsed().as_millis() as i64,
                     });
                 }
+                #[cfg(target_os = "macos")]
+                if program == Path::new("/usr/bin/osascript") {
+                    return Err(AppError::new("TERMINAL_AUTOMATION_FAILED", "Terminal 启动失败，请检查系统设置中的自动化授权；批量标签页还需要辅助功能授权")
+                        .with_detail("exitCode", status.code().unwrap_or(-1).to_string()));
+                }
                 return Err(AppError::new(
                     "PROCESS_EXITED_WITH_ERROR",
                     "external command exited with an error",
@@ -503,6 +527,23 @@ fn launch_blocking(command: LaunchCommand) -> AppResult<ProcessLaunchResult> {
             }
             Ok(None) => {
                 if launched_at.elapsed() >= command.timeout {
+                    #[cfg(target_os = "macos")]
+                    if program == Path::new("/usr/bin/osascript") {
+                        let cleanup = terminate_process_tree(process_id);
+                        let _ = child.wait();
+                        if let Some(tracking) = &tracking {
+                            tracking.registry.unregister(
+                                &tracking.run_id,
+                                &tracking.action_keys,
+                                process_id,
+                            );
+                        }
+                        cleanup?;
+                        return Err(AppError::new(
+                            "IO_TIMEOUT",
+                            "Terminal 自动化超时，请检查系统自动化与辅助功能授权",
+                        ));
+                    }
                     if !command.retain_after_timeout {
                         if let Some(tracking) = &tracking {
                             tracking.registry.unregister(
@@ -552,6 +593,13 @@ fn configure_spawn_window_behavior(process: &mut Command, program: &Path) {
 }
 
 fn resolve_program(executable_path: &Path) -> (PathBuf, Vec<String>) {
+    #[cfg(target_os = "macos")]
+    if executable_path.extension().is_some_and(|ext| ext == "app") {
+        return (
+            PathBuf::from("/usr/bin/open"),
+            vec!["-a".into(), executable_path.display().to_string()],
+        );
+    }
     let extension = executable_path
         .extension()
         .and_then(|value| value.to_str())
@@ -576,6 +624,7 @@ fn process_cancelled_error(executable_path: &Path, process_id: Option<u32>) -> A
     error
 }
 
+#[cfg(not(unix))]
 fn terminate_process_tree(pid: u32) -> AppResult<bool> {
     let mut command = Command::new("taskkill");
     #[cfg(windows)]
@@ -702,4 +751,26 @@ fn count_unique_processes(
         }
     }
     process_ids.len()
+}
+
+#[cfg(unix)]
+fn terminate_process_tree(pid: u32) -> AppResult<bool> {
+    // Every launch has its own process group, so cancellation includes descendants.
+    unsafe extern "C" {
+        fn kill(pid: i32, signal: i32) -> i32;
+    }
+    let group = i32::try_from(pid)
+        .map_err(|_| AppError::new("PROCESS_KILL_FAILED", "invalid process group"))?;
+    if unsafe { kill(-group, 9) } == 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(3) {
+        return Ok(false);
+    } // ESRCH
+    Err(
+        AppError::new("PROCESS_KILL_FAILED", "failed to terminate process group")
+            .with_detail("processId", pid.to_string())
+            .with_detail("reason", error.to_string()),
+    )
 }
